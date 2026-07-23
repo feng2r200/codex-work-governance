@@ -1,0 +1,34 @@
+{
+  "name": "work-governance",
+  "version": "0.1.0+codex.20260723110213",
+  "description": "Govern Codex work from intake through planning, execution, evidence, validation, and handoff.",
+  "author": {
+    "name": "Work Governance Contributors"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "codex",
+    "governance",
+    "planning",
+    "validation"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Work Governance",
+    "shortDescription": "Govern work lifecycle, evidence, plans, and Git boundaries.",
+    "longDescription": "Work Governance provides a fail-closed lifecycle entry plus focused skills for Git changes, project truth sources, and independent validation.",
+    "developerName": "Work Governance Contributors",
+    "category": "Productivity",
+    "websiteURL": "https://github.com/feng2r200/codex-work-governance",
+    "privacyPolicyURL": "https://github.com/feng2r200/codex-work-governance/blob/main/PRIVACY.md",
+    "termsOfServiceURL": "https://github.com/feng2r200/codex-work-governance/blob/main/TERMS.md",
+    "capabilities": [
+      "Planning",
+      "Validation",
+      "Governance"
+    ],
+    "defaultPrompt": [
+      "Use $work-governance:work-lifecycle to intake, plan, validate, and close this task."
+    ]
+  }
+}

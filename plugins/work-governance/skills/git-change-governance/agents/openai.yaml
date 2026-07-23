@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Change Governance"
+  short_description: "Govern Git isolation, staging, and commits"
+  default_prompt: "Use $work-governance:git-change-governance to decide Git isolation, staging, commit, and push boundaries."

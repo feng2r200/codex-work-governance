@@ -1,0 +1,7 @@
+schema_version: 1
+active_plan_id: PLAN-20260723-001
+plans:
+- id: PLAN-20260723-001
+  path: PLAN-20260723-001.md
+  title: Work Governance Plugin implementation
+  created_at: '2026-07-23T00:00:00+08:00'
