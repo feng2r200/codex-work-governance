@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Truth Governance"
+  short_description: "Govern durable project truth sources"
+  default_prompt: "Use $work-governance:project-truth-governance to choose the right authority for project facts."
