@@ -38,8 +38,78 @@ uv run --script /path/to/workctl.py plan status
 
 The controller uses `_Plan/index.yaml` only to locate the active Plan.
 `_Plan/<plan-id>.md` frontmatter is the sole mutable execution authority. The
-controller enforces expected revisions, dependency and confirmation gates,
-artifact quarantine states, atomic Plan writes, and append-only logs.
+controller enforces one active execution authority, expected revisions,
+dependency and confirmation gates, migration lineage, artifact quarantine
+states, atomic Plan writes, recoverable reconciliation, terminal closeout, and
+append-only logs.
+
+Confirmation decisions are made only through `plan confirm` and may be
+`accepted` or `declined`. Activation, confirmation-bound exclusions, and
+terminal-route transitions are bound to their own decision ID; another
+accepted gate cannot authorize them. Activation declared `active` also
+requires typed, current runtime evidence. Generic Plan patches cannot rebind an
+activation gate, remove an existing task, change an existing task's status, or
+assign Plan status `complete`; existing task gates and resolved exclusion
+decisions are stable, while delivery/evidence/route mutations bind to the
+current slice gate. Completion uses the dedicated closeout command.
+
+Schema v3 cannot be downgraded through ordinary revision. Verified
+obligations/validations, final artifacts, and completed delivery use dedicated
+commands that record a typed evidence reference and SHA256; generic structural
+patches cannot self-promote these states. Once an activation decision is
+resolved, target/current/evidence changes require that activation's own gate.
+Artifacts can fail safe from final to suspect; quarantine/rollback-pending
+transitions retain a recovery gate and cannot jump directly to final. Suspect
+finalization also requires the in-progress task that declares recovery
+ownership. Existing artifact records cannot be rewritten by generic Plan
+patches.
+
+New Plans use schema v3 to separate:
+
+- the current execution slice;
+- local or integrated delivery state;
+- route-level activation state and current/target references;
+- structured exclusions that are not required, deferred, confirmation-bound,
+  transferred, or forbidden.
+
+Missing authority for a live action creates a pending confirmation and keeps
+the project route open. It cannot be converted into an absolute no-next claim
+by placing the action in `scope.exclude`.
+
+Start Plan-controlled work with:
+
+```sh
+uv run --script /path/to/workctl.py plan authority inspect
+uv run --script /path/to/workctl.py plan authority check
+```
+
+Only `GOVERNED_ACTIVE` permits ordinary Plan writes or task progress. Legacy,
+ambiguous, competing, or interrupted authority returns a fail-closed state.
+Use `plan schema-validate` for a candidate document, `plan validate` for the
+full project contract, and `plan status` for authority candidates, blockers,
+obligations, validations, confirmations, artifacts, route, handoff, and
+closeout readiness. Status also reports delivery, activation, and
+`completion_claims`; only `no_required_next_step_allowed=true` supports a
+terminal no-next statement.
+
+Reconciliation is manifest-driven:
+
+```sh
+uv run --script /path/to/workctl.py plan reconcile apply \
+  --manifest /path/to/reconcile.yaml --dry-run
+uv run --script /path/to/workctl.py plan reconcile apply \
+  --manifest /path/to/reconcile.yaml
+uv run --script /path/to/workctl.py plan reconcile recover
+```
+
+The transaction verifies source hashes/revisions and an optional Git baseline,
+requires each source's semantic classification, binds the migration
+confirmation to the dry-run proposal digest, and binds a separate confirmation
+to any exact `AGENTS.md` routing diff digest. It archives exact source bytes,
+writes non-authoritative pointers with path-correct links, and activates the
+new index last. Recovery rechecks staged hashes and the Git baseline.
+`plan closeout-check` and `plan complete` include full Plan validation and
+enforce route-level terminal completion.
 
 ## Validate
 

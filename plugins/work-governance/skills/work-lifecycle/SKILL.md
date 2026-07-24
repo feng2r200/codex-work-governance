@@ -21,6 +21,12 @@ component, and the recovery condition.
 - Keep `_Plan/index.yaml` as the active Plan locator and
   `_Plan/<plan-id>.md` frontmatter as the sole mutable machine authority;
   Markdown body is only explanation and handoff.
+- Separate local slice completion, delivery completion, and route-level
+  activation. Missing authority for a required future action creates a
+  confirmation gate; it does not make that action disappear from the route.
+- Before Plan-controlled work, inspect Plan authority. Continue real work only
+  in `GOVERNED_ACTIVE`; use only inspect, validation, reconciliation, or
+  recovery commands in every other authority state.
 - In Git projects, version `_Plan/` by default and add `.logs/` to
   `.git/info/exclude` by default.
 - High-impact, destructive, remote, production, data, structure-revision, and
@@ -33,7 +39,9 @@ component, and the recovery condition.
 ## Lifecycle States
 
 - `L0 Intake`: map current instruction, knowns, unknowns, authority, risk, and
-  whether the task is No-Plan or Plan-controlled. Read
+  whether the task is No-Plan or Plan-controlled. For Plan-controlled work,
+  discover user-designated, project-rule-designated, indexed, conventional,
+  and lineage-recorded Plan candidates before execution. Read
   `references/l0-intake.md` when the task is not clearly low-risk.
 - `L1 Demand Contract`: define obligations, acceptance, scope, no-go boundaries,
   and confirmation gates. Read `references/l1-demand-contract.md`.
@@ -63,6 +71,10 @@ Classify the request:
 
 When admitting a Plan, create or use `_Plan/index.yaml` and `_Plan/<plan-id>.md`.
 Use IDs `PLAN-YYYYMMDD-NNN`, `O-`, `T-`, `V-`, and `A-`.
+
+Never infer a second execution authority from a filename, Git history, a phase
+design, or text such as "next step" alone. A likely second authority requires
+review; a confirmed second authority requires reconciliation.
 
 ## Controller
 

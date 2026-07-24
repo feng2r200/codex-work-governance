@@ -26,6 +26,11 @@ request. Validation challenges claims; it does not own the parent Plan.
   intended answer.
 - Treat validator output as evidence input. The parent agent decides Plan/log
   updates and final wording.
+- Do not assume the Plan boundary is correct. At Plan admission and closeout,
+  compare the current user goal, exclusions and their dispositions, declared
+  delivery/activation state, current runtime evidence, and proposed completion
+  wording. Challenge any route that is internally closed but externally
+  unapplied.
 - If independence is unavailable, disclose the downgrade and lower conclusion
   strength for high-impact work unless the user accepts the risk.
 
