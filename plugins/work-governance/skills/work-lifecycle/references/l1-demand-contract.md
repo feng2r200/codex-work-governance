@@ -13,6 +13,21 @@ Define:
 - artifacts `A-###` and their expected, suspect, quarantined, or final state;
 - confirmation gates for high-impact choices.
 
+Classify every scope exclusion. In schema-v3 Plans, use a structured
+`disposition`:
+
+- `not_required` or `forbidden` with the confirming authority reference;
+- `deferred` when it remains part of the future route;
+- `pending_confirmation` with a confirmation ID when the action lacks current
+  authority;
+- `transferred` with an owner, handoff reference, and the confirming resolution
+  reference.
+
+Do not turn missing authorization into a plain exclusion. When local delivery
+can finish before a runtime, production, publication, or live-plugin change,
+define delivery and activation separately and preserve the activation decision
+as a route-level gate.
+
 Do not treat examples, candidate designs, logs, or memory as confirmed facts.
 If a future agent must obey the contract, write it into the Plan frontmatter.
 If the contract is still a proposal, keep it in the reply or logs and ask for

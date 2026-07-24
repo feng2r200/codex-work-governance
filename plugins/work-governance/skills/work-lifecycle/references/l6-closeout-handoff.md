@@ -2,8 +2,18 @@
 
 Close out by separating local completion, route status, and remaining gates.
 
+Use these claim levels:
+
+- `in_progress`: the current delivery is incomplete;
+- `local_delivery_complete`: the bounded artifact is locally complete, but a
+  route-level decision, integration, activation, publication, or validation
+  remains;
+- `route_complete`: the entire governed route is terminal.
+
 Report:
 
+- current slice status and project route status;
+- next phase, its validation standard, and its confirmation gate;
 - changed files and delivery boundary;
 - obligations covered and the check for each;
 - validation commands and key outputs;
@@ -13,11 +23,30 @@ Report:
 
 Do not claim complete when:
 
+- authority is not `GOVERNED_ACTIVE`;
 - verification was skipped, failed, or only adjacent;
 - any must obligation lacks evidence;
 - any required confirmation is missing;
 - suspect, quarantined, or rollback-pending artifacts remain;
 - live switch or remote mutation remains unconfirmed.
+- a structured exclusion is `deferred` or `pending_confirmation`;
+- activation is `deferred`, `pending_confirmation`, or `in_progress`;
+- local delivery is complete but route-level activation is unresolved.
+
+Use `plan closeout-check` before a terminal claim. `plan complete` is legal only
+when `route.route_status=terminal`, every obligation/task/validation is
+verified or skipped, every artifact is final, every required confirmation is
+consistently resolved, and both route and handoff have no remaining next phase,
+next step, or confirmation gate. A declined decision is resolved only when its
+bound tasks are skipped, exclusion disposition is resolved, and activation is
+`declined` where applicable. Schema-v3 terminal closeout additionally requires
+complete delivery, no unresolved exclusion disposition, and resolved
+activation with typed decision or runtime evidence.
+
+Verified obligations and validations, final artifacts, and complete delivery
+must be produced by their dedicated evidence-bound transitions. A declined
+activation decision may resolve only its bound activation, exclusion, route,
+and handoff; it cannot certify delivery or validation evidence.
 
 Use this final line only when accurate for the current scope:
 
@@ -28,3 +57,8 @@ If a route continues beyond the local slice, distinguish:
 - local slice next step;
 - route-level next step;
 - confirmation gate and validation standard.
+
+`plan status` reports `completion_claims`. Use
+`no_required_next_step_allowed=true` as the deterministic eligibility signal
+for an absolute no-next claim. “No currently authorized action” is not the same
+as “no required next step.”

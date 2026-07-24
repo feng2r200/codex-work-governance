@@ -14,6 +14,17 @@ Validation roles:
 - Rollback review: when deviation occurred, inspect suspect artifacts and decide
   whether rollback, quarantine, or compensation is safe to propose.
 
+At admission and closeout, challenge the Plan boundary itself. Compare the
+current user goal, structured exclusions, declared delivery/activation state,
+current runtime evidence, and proposed completion wording. A Plan can be
+internally consistent while still hiding a required future action in
+`scope.exclude`.
+
+Record accepted results through the dedicated evidence transitions. Ordinary
+Plan revision must not promote obligations or validations to verified,
+artifacts to final, or delivery to complete. Each transition carries a typed
+evidence reference and SHA256 for later challenge.
+
 If role isolation is unavailable:
 
 - disclose the downgrade;
