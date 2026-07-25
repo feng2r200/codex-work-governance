@@ -1,4 +1,5 @@
 .venv/
+/.worktree/
 .codegraph/
 .mypy_cache/
 .ruff_cache/
