@@ -16,6 +16,13 @@ plugin source is `plugins/work-governance`.
 - `work-governance:independent-validation` challenges plans, artifacts, and
   completion evidence.
 
+When Git isolation needs a new worktree, the default location is
+`<project-root>/.worktree/<task-or-branch-slug>`. The directory must be ignored;
+an external worktree path requires an explicit user choice or a verified
+technical constraint. This default reduces target-path sandbox crossings; Git
+still writes shared metadata in the repository's common Git directory, whose
+permission boundary must also be checked.
+
 ## Install
 
 Add the repository root as a local marketplace, then install the plugin:
