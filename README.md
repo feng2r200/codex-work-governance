@@ -147,15 +147,39 @@ uv run --offline --cache-dir .work-governance/cache/uv \
 
 Only `LAYOUT_READY` plus `GOVERNED_ACTIVE` permits ordinary Plan writes or task
 progress. Before layout readiness, only `layout status`, `layout validate`,
-`layout migrate`, and `layout recover` are available. The project-root
+`layout adopt`, `layout migrate`, and `layout recover` are available. The project-root
 `_Plan/` is inspected only by the bootstrap legacy classifier and is never a
 normal authority candidate or write target.
 
-A strictly recognized old Work Governance layout migrates through a durable
-transaction: stable new lock, legacy lock, complete manifest and Git baseline,
-staged field-level conversion, staged validation, old-root backup, new Plan
-activation, and `version.yaml` commitment last. Interruptions before activation
-can discard staging; once activation starts, recovery only rolls forward.
+A strictly recognized old Work Governance layout first requires an explicit
+worktree-local adoption receipt:
+
+```sh
+uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
+  --script /path/to/workctl.py layout adopt \
+  --expected-manifest-sha256 <digest-from-layout-status> \
+  --expected-active-plan-id PLAN-YYYYMMDD-NNN \
+  --ref user:<confirmation-reference>
+```
+
+The ignored receipt binds the physical project root, linked-worktree Git
+identity, active Plan, complete legacy manifest, controller digest, and user
+reference. It cannot be replayed from main into a sibling worktree. Generated
+historical pointers and `AGENTS.md`/`CLAUDE.md` never authorize adoption, and
+layout migration never generates or rewrites project-rule files.
+
+On the first RC session for a recognized legacy layout, SessionStart creates
+only the local governance infrastructure and fails closed with
+`LEGACY_CLASSIFICATION_REQUIRED`. Review `layout status`, run the exact
+`layout adopt` command above, and start a new session. That new session may
+complete the migration; later unchanged sessions remain incremental and
+offline.
+
+After adoption, migration runs through a durable transaction: stable new lock,
+legacy lock, complete manifest and Git baseline, staged field-level conversion,
+staged validation, old-root backup, new Plan activation, and `version.yaml`
+commitment last. Interruptions before activation can discard staging; once
+activation starts, recovery only rolls forward.
 Partial, mixed, symlinked, coexisting, drifted, or incomplete-journal layouts
 fail closed. Ordinary business `_Plan/` content is left untouched.
 
