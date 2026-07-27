@@ -36,6 +36,7 @@ MIGRATION_ID_RE = re.compile(r"^MIG-\d{8}-\d{3}$")
 ROLLOVER_ID_RE = re.compile(r"^ROL-\d{8}-\d{3}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 REFERENCE_RE = re.compile(r"^(user|project|git|runtime|evidence|handoff|codex-plugin-list):\S+$")
+EVIDENCE_REFERENCE_FIELDS = {"evidence_ref", "state_evidence_ref"}
 ENTRY_ID_PATTERNS = {
     "obligations": re.compile(r"^O-\d{3}$"),
     "tasks": re.compile(r"^T-\d{3}$"),
@@ -3595,7 +3596,7 @@ def rewrite_legacy_plan_path(value: str) -> str:
 
 
 def rewrite_evidence_reference(value: str, mapping: dict[str, str]) -> str:
-    """Translate only a legacy evidence reference bound to a staged log copy."""
+    """Translate only a legacy reference bound to a staged governance target."""
     return mapping.get(value, value)
 
 
@@ -3615,14 +3616,14 @@ def convert_authority_mapping(value: object) -> object:
 
 
 def convert_evidence_references(value: object, mapping: dict[str, str]) -> object:
-    """Convert evidence_ref fields without touching descriptions or artifact paths."""
+    """Convert operational evidence-reference fields without broad text replacement."""
     if isinstance(value, list):
         return [convert_evidence_references(item, mapping) for item in value]
     if not isinstance(value, dict):
         return value
     result: dict[str, object] = {}
     for key, item in value.items():
-        if key == "evidence_ref" and isinstance(item, str):
+        if key in EVIDENCE_REFERENCE_FIELDS and isinstance(item, str):
             result[str(key)] = rewrite_evidence_reference(item, mapping)
         else:
             result[str(key)] = convert_evidence_references(item, mapping)
@@ -3753,6 +3754,7 @@ JOURNAL_PATH_FIELDS = {
     "canonical_path",
     "staged_prepared_plan",
     "staged_plan",
+    "staged_path",
     "staged_index",
 }
 
@@ -3803,14 +3805,14 @@ def convert_operational_journals(
 
 
 def collect_evidence_references(value: object) -> set[str]:
-    """Collect exact evidence_ref values from Plan frontmatter."""
+    """Collect exact operational evidence references from Plan frontmatter."""
     found: set[str] = set()
     if isinstance(value, list):
         for item in value:
             found.update(collect_evidence_references(item))
     elif isinstance(value, dict):
         for key, item in value.items():
-            if key == "evidence_ref" and isinstance(item, str):
+            if key in EVIDENCE_REFERENCE_FIELDS and isinstance(item, str):
                 found.add(item)
             else:
                 found.update(collect_evidence_references(item))
@@ -3834,11 +3836,26 @@ def convertible_evidence_references(staged_plan: Path, active_name: str) -> set[
 def legacy_evidence_reference_mapping(
     root: Path, staged_plan: Path, active_name: str
 ) -> tuple[dict[str, str], set[Path]]:
-    """Bind every converted legacy reference to one regular source log."""
+    """Bind converted legacy references to exact staged Plan or source-log targets."""
     legacy_logs = legacy_logs_dir(root)
     mapping: dict[str, str] = {}
     referenced_files: set[Path] = set()
     for reference in sorted(convertible_evidence_references(staged_plan, active_name)):
+        if reference == "project:_Plan" or reference.startswith("project:_Plan/"):
+            relative_text = reference.removeprefix("project:_Plan").removeprefix("/")
+            relative = Path(relative_text)
+            if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+                raise WorkctlError(f"LAYOUT_PROJECT_REFERENCE_INVALID: {reference}")
+            candidate = staged_plan.joinpath(*relative.parts)
+            reject_symlink_components(staged_plan, candidate)
+            try:
+                candidate.resolve().relative_to(staged_plan.resolve())
+            except ValueError as exc:
+                raise WorkctlError(f"LAYOUT_PROJECT_REFERENCE_INVALID: {reference}") from exc
+            if candidate.is_symlink() or not candidate.exists():
+                raise WorkctlError(f"LAYOUT_PROJECT_REFERENCE_MISSING: {reference}")
+            mapping[reference] = "project:" + plan_relative_path(*relative.parts)
+            continue
         if not reference.startswith("evidence:.logs/"):
             continue
         relative_text = reference.removeprefix("evidence:.logs/")

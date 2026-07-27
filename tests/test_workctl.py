@@ -1310,7 +1310,12 @@ def test_layout_converts_only_allowlisted_operational_content(tmp_path: Path) ->
         "evidence_ref": "evidence:.logs/PLAN-20260723-001/probe.json",
     }
     frontmatter["artifacts"] = [
-        {"id": "A-001", "path": "_Plan/business-output.txt", "status": "pending"}
+        {
+            "id": "A-001",
+            "path": "_Plan/business-output.txt",
+            "status": "pending",
+            "state_evidence_ref": "evidence:.logs/PLAN-20260723-001/state.json",
+        }
     ]
     write_markdown_plan(source, frontmatter, "Business prose: _Plan/keep-this.md\n")
     archive = source.parent / "archive" / "historical.md"
@@ -1330,6 +1335,11 @@ def test_layout_converts_only_allowlisted_operational_content(tmp_path: Path) ->
         '{"schema_version":1,"plan_id":"PLAN-20260723-001"}\n',
         encoding="utf-8",
     )
+    state_log = tmp_path / ".logs" / "PLAN-20260723-001" / "state.json"
+    state_log.write_text(
+        '{"schema_version":1,"plan_id":"PLAN-20260723-001"}\n',
+        encoding="utf-8",
+    )
     agents_before = (tmp_path / "AGENTS.md").read_bytes()
     adopt_legacy(tmp_path)
 
@@ -1341,11 +1351,37 @@ def test_layout_converts_only_allowlisted_operational_content(tmp_path: Path) ->
         "evidence:.work-governance/logs/PLAN-20260723-001/probe.json"
     )
     assert migrated["artifacts"][0]["path"] == "_Plan/business-output.txt"
+    assert migrated["artifacts"][0]["state_evidence_ref"] == (
+        "evidence:.work-governance/logs/PLAN-20260723-001/state.json"
+    )
+    assert (tmp_path / ".work-governance" / "logs" / "PLAN-20260723-001" / "state.json").is_file()
     assert body == "Business prose: _Plan/keep-this.md\n"
     assert (
         tmp_path / ".work-governance" / "_Plan" / "archive" / "historical.md"
     ).read_bytes() == archive_bytes
     assert (tmp_path / "AGENTS.md").read_bytes() == agents_before
+
+
+def test_layout_rewrites_a_project_reference_to_the_migrated_plan_file(
+    tmp_path: Path,
+) -> None:
+    """A machine reference cannot keep targeting the released root _Plan name."""
+    source = write_migratable_legacy(tmp_path)
+    frontmatter = canonical_frontmatter("PLAN-20260723-001")
+    frontmatter["delivery"] = {
+        "status": "pending",
+        "boundary": "local",
+        "evidence_ref": "project:_Plan/PLAN-20260723-001.md",
+    }
+    write_markdown_plan(source, frontmatter)
+    adopt_legacy(tmp_path)
+
+    run_workctl(tmp_path, "layout", "migrate")
+    migrated, _ = read_plan(tmp_path)
+
+    assert migrated["delivery"]["evidence_ref"] == (
+        "project:.work-governance/_Plan/PLAN-20260723-001.md"
+    )
 
 
 def test_layout_moves_and_rewrites_lineage_and_journal_evidence_refs(
@@ -1402,6 +1438,9 @@ def test_layout_moves_and_rewrites_lineage_and_journal_evidence_refs(
                 "migration_id": "MIG-20260727-001",
                 "status": "committed",
                 "evidence_ref": "evidence:.logs/PLAN-20260723-001/rollover.json",
+                "sources": [
+                    {"staged_path": ("_Plan/.migrations/MIG-20260727-001/staging/source-plan.md")}
+                ],
             },
             sort_keys=False,
         ),
@@ -1433,6 +1472,9 @@ def test_layout_moves_and_rewrites_lineage_and_journal_evidence_refs(
     assert migrated_journal["evidence_ref"] == (
         "evidence:.work-governance/logs/PLAN-20260723-001/rollover.json"
     )
+    assert migrated_journal["sources"][0]["staged_path"] == (
+        ".work-governance/_Plan/.migrations/MIG-20260727-001/staging/source-plan.md"
+    )
     assert (
         tmp_path / ".work-governance" / "logs" / "PLAN-20260722-001" / "predecessor.json"
     ).is_file()
@@ -1441,13 +1483,25 @@ def test_layout_moves_and_rewrites_lineage_and_journal_evidence_refs(
     ).is_file()
 
 
+@pytest.mark.parametrize("reference_field", ["evidence_ref", "state_evidence_ref"])
 def test_layout_rejects_a_converted_evidence_ref_without_source_log(
     tmp_path: Path,
+    reference_field: str,
 ) -> None:
     """Missing evidence fails before a transaction and remains directly retryable."""
     active = write_migratable_legacy(tmp_path)
     frontmatter = canonical_frontmatter("PLAN-20260723-001")
-    frontmatter["delivery"] = {"evidence_ref": "evidence:.logs/PLAN-20260723-001/missing.json"}
+    if reference_field == "evidence_ref":
+        frontmatter["delivery"] = {"evidence_ref": "evidence:.logs/PLAN-20260723-001/missing.json"}
+    else:
+        frontmatter["artifacts"] = [
+            {
+                "id": "A-001",
+                "path": "artifact.txt",
+                "status": "pending",
+                "state_evidence_ref": "evidence:.logs/PLAN-20260723-001/missing.json",
+            }
+        ]
     write_markdown_plan(active, frontmatter)
     adopt_legacy(tmp_path)
 
