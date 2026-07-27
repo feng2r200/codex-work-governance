@@ -21,6 +21,23 @@ Report:
 - Git status, commit hash, and excluded files when Git was used;
 - whether the formal next step is action, verification, confirmation, or none.
 
+For every completed slice, present the reply contract below before any
+next-step statement:
+
+```text
+当前子任务：<T-ID 或 NO_PLAN>
+完成与作用：完成了什么，以及它如何服务父任务/项目目标
+验证：验证方式、当前结果和未覆盖项
+决定与依据：实质决定、来源与取舍；没有则写“无新增决策”
+修改：文件、配置、数据或外部状态；没有则写“无”
+下一步：动作、验证标准和确认门
+```
+
+Use `无` when no file, configuration, data, or external state changed. Multiple
+completed slices require separate summaries in execution order. Do not use the
+completion-summary shape for `in_progress`, `blocked`, unverified, or
+SubAgent-only results; report their actual state and evidence gap instead.
+
 Do not claim complete when:
 
 - authority is not `GOVERNED_ACTIVE`;

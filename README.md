@@ -23,6 +23,15 @@ technical constraint. This default reduces target-path sandbox crossings; Git
 still writes shared metadata in the repository's common Git directory, whose
 permission boundary must also be checked.
 
+## Slice Completion Reporting
+
+After each independently verifiable execution slice, the lifecycle requires an
+ordered reply summary covering the slice identifier, completion and purpose,
+validation and gaps, material decisions and their basis, modifications, and
+the next step. Plan-controlled work uses its `T-ID`; a No-Plan request uses
+`NO_PLAN`. In-progress, blocked, unverified, and SubAgent-only results cannot be
+reported as completed slices.
+
 ## Install
 
 Add the repository root as a local marketplace, then install the plugin:
