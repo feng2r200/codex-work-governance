@@ -11,6 +11,12 @@ Before edits:
 - identify the exact files to edit and why those are the authority locations;
 - define the command or inspection that will prove the slice.
 
+Before repeating a command, workaround, or validation expansion, refresh the
+goal anchor and record an attempt tuple: action, relevant inputs/state,
+assumption being tested, expected evidence delta, and observed evidence delta.
+Do not repeat an action after failure when the relevant inputs and state are
+materially identical.
+
 During execution:
 
 - keep changes scoped to the obligation;
@@ -20,6 +26,19 @@ During execution:
   handoff value;
 - never promote `.work-governance/logs` content into Plan facts without
   confirmation.
+
+After the smallest viable vertical slice, prefer the cheapest safe
+reality-bound probe at the actual filesystem, process, API, UI, data, or
+installation boundary when feasible. A mocked or synthetic test may precede
+that probe for safety, but cannot replace it when the target depends on the
+real boundary.
+
+One retry after failure is permitted only when the changed assumption, input,
+or state and its expected new evidence are explicit. If two consecutive
+attempts produce no material evidence delta or target progress, emit
+`INEFFECTIVE_LOOP_DETECTED`, stop downstream work, and enter L5. Do not respond
+by creating more synthetic cases. Explicit monitoring or wait requests are
+exempt while observing unchanged external state is the requested action.
 
 When recovering suspect artifacts, identify the repair task with
 `resolves_artifacts`. This exception permits only the declared recovery work;
