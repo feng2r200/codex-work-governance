@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, cast
 
-ACTION_REVISION = 1
+ACTION_REVISION = 2
 BOOTSTRAP_CONTRACT_VERSION = 1
 GOVERNANCE_DIR = ".work-governance"
 LOCAL_DIRECTORIES = (
@@ -36,6 +36,7 @@ LOCAL_DIRECTORIES = (
 )
 RECEIPT_NAME = "bootstrap-state.json"
 CLAIM_NAME = "bootstrap-claim.json"
+LEGACY_ADOPTION_NAME = "legacy-adoption.json"
 FAILURE_JOURNAL_NAME = "bootstrap-failure-journal.json"
 BOOTSTRAP_STAGING_NAME = ".work-governance.bootstrap"
 CLAIM_KEYS = {
@@ -414,7 +415,7 @@ def validate_layout_version(project_root: Path, governance: Path) -> None:
         or parsed.get("layout_version") != "1"
         or parsed.get("bootstrap_contract_version") != "1"
         or parsed.get("plugin_compatibility") != ">=1.0.0,<2.0.0"
-        or parsed.get("legacy_migration_action_revision") != "1"
+        or parsed.get("legacy_migration_action_revision") != "2"
         or parsed.get("status") not in {"migrated", "not_applicable"}
         or re.fullmatch(r"[0-9a-f]{64}", parsed.get("legacy_manifest_sha256", "")) is None
         or re.fullmatch(r"[0-9a-f]{64}", parsed.get("new_layout_baseline_sha256", "")) is None
@@ -441,6 +442,7 @@ def validate_layout_version(project_root: Path, governance: Path) -> None:
             (0, "transaction_id"),
             (0, "status"),
             (0, "legacy_manifest_sha256"),
+            (0, "legacy_adoption_sha256"),
             (0, "conversion_table_sha256"),
             (0, "created_at"),
         ]
@@ -460,6 +462,7 @@ def validate_layout_version(project_root: Path, governance: Path) -> None:
             or proof_values.get("transaction_id") != transaction_id
             or proof_values.get("status") != "prepared"
             or proof_values.get("legacy_manifest_sha256") != parsed.get("legacy_manifest_sha256")
+            or re.fullmatch(r"[0-9a-f]{64}", proof_values.get("legacy_adoption_sha256", "")) is None
             or re.fullmatch(r"[0-9a-f]{64}", proof_values.get("conversion_table_sha256", ""))
             is None
             or not proof_values.get("created_at")
@@ -587,7 +590,7 @@ def audit_uncommitted_root(governance: Path) -> None:
         raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
     transactions = []
     for child in runtime.iterdir():
-        if child.name == CLAIM_NAME:
+        if child.name in {CLAIM_NAME, LEGACY_ADOPTION_NAME}:
             continue
         if LAYOUT_TRANSACTION_RE.fullmatch(child.name) is None:
             raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
