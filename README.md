@@ -33,6 +33,26 @@ the next step. Plan-controlled work uses its `T-ID`; a No-Plan request uses
 `NO_PLAN`. In-progress, blocked, unverified, and SubAgent-only results cannot be
 reported as completed slices.
 
+## Goal-first stop-loss
+
+Work stays anchored to the user-visible target rather than test volume. After
+the smallest viable slice, the lifecycle prefers the cheapest safe real
+boundary probe. New tests must come from a confirmed obligation, observed
+failure, code invariant, or supported integration boundary; exhaustive
+coverage and invented scenarios are not delivery goals.
+
+A failed action cannot be repeated with materially identical inputs and state.
+One changed-input retry is allowed only with an expected evidence delta. Two
+consecutive attempts without material evidence or target progress produce
+`INEFFECTIVE_LOOP_DETECTED`, freeze downstream work, and require an L5
+root-cause challenge. Monitoring and explicit wait requests remain valid when
+unchanged external state is the evidence being requested.
+
+Before a fix is selected, the lifecycle separates the symptom, falsifiable
+cause hypothesis, causal chain, contradicting evidence, and discriminating
+probe. It then compares materially plausible containment, causal correction,
+and alternate routes so a workaround is not mislabeled as a root-cause fix.
+
 ## Install
 
 Add the repository root as a local marketplace, then install the plugin:

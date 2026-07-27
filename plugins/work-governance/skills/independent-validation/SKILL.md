@@ -16,6 +16,13 @@ request. Validation challenges claims; it does not own the parent Plan.
   against the demand contract.
 - `evidence-audit`: whether commands, tests, logs, samples, or screenshots prove
   the exact obligation.
+- `causal-challenge`: whether the stated root cause is falsifiable, supported
+  and contradicting evidence was considered, the probe discriminates competing
+  explanations, and the correction removes the causal link rather than hiding
+  a symptom.
+- `stop-loss-audit`: whether retries changed inputs or evidence, whether an
+  ineffective loop should already have stopped, and whether test additions
+  have real provenance instead of serving coverage count.
 - `rollback-review`: whether suspect artifacts are identified and whether a
   proposed rollback, quarantine, or compensation is safe to recommend.
 
@@ -36,6 +43,12 @@ request. Validation challenges claims; it does not own the parent Plan.
 - For layout/bootstrap claims, inspect the exact Plugin build, READY receipt,
   version contract, local evidence record, offline command evidence, and both
   layout and Plan-authority axes. A hook's self-report is not sufficient.
+- Prefer evidence from the cheapest safe real boundary that determines the user
+  result. Treat synthetic tests as support, not a substitute, and require an
+  explicit infeasibility reason when the real boundary was not probed.
+- Challenge materially plausible minimal containment, causal correction, and
+  alternate-route options. Report when sunk cost, test volume, or a preferred
+  implementation is being mistaken for truth.
 
 ## Output Shape
 

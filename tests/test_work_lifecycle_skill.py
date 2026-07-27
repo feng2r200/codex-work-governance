@@ -5,8 +5,29 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 LIFECYCLE_ROOT = REPOSITORY_ROOT / "plugins" / "work-governance" / "skills" / "work-lifecycle"
 SKILL_PATH = LIFECYCLE_ROOT / "SKILL.md"
+L0_PATH = LIFECYCLE_ROOT / "references" / "l0-intake.md"
+L1_PATH = LIFECYCLE_ROOT / "references" / "l1-demand-contract.md"
 L3_PATH = LIFECYCLE_ROOT / "references" / "l3-execution.md"
+L4_PATH = LIFECYCLE_ROOT / "references" / "l4-validation.md"
+L5_PATH = LIFECYCLE_ROOT / "references" / "l5-deviation-rollback.md"
 L6_PATH = LIFECYCLE_ROOT / "references" / "l6-closeout-handoff.md"
+INDEPENDENT_PATH = (
+    REPOSITORY_ROOT
+    / "plugins"
+    / "work-governance"
+    / "skills"
+    / "independent-validation"
+    / "SKILL.md"
+)
+TRUTH_PATH = (
+    REPOSITORY_ROOT
+    / "plugins"
+    / "work-governance"
+    / "skills"
+    / "project-truth-governance"
+    / "SKILL.md"
+)
+README_PATH = REPOSITORY_ROOT / "README.md"
 
 SUMMARY_FIELDS = (
     "当前子任务：",
@@ -126,3 +147,66 @@ def test_lifecycle_requires_current_bootstrap_and_canonical_layout() -> None:
     assert ".work-governance/_Plan/index.yaml" in skill
     assert ".work-governance/workctl.lock" in skill
     assert "controller commands require `LAYOUT_READY`" in skill
+
+
+def test_goal_anchor_reality_probe_and_test_provenance_are_required() -> None:
+    """Keep validation effort tied to the user result and observed boundaries."""
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+    intake = L0_PATH.read_text(encoding="utf-8")
+    demand = L1_PATH.read_text(encoding="utf-8")
+    execution = L3_PATH.read_text(encoding="utf-8")
+    validation = L4_PATH.read_text(encoding="utf-8")
+    readme = README_PATH.read_text(encoding="utf-8")
+
+    assert "Keep a goal anchor" in skill
+    assert "user-visible target, not the planned method, test suite" in intake
+    assert "cheapest safe\nreality-bound probe" in execution
+    for provenance in (
+        "a confirmed obligation",
+        "an observed failure",
+        "a code invariant",
+        "a supported integration boundary",
+    ):
+        assert provenance in demand
+        assert provenance.removeprefix("a ").removeprefix("an ") in validation
+    assert "Do not invent hypothetical use cases" in demand
+    assert "exhaustive\ncoverage and invented scenarios are not delivery goals" in readme
+
+
+def test_ineffective_loop_has_a_deterministic_stop_loss() -> None:
+    """Forbid evidence-free retries while preserving explicit monitoring."""
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+    execution = L3_PATH.read_text(encoding="utf-8")
+    deviation = L5_PATH.read_text(encoding="utf-8")
+    independent = INDEPENDENT_PATH.read_text(encoding="utf-8")
+    normalized_skill = " ".join(skill.split())
+    normalized_execution = " ".join(execution.split())
+    normalized_deviation = " ".join(deviation.split())
+
+    assert "materially identical inputs and state" in skill
+    assert "Two consecutive attempts without a material evidence delta" in normalized_skill
+    assert "`INEFFECTIVE_LOOP_DETECTED`" in skill
+    assert "record an attempt tuple" in execution
+    assert "Do not respond by creating more synthetic cases" in normalized_execution
+    assert "Explicit monitoring or wait requests are not loops" in normalized_deviation
+    assert "`stop-loss-audit`" in independent
+
+
+def test_root_cause_and_solution_challenge_precede_fix_claims() -> None:
+    """Separate symptoms and workarounds from discriminated causal evidence."""
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+    deviation = L5_PATH.read_text(encoding="utf-8")
+    independent = INDEPENDENT_PATH.read_text(encoding="utf-8")
+    truth = TRUTH_PATH.read_text(encoding="utf-8")
+
+    for requirement in (
+        "falsifiable cause hypothesis and causal chain",
+        "evidence supporting and contradicting the hypothesis",
+        "cheapest safe discriminating probe",
+        "minimal containment, causal correction, and alternate\n  route",
+    ):
+        assert requirement in deviation
+    assert "removes the cause or only hides it" in skill
+    assert "`causal-challenge`" in independent
+    assert "Keep symptoms, hypotheses, probes, and confirmed causes distinct" in truth
+    assert "successful workaround does not promote a root-cause hypothesis" in truth
