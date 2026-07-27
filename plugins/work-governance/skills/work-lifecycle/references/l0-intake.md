@@ -2,6 +2,11 @@
 
 Start by stating the bottom-line interpretation of the user's request.
 
+Write a one-sentence goal anchor before choosing the route: name the
+user-visible target, not the planned method, test suite, or current failure.
+When prior work is already in progress, identify which next action can change
+the most decision-relevant evidence with the least effort that remains safe.
+
 Build a compact cognition map:
 
 - Explicit knowns: current instruction, paths, constraints, deliverables, and

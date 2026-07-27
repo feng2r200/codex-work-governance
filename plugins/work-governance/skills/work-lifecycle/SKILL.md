@@ -42,6 +42,23 @@ component, and the recovery condition.
   agent owns the Plan, confirmation gates, and logs.
 - Completion, fix, test-pass, commit-ready, or merge-ready claims require fresh
   evidence from the current run.
+- Keep a goal anchor before repeating an action or expanding validation: restate
+  the user-visible target, the unresolved fact, and the next action expected to
+  change evidence. Tests and coverage are support tools, not the target.
+- Do not repeat a failed action with materially identical inputs and state. One
+  retry is allowed only after naming the changed assumption or input and the
+  expected evidence delta. Two consecutive attempts without a material
+  evidence delta require `INEFFECTIVE_LOOP_DETECTED`, downstream freeze, and L5
+  root-cause review. An explicit monitoring or wait request is exempt while the
+  observed external state remains the intended evidence.
+- After the smallest viable vertical slice, run the cheapest safe reality-bound
+  probe when feasible. Derive every added test from a confirmed obligation,
+  observed failure, code invariant, or supported integration boundary. Do not
+  invent hypothetical use cases or pursue exhaustive coverage as an end state.
+- Before selecting a correction, distinguish symptom from a falsifiable root
+  cause, state the causal chain and discriminating probe, and challenge whether
+  the proposed change removes the cause or only hides it. Compare materially
+  plausible containment, causal correction, and alternate-route options.
 - After every independently verifiable execution slice, report the slice using
   the mandatory completion summary before describing or starting the next
   step. A Plan-controlled summary names its `T-ID`; a No-Plan request uses
