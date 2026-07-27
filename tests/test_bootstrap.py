@@ -502,6 +502,94 @@ def test_migrated_layout_remains_ready_on_second_session(tmp_path: Path) -> None
     assert not (project / "_Plan").exists()
 
 
+def test_migrated_layout_with_suspect_artifact_recovers_prior_minimal_receipt(
+    tmp_path: Path,
+) -> None:
+    """The observed 1.0.0 blocked state upgrades without clearing the suspect artifact."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv_log = tmp_path / "uv.jsonl"
+    install_fake_uv(fake_bin, uv_log)
+    project = tmp_path / "project"
+    project.mkdir()
+    write_migratable_legacy(project)
+    run_hook(project, fake_bin, uv_log)
+    adopt_legacy(project)
+    run_hook(project, fake_bin, uv_log)
+    prior_command_count = len(read_uv_commands(uv_log))
+
+    plan_path = project / ".work-governance" / "_Plan" / "PLAN-20260723-001.md"
+    _, frontmatter_text, body = plan_path.read_text(encoding="utf-8").split("---", 2)
+    frontmatter = yaml.safe_load(frontmatter_text)
+    frontmatter["tasks"][0]["resolves_artifacts"] = ["A-001"]
+    frontmatter["artifacts"][0]["status"] = "suspect"
+    plan_path.write_text(
+        f"---\n{yaml.safe_dump(frontmatter, sort_keys=False)}---{body}",
+        encoding="utf-8",
+    )
+    receipt_path = project / ".work-governance" / "bootstrap-state.json"
+    receipt_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "bootstrap_contract_version": 1,
+                "action_revision": 2,
+                "updated_at": "2026-07-27T00:00:00Z",
+                "status": "ENVIRONMENT_BLOCKED",
+                "reason": "LAYOUT_VALIDATION_FAILED",
+                "evidence_ref": "evidence:.work-governance/evidence/bootstrap/legacy.json",
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    resumed = run_hook(
+        project,
+        fake_bin,
+        uv_log,
+        payload={
+            "session_id": "suspect-recovery-resume",
+            "cwd": str(project),
+            "hook_event_name": "SessionStart",
+            "source": "resume",
+        },
+    )
+    resumed_commands = read_uv_commands(uv_log)[prior_command_count:]
+    layout_validation = subprocess.run(
+        [sys.executable, str(WORKCTL), "layout", "validate"],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    plan_validation = subprocess.run(
+        [sys.executable, str(WORKCTL), "plan", "validate"],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+    assert "WORK_GOVERNANCE_BOOTSTRAP READY" in (resumed["hookSpecificOutput"]["additionalContext"])
+    assert receipt["status"] == "READY"
+    assert (
+        receipt["plugin_build"]
+        == json.loads((PLUGIN_ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))[
+            "version"
+        ]
+    )
+    assert layout_validation.stdout.strip() == "LAYOUT_VALID"
+    assert plan_validation.returncode == 1
+    assert "A-001 is suspect" in plan_validation.stderr
+    assert len(resumed_commands) == 4
+    assert "--offline" not in resumed_commands[0]
+    assert all("--offline" in command for command in resumed_commands[1:])
+
+
 def test_changed_layout_input_reruns_and_fails_closed(tmp_path: Path) -> None:
     """A reappeared old-controller root invalidates READY instead of being ignored."""
     fake_bin = tmp_path / "bin"
@@ -523,8 +611,187 @@ def test_changed_layout_input_reruns_and_fails_closed(tmp_path: Path) -> None:
     context = output["hookSpecificOutput"]["additionalContext"]
     assert receipt["status"] == "ENVIRONMENT_BLOCKED"
     assert receipt["reason"] == "LAYOUT_MIGRATION_NOT_READY"
+    assert set(receipt) == {
+        "schema_version",
+        "bootstrap_contract_version",
+        "action_revision",
+        "updated_at",
+        "status",
+        "reason",
+        "plugin_build",
+        "plugin_manifest_sha256",
+        "project_input_sha256",
+        "claim_sha256",
+        "evidence_ref",
+        "evidence_sha256",
+    }
+    evidence_path = project / receipt["evidence_ref"].removeprefix("evidence:")
+    assert hashlib.sha256(evidence_path.read_bytes()).hexdigest() == receipt["evidence_sha256"]
     assert "ENVIRONMENT_BLOCKED" in context
     assert "Do not perform Plan-controlled work" in context
+
+
+def test_committed_layout_recovers_interrupted_failure_transaction(
+    tmp_path: Path,
+) -> None:
+    """A committed layout installs its durable blocked record before a later retry."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv_log = tmp_path / "uv.jsonl"
+    install_fake_uv(fake_bin, uv_log)
+    project = tmp_path / "project"
+    project.mkdir()
+    run_hook(project, fake_bin, uv_log)
+    governance = project / ".work-governance"
+    prior_receipt = (governance / "bootstrap-state.json").read_bytes()
+    reappeared = project / "_Plan"
+    reappeared.mkdir()
+    (reappeared / ".workctl.lock").write_text("", encoding="utf-8")
+
+    interrupted = run_hook(
+        project,
+        fake_bin,
+        uv_log,
+        environment_overrides={"WORK_GOVERNANCE_TEST_INTERRUPT_FAILURE_AFTER_JOURNAL": "1"},
+    )
+    journal = governance / "runtime" / "bootstrap-failure-journal.json"
+
+    assert (
+        "BOOTSTRAP_TEST_INTERRUPTED_FAILURE_INSTALL"
+        in (interrupted["hookSpecificOutput"]["additionalContext"])
+    )
+    assert journal.is_file()
+    assert (governance / "bootstrap-state.json").read_bytes() == prior_receipt
+
+    shutil.rmtree(reappeared)
+    recovered = run_hook(project, fake_bin, uv_log)
+    receipt = json.loads((governance / "bootstrap-state.json").read_text(encoding="utf-8"))
+    blocked_evidence = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (governance / "evidence" / "bootstrap").glob("*.json")
+        if json.loads(path.read_text(encoding="utf-8")).get("status") == "ENVIRONMENT_BLOCKED"
+    ]
+
+    assert (
+        "WORK_GOVERNANCE_BOOTSTRAP READY" in (recovered["hookSpecificOutput"]["additionalContext"])
+    )
+    assert receipt["status"] == "READY"
+    assert not journal.exists()
+    assert len(blocked_evidence) == 1
+    assert blocked_evidence[0]["reason"] == "LAYOUT_MIGRATION_NOT_READY"
+    assert set(blocked_evidence[0]) == {
+        "schema_version",
+        "bootstrap_contract_version",
+        "action_revision",
+        "updated_at",
+        "status",
+        "reason",
+        "plugin_build",
+        "plugin_manifest_sha256",
+        "project_input_sha256",
+        "claim_sha256",
+        "evidence_ref",
+        "commands",
+    }
+
+
+def test_committed_layout_bootstraps_missing_local_directories(tmp_path: Path) -> None:
+    """A fresh checkout recreates claim-bound infrastructure for later failures."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv_log = tmp_path / "uv.jsonl"
+    install_fake_uv(fake_bin, uv_log)
+    project = tmp_path / "project"
+    project.mkdir()
+    run_hook(project, fake_bin, uv_log)
+    governance = project / ".work-governance"
+    receipt_path = governance / "bootstrap-state.json"
+    local_directories = (
+        "logs",
+        "worktrees",
+        "cache",
+        "proposals",
+        "evidence",
+        "runtime",
+    )
+    for local_directory in local_directories:
+        shutil.rmtree(governance / local_directory)
+    receipt_path.unlink()
+
+    resumed = run_hook(project, fake_bin, uv_log)
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+    assert "WORK_GOVERNANCE_BOOTSTRAP READY" in (resumed["hookSpecificOutput"]["additionalContext"])
+    assert receipt["status"] == "READY"
+    for local_directory in local_directories:
+        assert (governance / local_directory).is_dir()
+    claim = governance / "runtime" / "bootstrap-claim.json"
+    assert claim.is_file()
+
+    reappeared = project / "_Plan"
+    reappeared.mkdir()
+    (reappeared / ".workctl.lock").write_text("", encoding="utf-8")
+    blocked = run_hook(project, fake_bin, uv_log)
+    blocked_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    evidence_path = project / blocked_receipt["evidence_ref"].removeprefix("evidence:")
+
+    assert "LAYOUT_MIGRATION_NOT_READY" in (blocked["hookSpecificOutput"]["additionalContext"])
+    assert set(blocked_receipt) == {
+        "schema_version",
+        "bootstrap_contract_version",
+        "action_revision",
+        "updated_at",
+        "status",
+        "reason",
+        "plugin_build",
+        "plugin_manifest_sha256",
+        "project_input_sha256",
+        "claim_sha256",
+        "evidence_ref",
+        "evidence_sha256",
+    }
+    assert blocked_receipt["claim_sha256"] == hashlib.sha256(claim.read_bytes()).hexdigest()
+    assert (
+        blocked_receipt["evidence_sha256"] == hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    )
+
+
+def test_committed_early_digest_failure_invalidates_stale_ready_receipt(
+    tmp_path: Path,
+) -> None:
+    """An unprovable failure leaves no minimal receipt that can resemble READY state."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv_log = tmp_path / "uv.jsonl"
+    install_fake_uv(fake_bin, uv_log)
+    project = tmp_path / "project"
+    project.mkdir()
+    run_hook(project, fake_bin, uv_log)
+    governance = project / ".work-governance"
+    receipt_path = governance / "bootstrap-state.json"
+    evidence_before = sorted((governance / "evidence" / "bootstrap").iterdir())
+
+    blocked = run_hook(
+        project,
+        fake_bin,
+        uv_log,
+        environment_overrides={"WORK_GOVERNANCE_TEST_FAIL_PROJECT_INPUT_DIGEST": "1"},
+    )
+
+    assert (
+        "BOOTSTRAP_TEST_PROJECT_INPUT_DIGEST_FAILED"
+        in (blocked["hookSpecificOutput"]["additionalContext"])
+    )
+    assert not receipt_path.exists()
+    assert sorted((governance / "evidence" / "bootstrap").iterdir()) == evidence_before
+
+    recovered = run_hook(project, fake_bin, uv_log)
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+    assert (
+        "WORK_GOVERNANCE_BOOTSTRAP READY" in (recovered["hookSpecificOutput"]["additionalContext"])
+    )
+    assert receipt["status"] == "READY"
 
 
 def test_invalid_hook_input_has_short_fail_closed_output(tmp_path: Path) -> None:
