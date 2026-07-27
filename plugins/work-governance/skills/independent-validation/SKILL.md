@@ -33,6 +33,9 @@ request. Validation challenges claims; it does not own the parent Plan.
   unapplied.
 - If independence is unavailable, disclose the downgrade and lower conclusion
   strength for high-impact work unless the user accepts the risk.
+- For layout/bootstrap claims, inspect the exact Plugin build, READY receipt,
+  version contract, local evidence record, offline command evidence, and both
+  layout and Plan-authority axes. A hook's self-report is not sufficient.
 
 ## Output Shape
 

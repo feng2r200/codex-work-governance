@@ -17,11 +17,12 @@ plugin source is `plugins/work-governance`.
   completion evidence.
 
 When Git isolation needs a new worktree, the default location is
-`<project-root>/.worktree/<task-or-branch-slug>`. The directory must be ignored;
-an external worktree path requires an explicit user choice or a verified
-technical constraint. This default reduces target-path sandbox crossings; Git
-still writes shared metadata in the repository's common Git directory, whose
-permission boundary must also be checked.
+`<project-root>/.work-governance/worktrees/<task-or-branch-slug>`. Existing
+Git-registered legacy `.worktree/<slug>` paths remain at their registered
+locations until removed; 1.0 never creates new entries there. An external
+worktree path requires an explicit user choice or a verified technical
+constraint. Git still writes shared metadata in the repository's common Git
+directory, whose permission boundary must also be checked.
 
 ## Slice Completion Reporting
 
@@ -41,7 +42,46 @@ codex plugin marketplace add /path/to/codex-work-governance
 codex plugin add work-governance@work-governance-local
 ```
 
-Start a new Codex thread after installation so the plugin skills are loaded.
+Review and trust the bundled SessionStart hook, then start a new Codex thread.
+Plugin installation or enabling does not itself trust non-managed hooks.
+
+## Project Layout
+
+Work Governance 1.0 owns exactly one project-level root:
+
+```text
+.work-governance/
+├── version.yaml
+├── .gitignore
+├── _Plan/
+├── logs/
+├── worktrees/
+├── cache/uv/
+├── proposals/
+├── evidence/
+├── runtime/
+├── bootstrap-state.json
+└── workctl.lock
+```
+
+`_Plan/`, `version.yaml`, `.gitignore`, and committed migration proofs are
+versionable. The exact `.work-governance/.gitignore` ignores only `logs/`,
+`worktrees/`, `cache/`, `proposals/`, `evidence/`, `runtime/`,
+`bootstrap-state.json`, and `workctl.lock`. A No-Plan bootstrap creates the
+layout contract and local infrastructure but no Plan or index.
+
+The SessionStart hook is a short wakener. Its standard-library runner
+fingerprints the bootstrap action, installed Plugin payload, and relevant
+project layout inputs. It prewarms the controller's pinned PEP 723 dependency
+in `.work-governance/cache/uv`, disables Python downloads, and runs migration,
+validation, and status commands offline. Exact Plugin builds and incremental
+state live only in the ignored `bootstrap-state.json`; detailed command
+evidence stays under `.work-governance/evidence/`.
+
+If the hook is untrusted, disabled, skipped by managed policy, absent, stale,
+or cannot prepare a valid receipt, Plan-controlled work is
+`ENVIRONMENT_BLOCKED`. Restore the hook and a current `READY` receipt, then
+start a fresh session.
 
 ## Controller
 
@@ -49,11 +89,13 @@ Start a new Codex thread after installation so the plugin skills are loaded.
 governed project with:
 
 ```sh
-uv run --script /path/to/workctl.py plan status
+uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
+  --script /path/to/workctl.py plan status
 ```
 
-The controller uses `_Plan/index.yaml` only to locate the active Plan.
-`_Plan/<plan-id>.md` frontmatter is the sole mutable execution authority. The
+The controller uses `.work-governance/_Plan/index.yaml` only to locate the
+active Plan. `.work-governance/_Plan/<plan-id>.md` frontmatter is the sole
+mutable execution authority. The
 controller enforces one active execution authority, expected revisions,
 dependency and confirmation gates, migration lineage, artifact quarantine
 states, atomic Plan writes, recoverable reconciliation and terminal Plan
@@ -95,12 +137,29 @@ by placing the action in `scope.exclude`.
 Start Plan-controlled work with:
 
 ```sh
-uv run --script /path/to/workctl.py plan authority inspect
-uv run --script /path/to/workctl.py plan authority check
+uv run --offline --cache-dir .work-governance/cache/uv \
+  --no-python-downloads --script /path/to/workctl.py layout status
+uv run --offline --cache-dir .work-governance/cache/uv \
+  --no-python-downloads --script /path/to/workctl.py plan authority inspect
+uv run --offline --cache-dir .work-governance/cache/uv \
+  --no-python-downloads --script /path/to/workctl.py plan authority check
 ```
 
-Only `GOVERNED_ACTIVE` permits ordinary Plan writes or task progress. Legacy,
-ambiguous, competing, or interrupted authority returns a fail-closed state.
+Only `LAYOUT_READY` plus `GOVERNED_ACTIVE` permits ordinary Plan writes or task
+progress. Before layout readiness, only `layout status`, `layout validate`,
+`layout migrate`, and `layout recover` are available. The project-root
+`_Plan/` is inspected only by the bootstrap legacy classifier and is never a
+normal authority candidate or write target.
+
+A strictly recognized old Work Governance layout migrates through a durable
+transaction: stable new lock, legacy lock, complete manifest and Git baseline,
+staged field-level conversion, staged validation, old-root backup, new Plan
+activation, and `version.yaml` commitment last. Interruptions before activation
+can discard staging; once activation starts, recovery only rolls forward.
+Partial, mixed, symlinked, coexisting, drifted, or incomplete-journal layouts
+fail closed. Ordinary business `_Plan/` content is left untouched.
+
+Legacy, ambiguous, competing, or interrupted authority returns a fail-closed state.
 Use `plan schema-validate` for a candidate document, `plan validate` for the
 full project contract, and `plan status` for authority candidates, blockers,
 obligations, validations, confirmations, artifacts, route, handoff, and
@@ -111,11 +170,14 @@ terminal no-next statement.
 Reconciliation is manifest-driven:
 
 ```sh
-uv run --script /path/to/workctl.py plan reconcile apply \
+uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
+  --script /path/to/workctl.py plan reconcile apply \
   --manifest /path/to/reconcile.yaml --dry-run
-uv run --script /path/to/workctl.py plan reconcile apply \
+uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
+  --script /path/to/workctl.py plan reconcile apply \
   --manifest /path/to/reconcile.yaml
-uv run --script /path/to/workctl.py plan reconcile recover
+uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
+  --script /path/to/workctl.py plan reconcile recover
 ```
 
 The transaction verifies source hashes/revisions and an optional Git baseline,
@@ -131,16 +193,19 @@ A complete terminal Plan starts a distinct successor through a confirmed
 rollover instead of reopening or overwriting the predecessor:
 
 ```sh
-uv run --script /path/to/workctl.py plan rollover apply \
+uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
+  --script /path/to/workctl.py plan rollover apply \
   --manifest /path/to/rollover.yaml --dry-run
-uv run --script /path/to/workctl.py plan rollover apply \
+uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
+  --script /path/to/workctl.py plan rollover apply \
   --manifest /path/to/rollover.yaml
-uv run --script /path/to/workctl.py plan rollover recover \
+uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
+  --script /path/to/workctl.py plan rollover recover \
   --rollover-id ROL-YYYYMMDD-NNN
 ```
 
 The manifest fixes the predecessor ID, revision, path and SHA256, the exact
-`_Plan/index.yaml` baseline, and a prepared schema-v3 successor contract. Apply
+`.work-governance/_Plan/index.yaml` baseline, and a prepared schema-v3 successor contract. Apply
 requires `C-PLAN-ROLLOVER` to carry the dry-run proposal digest. The transaction
 preserves the completed predecessor bytes, records recursive predecessor
 lineage in the successor, stages the successor and replacement index, and

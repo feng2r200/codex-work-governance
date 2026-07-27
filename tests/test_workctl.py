@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import runpy
+import shutil
 import stat
 import subprocess
 import sys
@@ -43,11 +44,12 @@ def run_workctl(
 
 
 def init_plan(cwd: Path) -> None:
+    run_workctl(cwd, "layout", "migrate")
     run_workctl(cwd, "plan", "init", "--plan-id", "PLAN-20260723-001", "--title", "Test")
 
 
 def plan_path(cwd: Path) -> Path:
-    return cwd / "_Plan" / "PLAN-20260723-001.md"
+    return cwd / ".work-governance" / "_Plan" / "PLAN-20260723-001.md"
 
 
 def read_plan(cwd: Path) -> tuple[dict[str, Any], str]:
@@ -137,7 +139,8 @@ def write_markdown_plan(path: Path, frontmatter: dict[str, Any], body: str = "# 
 
 def write_legacy_active(cwd: Path, plan_id: str = "PLAN-20260723-001") -> Path:
     """Create an indexed schema-v1 active Plan fixture."""
-    path = cwd / "_Plan" / f"{plan_id}.md"
+    run_workctl(cwd, "layout", "migrate")
+    path = cwd / ".work-governance" / "_Plan" / f"{plan_id}.md"
     write_markdown_plan(path, legacy_frontmatter(plan_id))
     index = {
         "schema_version": 1,
@@ -151,11 +154,47 @@ def write_legacy_active(cwd: Path, plan_id: str = "PLAN-20260723-001") -> Path:
             }
         ],
     }
-    (cwd / "_Plan" / "index.yaml").write_text(
+    (cwd / ".work-governance" / "_Plan" / "index.yaml").write_text(
         yaml.safe_dump(index, sort_keys=False),
         encoding="utf-8",
     )
     return path
+
+
+def write_migratable_legacy(cwd: Path, plan_id: str = "PLAN-20260723-001") -> Path:
+    """Create a governed schema-v2 project-root layout eligible for migration."""
+    path = cwd / "_Plan" / f"{plan_id}.md"
+    write_markdown_plan(path, canonical_frontmatter(plan_id))
+    index = {
+        "schema_version": 1,
+        "active_plan_id": plan_id,
+        "plans": [
+            {
+                "id": plan_id,
+                "path": path.name,
+                "title": "Migratable Plan",
+                "created_at": "2026-07-23T00:00:00+00:00",
+            }
+        ],
+    }
+    (cwd / "_Plan" / "index.yaml").write_text(
+        yaml.safe_dump(index, sort_keys=False),
+        encoding="utf-8",
+    )
+    pointer = cwd / "_Plan" / "PLAN-20260720-999.md"
+    pointer.write_text(
+        "# Generated Work Governance pointer\n\n"
+        "- Marker: `WORK_GOVERNANCE_NON_AUTHORITY_POINTER`\n"
+        f"- Canonical Plan: [{plan_id}]({plan_id}.md)\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def claim_governance_root(cwd: Path) -> None:
+    """Create the durable first-owner claim used by the controller."""
+    namespace = runpy.run_path(str(SCRIPT), run_name="workctl_test_fixture")
+    namespace["create_governance_claim"](cwd, creator="workctl")
 
 
 def write_reconciliation_fixture(
@@ -187,7 +226,7 @@ def write_reconciliation_fixture(
                 "revision": 17,
             },
             {
-                "path": "_Plan/PLAN-20260723-001.md",
+                "path": ".work-governance/_Plan/PLAN-20260723-001.md",
                 "role": "unmerged-source",
                 "classification": "CONFIRMED_AUTHORITY",
                 "sha256": sha256_path(old_plan),
@@ -204,7 +243,7 @@ def write_reconciliation_fixture(
         )
         replacement = cwd / "AGENTS.proposed.md"
         replacement.write_text(
-            "`_Plan/PLAN-20260724-002.md` is the authoritative execution Plan "
+            "`.work-governance/_Plan/PLAN-20260724-002.md` is the authoritative execution Plan "
             "and must be updated.\n",
             encoding="utf-8",
         )
@@ -348,12 +387,12 @@ def write_rollover_fixture(cwd: Path) -> Path:
         rollover_target_frontmatter("PLAN-20260727-001"),
         "# Successor authority\n",
     )
-    index = cwd / "_Plan" / "index.yaml"
+    index = cwd / ".work-governance" / "_Plan" / "index.yaml"
     manifest = {
         "schema_version": 1,
         "rollover_id": "ROL-20260727-001",
         "source_plan": {
-            "path": "_Plan/PLAN-20260723-001.md",
+            "path": ".work-governance/_Plan/PLAN-20260723-001.md",
             "plan_id": source_frontmatter["plan_id"],
             "revision": source_frontmatter["revision"],
             "sha256": sha256_path(source),
@@ -400,6 +439,1595 @@ def bind_rollover_confirmation(cwd: Path, manifest_path: Path) -> dict[str, Any]
     }
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
     return dry_run
+
+
+def test_layout_not_applicable_commits_contract_without_plan(tmp_path: Path) -> None:
+    """No-Plan bootstrap commits only the layout contract and local lock."""
+    before = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    migrated = run_workctl(tmp_path, "layout", "migrate")
+    after = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+
+    governance = tmp_path / ".work-governance"
+    assert before["layout_state"] == "LAYOUT_MIGRATION_REQUIRED"
+    assert before["legacy"]["classification"] == "NOT_APPLICABLE"
+    assert migrated.stdout.strip() == "LAYOUT_COMMITTED not_applicable"
+    assert after["layout_state"] == "LAYOUT_READY"
+    assert after["plan_authority_state"] == "UNMANAGED_EMPTY"
+    assert not (governance / "_Plan").exists()
+    assert (governance / ".gitignore").read_text(encoding="utf-8") == (
+        "/logs/\n"
+        "/worktrees/\n"
+        "/cache/\n"
+        "/proposals/\n"
+        "/evidence/\n"
+        "/runtime/\n"
+        "/bootstrap-state.json\n"
+        "/workctl.lock\n"
+    )
+    version = yaml.safe_load((governance / "version.yaml").read_text(encoding="utf-8"))
+    assert version["schema_version"] == 1
+    assert version["layout_version"] == 1
+    assert version["bootstrap_contract_version"] == 1
+    assert version["plugin_compatibility"] == ">=1.0.0,<2.0.0"
+    assert version["migration"]["status"] == "not_applicable"
+    completion = version["migration"]["completion_evidence"]
+    receipt = {
+        "action": "layout-not-applicable",
+        "completed_at": completion["completed_at"],
+        "legacy_classification": "NOT_APPLICABLE",
+    }
+    assert completion["kind"] == "not-applicable-receipt"
+    assert completion["path"] == "not-applicable"
+    assert (
+        completion["sha256"]
+        == hashlib.sha256(
+            json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+    assert run_workctl(tmp_path, "layout", "validate").stdout.strip() == "LAYOUT_VALID"
+
+
+def test_layout_preserves_ordinary_business_plan_directory(tmp_path: Path) -> None:
+    """A project-owned root _Plan with no controller features is never absorbed."""
+    business = tmp_path / "_Plan"
+    business.mkdir()
+    artifact = business / "roadmap.txt"
+    artifact.write_text("business bytes\n", encoding="utf-8")
+
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    run_workctl(tmp_path, "layout", "migrate")
+
+    assert status["legacy"]["classification"] == "NOT_APPLICABLE"
+    assert artifact.read_bytes() == b"business bytes\n"
+    assert not (tmp_path / ".work-governance" / "_Plan").exists()
+
+
+def test_layout_classifier_requires_positive_legacy_ownership_signal(tmp_path: Path) -> None:
+    """A valid-looking business Plan tree is not absorbed without a generated signal."""
+    source = write_migratable_legacy(tmp_path)
+    (source.parent / "PLAN-20260720-999.md").unlink()
+
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    migration = run_workctl(tmp_path, "layout", "migrate", check=False)
+
+    assert status["layout_state"] == "LEGACY_CLASSIFICATION_REQUIRED"
+    assert status["legacy"]["classification"] == "AMBIGUOUS"
+    assert any(
+        "lacks a matching generated pointer" in reason
+        for reason in status["legacy"]["blocking_reasons"]
+    )
+    assert migration.returncode == 2
+    assert source.is_file()
+
+
+@pytest.mark.parametrize("ignore_bytes", [None, "business-cache/\n"])
+def test_layout_never_claims_a_preexisting_unversioned_governance_root(
+    tmp_path: Path, ignore_bytes: str | None
+) -> None:
+    """An existing same-named project directory cannot be adopted by convention."""
+    governance = tmp_path / ".work-governance"
+    governance.mkdir()
+    business = governance / "business.txt"
+    business.write_bytes(b"project-owned bytes\n")
+    if ignore_bytes is not None:
+        (governance / ".gitignore").write_text(ignore_bytes, encoding="utf-8")
+
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    migration = run_workctl(tmp_path, "layout", "migrate", check=False)
+
+    assert status["layout_state"] == "ENVIRONMENT_BLOCKED"
+    assert migration.returncode == 2
+    assert "GOVERNANCE_ROOT_OWNERSHIP_UNPROVEN" in migration.stderr
+    assert business.read_bytes() == b"project-owned bytes\n"
+    if ignore_bytes is not None:
+        assert (governance / ".gitignore").read_text(encoding="utf-8") == ignore_bytes
+
+
+def test_layout_recovers_a_durable_bootstrap_claim_before_root_activation(
+    tmp_path: Path,
+) -> None:
+    """A crash after claim fsync resumes by no-replace activation of the sibling."""
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_BOOTSTRAP_INTERRUPT_AFTER_CLAIM": "1"},
+    )
+
+    assert interrupted.returncode == 2
+    assert "BOOTSTRAP_TEST_INTERRUPTED_AFTER_CLAIM" in interrupted.stderr
+    assert not (tmp_path / ".work-governance").exists()
+    assert (tmp_path / ".work-governance.bootstrap" / "runtime" / "bootstrap-claim.json").is_file()
+
+    resumed = run_workctl(tmp_path, "layout", "migrate")
+    assert resumed.stdout.strip() == "LAYOUT_COMMITTED not_applicable"
+    assert not (tmp_path / ".work-governance.bootstrap").exists()
+    assert run_workctl(tmp_path, "layout", "validate").stdout.strip() == "LAYOUT_VALID"
+
+
+def test_durable_replace_fsyncs_both_directory_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cross-directory rename is not considered durable until both parents sync."""
+    namespace = runpy.run_path(str(SCRIPT), run_name="workctl_durability_fixture")
+    function_globals = namespace["durable_replace"].__globals__
+    source = tmp_path / "source" / "tree"
+    target = tmp_path / "target" / "tree"
+    events: list[tuple[str, Path, Path | None]] = []
+
+    monkeypatch.setattr(
+        namespace["os"],
+        "replace",
+        lambda old, new: events.append(("replace", old, new)),
+    )
+    monkeypatch.setitem(
+        function_globals,
+        "fsync_directory",
+        lambda path: events.append(("fsync", path, None)),
+    )
+
+    namespace["durable_replace"](source, target)
+
+    assert events == [
+        ("replace", source, target),
+        ("fsync", source.parent, None),
+        ("fsync", target.parent, None),
+    ]
+
+
+def test_transaction_durability_orders_file_data_before_directory_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Staged trees and copied files sync data before their containing entries."""
+    namespace = runpy.run_path(str(SCRIPT), run_name="workctl_data_durability_fixture")
+    function_globals = namespace["fsync_tree"].__globals__
+    tree = tmp_path / "tree"
+    child = tree / "child"
+    child.mkdir(parents=True)
+    (tree / "root.txt").write_text("root\n", encoding="utf-8")
+    (child / "child.txt").write_text("child\n", encoding="utf-8")
+    target_parent = tmp_path / "target"
+    target_parent.mkdir()
+    target = target_parent / "copied.txt"
+    events: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        namespace["os"],
+        "fsync",
+        lambda descriptor: events.append(("file-fsync", descriptor)),
+    )
+    monkeypatch.setitem(
+        function_globals,
+        "fsync_directory",
+        lambda path: events.append(("dir-fsync", path)),
+    )
+
+    namespace["fsync_tree"](tree)
+    tree_events = list(events)
+    assert [event[0] for event in tree_events] == [
+        "file-fsync",
+        "file-fsync",
+        "dir-fsync",
+        "dir-fsync",
+    ]
+    assert tree_events[-2:] == [("dir-fsync", child), ("dir-fsync", tree)]
+
+    events.clear()
+    namespace["durable_copy_file"](tree / "root.txt", target)
+    assert target.read_bytes() == b"root\n"
+    assert [event[0] for event in events] == ["file-fsync", "dir-fsync"]
+    assert events[-1] == ("dir-fsync", target_parent)
+
+    events.clear()
+    namespace["durable_unlink"](target)
+    assert not target.exists()
+    assert events == [("dir-fsync", target_parent)]
+
+
+def test_layout_claim_does_not_authorize_unregistered_local_content(tmp_path: Path) -> None:
+    """A valid claim cannot be used to absorb business content under an allowed name."""
+    claim_governance_root(tmp_path)
+    business = tmp_path / ".work-governance" / "logs" / "business.log"
+    business.parent.mkdir()
+    business.write_bytes(b"project-owned bytes\n")
+
+    migration = run_workctl(tmp_path, "layout", "migrate", check=False)
+
+    assert migration.returncode == 2
+    assert "uncommitted governance local path is not empty: logs" in migration.stderr
+    assert business.read_bytes() == b"project-owned bytes\n"
+    assert not (tmp_path / ".work-governance" / "version.yaml").exists()
+
+
+def test_ordinary_controller_commands_require_layout_ready(tmp_path: Path) -> None:
+    """Plan commands fail closed until the independent layout axis is ready."""
+    blocked = run_workctl(tmp_path, "plan", "authority", "check", check=False)
+    run_workctl(tmp_path, "layout", "migrate")
+    ready = json.loads(run_workctl(tmp_path, "plan", "authority", "check").stdout)
+
+    assert blocked.returncode == 2
+    assert "LAYOUT_BLOCKED: LAYOUT_MIGRATION_REQUIRED" in blocked.stderr
+    assert ready["authority_state"] == "UNMANAGED_EMPTY"
+
+
+def test_plan_init_writes_only_canonical_governance_root(tmp_path: Path) -> None:
+    """Normal authority creation never targets the project-root legacy directory."""
+    init_plan(tmp_path)
+
+    assert plan_path(tmp_path).is_file()
+    assert (tmp_path / ".work-governance" / "_Plan" / "index.yaml").is_file()
+    assert not (tmp_path / "_Plan").exists()
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    assert status["layout_state"] == "LAYOUT_READY"
+    assert status["plan_authority_state"] == "GOVERNED_ACTIVE"
+
+
+def test_layout_migrates_strict_legacy_authority_and_commits_version(
+    tmp_path: Path,
+) -> None:
+    """A strictly classified legacy authority migrates and validates end to end."""
+    source = write_migratable_legacy(tmp_path)
+    before_revision = canonical_frontmatter("PLAN-20260723-001")["revision"]
+
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    migrated = run_workctl(tmp_path, "layout", "migrate")
+    final = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+
+    target = tmp_path / ".work-governance" / "_Plan" / source.name
+    frontmatter, _body = read_plan(tmp_path)
+    version = yaml.safe_load(
+        (tmp_path / ".work-governance" / "version.yaml").read_text(encoding="utf-8")
+    )
+    assert status["legacy"]["classification"] == "MIGRATABLE"
+    assert migrated.stdout.startswith("LAYOUT_COMMITTED LAY-")
+    assert final["layout_state"] == "LAYOUT_READY"
+    assert final["plan_authority_state"] == "GOVERNED_ACTIVE"
+    assert target.is_file()
+    assert not (tmp_path / "_Plan").exists()
+    assert frontmatter["revision"] == before_revision + 1
+    assert version["migration"]["status"] == "migrated"
+    proof = list((tmp_path / ".work-governance" / "_Plan" / ".migrations").glob("LAY-*.yaml"))
+    assert len(proof) == 1
+    assert run_workctl(tmp_path, "layout", "validate").stdout.strip() == "LAYOUT_VALID"
+    assert run_workctl(tmp_path, "plan", "validate").stdout.strip() == "PLAN_VALID"
+
+
+@pytest.mark.parametrize(
+    "phase",
+    ["staged", "legacy-rename", "legacy-backup", "plan-activation", "version"],
+)
+def test_layout_recover_forwards_every_interruption(tmp_path: Path, phase: str) -> None:
+    """Each durable transaction phase converges through layout recover."""
+    write_migratable_legacy(tmp_path)
+
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": phase},
+    )
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    recovered = run_workctl(tmp_path, "layout", "recover")
+
+    assert interrupted.returncode == 2
+    assert f"LAYOUT_TEST_INTERRUPTED: {phase}" in interrupted.stderr
+    assert status["layout_state"] == "LAYOUT_RECOVERY_REQUIRED"
+    assert recovered.stdout.startswith("LAYOUT_COMMITTED LAY-")
+    assert (
+        json.loads(run_workctl(tmp_path, "layout", "status").stdout)["layout_state"]
+        == "LAYOUT_READY"
+    )
+
+
+def test_layout_recovery_refuses_activation_guard_drift(tmp_path: Path) -> None:
+    """Recovery does not guess after the old-root activation marker changes."""
+    write_migratable_legacy(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "legacy-backup"},
+    )
+    assert interrupted.returncode == 2
+    guard = tmp_path / "_Plan"
+    assert guard.is_file()
+    guard.write_text("drifted marker\n", encoding="utf-8")
+
+    recovery = run_workctl(tmp_path, "layout", "recover", check=False)
+
+    assert recovery.returncode == 2
+    assert "LAYOUT_ACTIVATION_GUARD_DRIFT" in recovery.stderr
+    assert not (tmp_path / ".work-governance" / "version.yaml").exists()
+
+
+def test_layout_proof_is_immutable_and_version_supplies_commitment(tmp_path: Path) -> None:
+    """The proof stays prepared; only the hash-binding version commits the layout."""
+    write_migratable_legacy(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "plan-activation"},
+    )
+    assert interrupted.returncode == 2
+    proof_path = next((tmp_path / ".work-governance" / "_Plan" / ".migrations").glob("LAY-*.yaml"))
+    prepared = yaml.safe_load(proof_path.read_text(encoding="utf-8"))
+
+    assert prepared["status"] == "prepared"
+    assert "completed_at" not in prepared
+
+    run_workctl(tmp_path, "layout", "recover")
+    final_proof = yaml.safe_load(proof_path.read_text(encoding="utf-8"))
+    version = yaml.safe_load(
+        (tmp_path / ".work-governance" / "version.yaml").read_text(encoding="utf-8")
+    )
+    assert final_proof == prepared
+    assert (
+        version["migration"]["completion_evidence"]["sha256"]
+        == hashlib.sha256(proof_path.read_bytes()).hexdigest()
+    )
+
+
+def test_layout_rejects_forged_proof_even_when_version_hash_is_updated(
+    tmp_path: Path,
+) -> None:
+    """Completion evidence must satisfy its schema, not merely match arbitrary bytes."""
+    write_migratable_legacy(tmp_path)
+    run_workctl(tmp_path, "layout", "migrate")
+    proof_path = next((tmp_path / ".work-governance" / "_Plan" / ".migrations").glob("LAY-*.yaml"))
+    version_path = tmp_path / ".work-governance" / "version.yaml"
+    proof = yaml.safe_load(proof_path.read_text(encoding="utf-8"))
+    proof["kind"] = "project-owned-bytes"
+    proof_path.write_text(yaml.safe_dump(proof, sort_keys=False), encoding="utf-8")
+    version = yaml.safe_load(version_path.read_text(encoding="utf-8"))
+    version["migration"]["completion_evidence"]["sha256"] = hashlib.sha256(
+        proof_path.read_bytes()
+    ).hexdigest()
+    version_path.write_text(yaml.safe_dump(version, sort_keys=False), encoding="utf-8")
+
+    validation = run_workctl(tmp_path, "layout", "validate", check=False)
+
+    assert validation.returncode == 2
+    assert "migration proof fields do not match the commitment" in validation.stderr
+
+
+def test_layout_recovery_rejects_snapshot_drift(tmp_path: Path) -> None:
+    """A staged transaction never activates after any legacy input changes."""
+    source = write_migratable_legacy(tmp_path)
+    run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "staged"},
+    )
+    source.write_text(source.read_text(encoding="utf-8") + "\ndrift\n", encoding="utf-8")
+
+    recovery = run_workctl(tmp_path, "layout", "recover", check=False)
+
+    assert recovery.returncode == 2
+    assert "LEGACY_LAYOUT_INPUT_DRIFT" in recovery.stderr
+    assert (tmp_path / "_Plan").is_dir()
+    assert not (tmp_path / ".work-governance" / "_Plan").exists()
+
+
+@pytest.mark.parametrize(
+    ("drift_target", "expected_error"),
+    [
+        ("managed-project-file", "LAYOUT_PROJECT_FILE_DRIFT: AGENTS.md"),
+        (
+            "proven-log",
+            "LAYOUT_LOG_INPUT_DRIFT: .logs/PLAN-20260723-001.jsonl",
+        ),
+    ],
+)
+def test_layout_recovery_rejects_every_staged_side_input_drift(
+    tmp_path: Path, drift_target: str, expected_error: str
+) -> None:
+    """Managed project files and proven logs remain frozen after staging."""
+    write_migratable_legacy(tmp_path)
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text(
+        "<!-- WORK_GOVERNANCE:BEGIN -->\n"
+        "`_Plan/PLAN-20260723-001.md` is the authoritative current execution Plan.\n"
+        "<!-- WORK_GOVERNANCE:END -->\n",
+        encoding="utf-8",
+    )
+    governed_log = tmp_path / ".logs" / "PLAN-20260723-001.jsonl"
+    governed_log.parent.mkdir()
+    governed_log.write_text(
+        '{"kind":"validation","plan_id":"PLAN-20260723-001"}\n',
+        encoding="utf-8",
+    )
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "staged"},
+    )
+    assert interrupted.returncode == 2
+    target = agents if drift_target == "managed-project-file" else governed_log
+    target.write_text(target.read_text(encoding="utf-8") + "drift\n", encoding="utf-8")
+
+    recovery = run_workctl(tmp_path, "layout", "recover", check=False)
+
+    assert recovery.returncode == 2
+    assert expected_error in recovery.stderr
+    assert (tmp_path / "_Plan").is_dir()
+    assert not (tmp_path / ".work-governance" / "_Plan").exists()
+
+
+def test_layout_recovery_rejects_staging_drift(tmp_path: Path) -> None:
+    """The staged target manifest is immutable after its validation point."""
+    write_migratable_legacy(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "staged"},
+    )
+    assert interrupted.returncode == 2
+    journal_path = next((tmp_path / ".work-governance" / "runtime").glob("LAY-*/journal.json"))
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    staged_active = Path(journal["paths"]["staged_plan"]) / journal["active_plan_path"]
+    staged_active.write_text(
+        staged_active.read_text(encoding="utf-8") + "drift\n",
+        encoding="utf-8",
+    )
+
+    recovery = run_workctl(tmp_path, "layout", "recover", check=False)
+
+    assert recovery.returncode == 2
+    assert "STAGED_LAYOUT_MANIFEST_MISMATCH" in recovery.stderr
+
+
+def test_layout_moves_only_proven_logs(tmp_path: Path) -> None:
+    """Plan-scoped logs move while unrelated business logs remain byte-identical."""
+    write_migratable_legacy(tmp_path)
+    legacy_logs = tmp_path / ".logs"
+    legacy_logs.mkdir()
+    governed = legacy_logs / "PLAN-20260723-001.jsonl"
+    governed.write_text(
+        '{"kind":"validation","plan_id":"PLAN-20260723-001","revision":1}\n',
+        encoding="utf-8",
+    )
+    business = legacy_logs / "business.log"
+    business.write_bytes(b"business bytes\n")
+
+    run_workctl(tmp_path, "layout", "migrate")
+
+    migrated = tmp_path / ".work-governance" / "logs" / "PLAN-20260723-001.jsonl"
+    assert migrated.is_file()
+    assert not governed.exists()
+    assert business.read_bytes() == b"business bytes\n"
+
+
+def test_layout_reappeared_legacy_features_fail_closed(tmp_path: Path) -> None:
+    """A post-migration old-controller write is detected instead of reabsorbed."""
+    write_migratable_legacy(tmp_path)
+    run_workctl(tmp_path, "layout", "migrate")
+    reappeared = tmp_path / "_Plan"
+    reappeared.mkdir()
+    (reappeared / ".workctl.lock").write_text("", encoding="utf-8")
+
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    blocked = run_workctl(tmp_path, "plan", "status", check=False)
+
+    assert status["layout_state"] == "LEGACY_ROOT_REAPPEARED"
+    assert blocked.returncode == 2
+    assert "LAYOUT_BLOCKED: LEGACY_ROOT_REAPPEARED" in blocked.stderr
+
+
+@pytest.mark.parametrize("hazard", ["mixed-child", "symlink", "partial-index"])
+def test_layout_classifier_fails_closed_on_ambiguous_legacy_roots(
+    tmp_path: Path, hazard: str
+) -> None:
+    """Partial, mixed, and symlinked legacy roots require explicit classification."""
+    if hazard == "partial-index":
+        legacy = tmp_path / "_Plan"
+        legacy.mkdir()
+        (legacy / "index.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+    else:
+        source = write_migratable_legacy(tmp_path)
+        if hazard == "mixed-child":
+            (source.parent / "business.txt").write_text("project-owned bytes\n", encoding="utf-8")
+        else:
+            outside = tmp_path / "outside.md"
+            outside.write_text("outside\n", encoding="utf-8")
+            (source.parent / "linked.md").symlink_to(outside)
+
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    migration = run_workctl(tmp_path, "layout", "migrate", check=False)
+
+    assert status["layout_state"] == "LEGACY_CLASSIFICATION_REQUIRED"
+    assert status["legacy"]["classification"] == "AMBIGUOUS"
+    assert migration.returncode == 2
+    assert "LAYOUT_MIGRATION_BLOCKED: LEGACY_CLASSIFICATION_REQUIRED" in migration.stderr
+
+
+@pytest.mark.parametrize("hazard", ["stable-lock", "logs-root"])
+def test_layout_rejects_canonical_control_symlinks_before_outside_write(
+    tmp_path: Path, hazard: str
+) -> None:
+    """Canonical lock and local runtime roots cannot redirect controller writes."""
+    governance = tmp_path / ".work-governance"
+    governance.mkdir()
+    outside = tmp_path / "outside"
+    if hazard == "stable-lock":
+        outside.write_text("outside bytes\n", encoding="utf-8")
+        (governance / "workctl.lock").symlink_to(outside)
+    else:
+        outside.mkdir()
+        (governance / "logs").symlink_to(outside, target_is_directory=True)
+
+    status = run_workctl(tmp_path, "layout", "status", check=False)
+    migration = run_workctl(tmp_path, "layout", "migrate", check=False)
+
+    assert status.returncode == 0
+    assert json.loads(status.stdout)["layout_state"] == "ENVIRONMENT_BLOCKED"
+    assert migration.returncode == 2
+    if outside.is_file():
+        assert outside.read_bytes() == b"outside bytes\n"
+    else:
+        assert list(outside.iterdir()) == []
+
+
+def test_layout_rejects_nested_evidence_symlink_before_transaction_write(
+    tmp_path: Path,
+) -> None:
+    """A nested evidence parent cannot redirect migration proof copies."""
+    write_migratable_legacy(tmp_path)
+    claim_governance_root(tmp_path)
+    evidence = tmp_path / ".work-governance" / "evidence"
+    evidence.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (evidence / "layout-migrations").symlink_to(outside, target_is_directory=True)
+
+    migration = run_workctl(tmp_path, "layout", "migrate", check=False)
+
+    assert migration.returncode == 2
+    assert "uncommitted governance evidence is not transaction-bound" in migration.stderr
+    assert list(outside.iterdir()) == []
+    assert (tmp_path / "_Plan").is_dir()
+
+
+@pytest.mark.parametrize(
+    "hazard",
+    [
+        "lock-symlink",
+        "rules-symlink",
+        "invalid-managed-marker",
+        "aligned-unmanaged-rule",
+        "unregistered-active-plan",
+        "unfinished-indexed-plan",
+    ],
+)
+def test_layout_classifier_rejects_unclosed_governance_inventory(
+    tmp_path: Path, hazard: str
+) -> None:
+    """Every control path and Plan-like direct child needs deterministic ownership."""
+    source = write_migratable_legacy(tmp_path)
+    if hazard == "lock-symlink":
+        outside = tmp_path / "outside.lock"
+        outside.write_text("", encoding="utf-8")
+        (source.parent / ".workctl.lock").symlink_to(outside)
+    elif hazard == "rules-symlink":
+        outside = tmp_path / "rules.md"
+        outside.write_text("rules\n", encoding="utf-8")
+        (tmp_path / "AGENTS.md").symlink_to(outside)
+    elif hazard == "invalid-managed-marker":
+        (tmp_path / "AGENTS.md").write_text(
+            "<!-- WORK_GOVERNANCE:BEGIN -->\n`_Plan/PLAN-20260723-001.md` is authoritative.\n",
+            encoding="utf-8",
+        )
+    elif hazard == "aligned-unmanaged-rule":
+        (tmp_path / "AGENTS.md").write_text(
+            "`_Plan/PLAN-20260723-001.md` is the authoritative current execution Plan.\n",
+            encoding="utf-8",
+        )
+    elif hazard == "unregistered-active-plan":
+        extra = source.parent / "PLAN-20260722-999.md"
+        write_markdown_plan(extra, canonical_frontmatter("PLAN-20260722-999"))
+    else:
+        extra = source.parent / "PLAN-20260722-999.md"
+        write_markdown_plan(extra, canonical_frontmatter("PLAN-20260722-999"))
+        index_path = source.parent / "index.yaml"
+        index = yaml.safe_load(index_path.read_text(encoding="utf-8"))
+        index["plans"].append(
+            {
+                "id": "PLAN-20260722-999",
+                "path": extra.name,
+                "title": "Unfinished candidate",
+                "created_at": "2026-07-22T00:00:00+00:00",
+            }
+        )
+        index_path.write_text(yaml.safe_dump(index, sort_keys=False), encoding="utf-8")
+
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+
+    assert status["layout_state"] == "LEGACY_CLASSIFICATION_REQUIRED"
+    assert status["legacy"]["classification"] == "AMBIGUOUS"
+
+
+def test_layout_incomplete_legacy_journal_requires_recovery(tmp_path: Path) -> None:
+    """An unfinished old structural transaction is never absorbed."""
+    source = write_migratable_legacy(tmp_path)
+    journal = source.parent / ".migrations" / "MIG-20260727-001.yaml"
+    journal.parent.mkdir()
+    journal.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "migration_id": "MIG-20260727-001",
+                "status": "applying",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    migration = run_workctl(tmp_path, "layout", "migrate", check=False)
+
+    assert status["layout_state"] == "LAYOUT_RECOVERY_REQUIRED"
+    assert status["legacy"]["classification"] == "RECOVERY_REQUIRED"
+    assert migration.returncode == 2
+    assert "LAYOUT_MIGRATION_BLOCKED: LAYOUT_RECOVERY_REQUIRED" in migration.stderr
+
+
+def test_layout_old_and_new_authorities_require_reconciliation(tmp_path: Path) -> None:
+    """Two pre-commit authority roots cannot be selected by precedence."""
+    source = write_migratable_legacy(tmp_path)
+    claim_governance_root(tmp_path)
+    canonical = tmp_path / ".work-governance" / "_Plan"
+    shutil.copytree(source.parent, canonical)
+
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    migration = run_workctl(tmp_path, "layout", "migrate", check=False)
+
+    assert status["layout_state"] == "RECONCILIATION_REQUIRED"
+    assert migration.returncode == 2
+    assert "LAYOUT_MIGRATION_BLOCKED: RECONCILIATION_REQUIRED" in migration.stderr
+
+
+def test_layout_rejects_stale_explicit_project_authority_route(tmp_path: Path) -> None:
+    """A project rule naming another legacy Plan blocks automatic migration."""
+    write_migratable_legacy(tmp_path)
+    (tmp_path / "AGENTS.md").write_text(
+        "`_Plan/PLAN-20260722-999.md` is the authoritative current execution Plan.\n",
+        encoding="utf-8",
+    )
+
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+
+    assert status["layout_state"] == "LEGACY_CLASSIFICATION_REQUIRED"
+    assert any(
+        "routes legacy authority" in reason for reason in status["legacy"]["blocking_reasons"]
+    )
+
+
+def test_layout_converts_only_allowlisted_operational_content(tmp_path: Path) -> None:
+    """Managed paths change while historical and business prose remain byte-identical."""
+    source = write_migratable_legacy(tmp_path)
+    frontmatter = canonical_frontmatter("PLAN-20260723-001")
+    frontmatter["delivery"] = {
+        "status": "pending",
+        "boundary": "local",
+        "evidence_ref": "evidence:.logs/PLAN-20260723-001/probe.json",
+    }
+    frontmatter["artifacts"] = [
+        {"id": "A-001", "path": "_Plan/business-output.txt", "status": "pending"}
+    ]
+    write_markdown_plan(source, frontmatter, "Business prose: _Plan/keep-this.md\n")
+    archive = source.parent / "archive" / "historical.md"
+    archive.parent.mkdir()
+    archive_bytes = b"Historical evidence: _Plan/keep-this.md and .logs/business.log\n"
+    archive.write_bytes(archive_bytes)
+    (tmp_path / "AGENTS.md").write_text(
+        "Business note: `_Plan/do-not-rewrite.md`.\n"
+        "<!-- WORK_GOVERNANCE:BEGIN -->\n"
+        "`_Plan/PLAN-20260723-001.md` is the authoritative current execution Plan.\n"
+        "<!-- WORK_GOVERNANCE:END -->\n",
+        encoding="utf-8",
+    )
+    governed_log = tmp_path / ".logs" / "PLAN-20260723-001" / "probe.json"
+    governed_log.parent.mkdir(parents=True)
+    governed_log.write_text(
+        '{"schema_version":1,"plan_id":"PLAN-20260723-001"}\n',
+        encoding="utf-8",
+    )
+
+    run_workctl(tmp_path, "layout", "migrate")
+    migrated, body = read_plan(tmp_path)
+    agents = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert migrated["revision"] == 2
+    assert migrated["delivery"]["evidence_ref"] == (
+        "evidence:.work-governance/logs/PLAN-20260723-001/probe.json"
+    )
+    assert migrated["artifacts"][0]["path"] == "_Plan/business-output.txt"
+    assert body == "Business prose: _Plan/keep-this.md\n"
+    assert (
+        tmp_path / ".work-governance" / "_Plan" / "archive" / "historical.md"
+    ).read_bytes() == archive_bytes
+    assert "Business note: `_Plan/do-not-rewrite.md`." in agents
+    assert "`.work-governance/_Plan/PLAN-20260723-001.md` is the authoritative" in agents
+
+
+def test_layout_moves_and_rewrites_lineage_and_journal_evidence_refs(
+    tmp_path: Path,
+) -> None:
+    """Every converted evidence ref is backed by the exact log file moved."""
+    active = write_migratable_legacy(tmp_path)
+    legacy = active.parent
+    predecessor = legacy / "PLAN-20260722-001.md"
+    predecessor_frontmatter = canonical_frontmatter("PLAN-20260722-001")
+    predecessor_frontmatter["status"] = "complete"
+    predecessor_frontmatter["delivery"] = {
+        "evidence_ref": "evidence:.logs/PLAN-20260722-001/predecessor.json"
+    }
+    write_markdown_plan(predecessor, predecessor_frontmatter)
+    active_frontmatter = canonical_frontmatter("PLAN-20260723-001")
+    active_frontmatter["authority"]["predecessor"] = {
+        "path": "_Plan/PLAN-20260722-001.md",
+        "plan_id": "PLAN-20260722-001",
+        "revision": 1,
+        "sha256": sha256_path(predecessor),
+    }
+    active_frontmatter["authority"]["rollover_id"] = "ROL-20260727-001"
+    active_frontmatter["authority"]["confirmations"]["rollover"] = "C-PLAN-ROLLOVER"
+    active_frontmatter["confirmations"]["required"] = [
+        {
+            "id": "C-PLAN-ROLLOVER",
+            "description": "Approve successor lineage.",
+            "status": "accepted",
+            "ref": "user:test-rollover",
+            "accepted_at": "2026-07-27T00:00:00+00:00",
+            "evidence_sha256": "1" * 64,
+        }
+    ]
+    write_markdown_plan(active, active_frontmatter)
+    index_path = legacy / "index.yaml"
+    index = yaml.safe_load(index_path.read_text(encoding="utf-8"))
+    index["plans"].insert(
+        0,
+        {
+            "id": "PLAN-20260722-001",
+            "path": predecessor.name,
+            "title": "Predecessor",
+            "created_at": "2026-07-22T00:00:00+00:00",
+        },
+    )
+    index_path.write_text(yaml.safe_dump(index, sort_keys=False), encoding="utf-8")
+    migration_journal = legacy / ".migrations" / "MIG-20260727-001.yaml"
+    migration_journal.parent.mkdir()
+    migration_journal.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "migration_id": "MIG-20260727-001",
+                "status": "committed",
+                "evidence_ref": "evidence:.logs/PLAN-20260723-001/rollover.json",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    predecessor_log = tmp_path / ".logs" / "PLAN-20260722-001" / "predecessor.json"
+    rollover_log = tmp_path / ".logs" / "PLAN-20260723-001" / "rollover.json"
+    predecessor_log.parent.mkdir(parents=True)
+    rollover_log.parent.mkdir(parents=True)
+    predecessor_log.write_text("predecessor evidence\n", encoding="utf-8")
+    rollover_log.write_text("rollover evidence\n", encoding="utf-8")
+
+    run_workctl(tmp_path, "layout", "migrate")
+
+    predecessor_text = (tmp_path / ".work-governance" / "_Plan" / predecessor.name).read_text(
+        encoding="utf-8"
+    )
+    _, predecessor_yaml, _ = predecessor_text.split("---\n", 2)
+    migrated_predecessor = yaml.safe_load(predecessor_yaml)
+    migrated_journal = yaml.safe_load(
+        (
+            tmp_path / ".work-governance" / "_Plan" / ".migrations" / migration_journal.name
+        ).read_text(encoding="utf-8")
+    )
+    assert migrated_predecessor["delivery"]["evidence_ref"] == (
+        "evidence:.work-governance/logs/PLAN-20260722-001/predecessor.json"
+    )
+    assert migrated_journal["evidence_ref"] == (
+        "evidence:.work-governance/logs/PLAN-20260723-001/rollover.json"
+    )
+    assert (
+        tmp_path / ".work-governance" / "logs" / "PLAN-20260722-001" / "predecessor.json"
+    ).is_file()
+    assert (
+        tmp_path / ".work-governance" / "logs" / "PLAN-20260723-001" / "rollover.json"
+    ).is_file()
+
+
+def test_layout_rejects_a_converted_evidence_ref_without_source_log(
+    tmp_path: Path,
+) -> None:
+    """Missing evidence fails before a transaction and remains directly retryable."""
+    active = write_migratable_legacy(tmp_path)
+    frontmatter = canonical_frontmatter("PLAN-20260723-001")
+    frontmatter["delivery"] = {"evidence_ref": "evidence:.logs/PLAN-20260723-001/missing.json"}
+    write_markdown_plan(active, frontmatter)
+
+    migration = run_workctl(tmp_path, "layout", "migrate", check=False)
+    after_failure = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+
+    assert migration.returncode == 2
+    assert "LAYOUT_EVIDENCE_REFERENCE_MISSING" in migration.stderr
+    assert after_failure["layout_state"] == "LAYOUT_MIGRATION_REQUIRED"
+    assert not list((tmp_path / ".work-governance" / "runtime").glob("LAY-*"))
+    assert active.is_file()
+    assert not (tmp_path / ".work-governance" / "_Plan").exists()
+    missing_log = tmp_path / ".logs" / "PLAN-20260723-001" / "missing.json"
+    missing_log.parent.mkdir(parents=True)
+    missing_log.write_text(
+        '{"schema_version": 1, "plan_id": "PLAN-20260723-001"}\n',
+        encoding="utf-8",
+    )
+    run_workctl(tmp_path, "layout", "migrate")
+    assert (
+        json.loads(run_workctl(tmp_path, "layout", "status").stdout)["layout_state"]
+        == "LAYOUT_READY"
+    )
+
+
+def test_layout_recovery_abandons_a_preparing_interruption(tmp_path: Path) -> None:
+    """A crash after the initial journal but before staging never strands recovery."""
+    active = write_migratable_legacy(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "preparing"},
+    )
+
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    transaction = next((tmp_path / ".work-governance" / "runtime").glob("LAY-*"))
+    assert {child.name for child in transaction.iterdir()} == {"journal.json"}
+    recovered = run_workctl(tmp_path, "layout", "recover")
+    final = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+
+    assert interrupted.returncode == 2
+    assert "LAYOUT_TEST_INTERRUPTED: preparing" in interrupted.stderr
+    assert status["layout_state"] == "LAYOUT_RECOVERY_REQUIRED"
+    assert recovered.stdout.startswith("LAYOUT_PREPARATION_PRESERVED LAY-")
+    assert final["layout_state"] == "LAYOUT_MIGRATION_REQUIRED"
+    assert json.loads((transaction / "journal.json").read_text(encoding="utf-8"))["status"] == (
+        "aborted"
+    )
+    assert transaction.is_dir()
+    assert active.is_file()
+    assert not (tmp_path / ".work-governance" / "_Plan").exists()
+    run_workctl(tmp_path, "layout", "migrate")
+    assert (
+        json.loads(run_workctl(tmp_path, "layout", "status").stdout)["layout_state"]
+        == "LAYOUT_READY"
+    )
+
+
+def test_layout_recovery_resumes_after_preparing_receipt_interrupt(
+    tmp_path: Path,
+) -> None:
+    """A crash between receipt persistence and aborted journal update is idempotent."""
+    write_migratable_legacy(tmp_path)
+    run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "preparing"},
+    )
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "recover",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "preparing-receipt"},
+    )
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    recovered = run_workctl(tmp_path, "layout", "recover")
+    transaction = next((tmp_path / ".work-governance" / "runtime").glob("LAY-*"))
+
+    assert interrupted.returncode == 2
+    assert "LAYOUT_TEST_INTERRUPTED: preparing-receipt" in interrupted.stderr
+    assert status["layout_state"] == "LAYOUT_RECOVERY_REQUIRED"
+    assert recovered.stdout.startswith("LAYOUT_PREPARATION_PRESERVED LAY-")
+    assert (transaction / "preparing-journal.json").is_file()
+    assert json.loads((transaction / "journal.json").read_text(encoding="utf-8"))["status"] == (
+        "aborted"
+    )
+
+
+@pytest.mark.parametrize("temp_kind", ["preparing-receipt", "journal"])
+def test_layout_recovery_preserves_atomic_writer_orphan_temp(
+    tmp_path: Path, temp_kind: str
+) -> None:
+    """A hard-crash atomic-writer temp is retained but does not strand recovery."""
+    write_migratable_legacy(tmp_path)
+    run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "preparing"},
+    )
+    transaction = next((tmp_path / ".work-governance" / "runtime").glob("LAY-*"))
+    if temp_kind == "journal":
+        interrupted = run_workctl(
+            tmp_path,
+            "layout",
+            "recover",
+            check=False,
+            env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "preparing-receipt"},
+        )
+        assert interrupted.returncode == 2
+        orphan = transaction / ".journal.json.crash"
+    else:
+        orphan = transaction / ".preparing-journal.json.crash"
+    orphan.write_bytes(b"ORPHAN-ATOMIC-TEMP")
+
+    recovered = run_workctl(tmp_path, "layout", "recover")
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+
+    assert recovered.stdout.startswith("LAYOUT_PREPARATION_PRESERVED LAY-")
+    assert orphan.read_bytes() == b"ORPHAN-ATOMIC-TEMP"
+    assert json.loads((transaction / "journal.json").read_text(encoding="utf-8"))["status"] == (
+        "aborted"
+    )
+    assert status["layout_state"] == "LAYOUT_MIGRATION_REQUIRED"
+
+
+def test_layout_recovery_rejects_symlinked_atomic_writer_temp(tmp_path: Path) -> None:
+    """An atomic-writer-looking symlink is foreign inventory and blocks recovery."""
+    write_migratable_legacy(tmp_path)
+    run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "preparing"},
+    )
+    transaction = next((tmp_path / ".work-governance" / "runtime").glob("LAY-*"))
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"OUTSIDE")
+    orphan = transaction / ".journal.json.crash"
+    orphan.symlink_to(outside)
+
+    recovery = run_workctl(tmp_path, "layout", "recover", check=False)
+
+    assert recovery.returncode == 2
+    assert "LAYOUT_PREPARATION_INVENTORY_INVALID" in recovery.stderr
+    assert orphan.is_symlink()
+    assert outside.read_bytes() == b"OUTSIDE"
+
+
+@pytest.mark.parametrize(
+    ("drift_kind", "expected_error"),
+    [
+        ("source", "LEGACY_LAYOUT_INPUT_DRIFT"),
+        ("unknown-transaction", "LAYOUT_PREPARATION_INVENTORY_INVALID"),
+        ("unknown-backup", "LAYOUT_PREPARATION_INVENTORY_INVALID"),
+        ("unknown-evidence", "LAYOUT_PREPARATION_INVENTORY_INVALID"),
+        ("unknown-staged-plan", "LAYOUT_PREPARATION_INVENTORY_INVALID"),
+        ("unknown-staged-logs", "LAYOUT_PREPARATION_INVENTORY_INVALID"),
+        ("unknown-original-plan", "LAYOUT_PREPARATION_INVENTORY_INVALID"),
+        ("symlink", "LAYOUT_PATH_SYMLINK"),
+        ("activated", "LAYOUT_PREPARATION_ABANDON_UNSAFE"),
+        ("journal", "INVALID_PREPARING_LAYOUT_JOURNAL"),
+        ("git-baseline", "LAYOUT_GIT_BASELINE_DRIFT"),
+    ],
+)
+def test_layout_preparing_recovery_rejects_drift(
+    tmp_path: Path, drift_kind: str, expected_error: str
+) -> None:
+    """Preparing cleanup preserves evidence whenever source or transaction state drifts."""
+    active = write_migratable_legacy(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "preparing"},
+    )
+    assert interrupted.returncode == 2
+    governance = tmp_path / ".work-governance"
+    transaction = next((governance / "runtime").glob("LAY-*"))
+    sentinel = transaction / "sentinel.txt"
+    if drift_kind == "source":
+        active.write_text(active.read_text(encoding="utf-8") + "\nsource drift\n", encoding="utf-8")
+    elif drift_kind == "unknown-transaction":
+        sentinel.write_text("preserve me\n", encoding="utf-8")
+    elif drift_kind == "unknown-backup":
+        sentinel = transaction / "backup" / "sentinel.txt"
+        sentinel.parent.mkdir()
+        sentinel.write_text("preserve me\n", encoding="utf-8")
+    elif drift_kind == "unknown-evidence":
+        sentinel = governance / "evidence" / "layout-migrations" / transaction.name / "sentinel.txt"
+        sentinel.parent.mkdir(parents=True)
+        sentinel.write_text("preserve me\n", encoding="utf-8")
+    elif drift_kind == "unknown-staged-plan":
+        sentinel = transaction / "staging" / "_Plan" / "unregistered.bin"
+        sentinel.parent.mkdir(parents=True)
+        sentinel.write_text("preserve me\n", encoding="utf-8")
+    elif drift_kind == "unknown-staged-logs":
+        sentinel = transaction / "staging" / "logs" / "unregistered.bin"
+        sentinel.parent.mkdir(parents=True)
+        sentinel.write_text("preserve me\n", encoding="utf-8")
+    elif drift_kind == "unknown-original-plan":
+        sentinel = (
+            governance
+            / "evidence"
+            / "layout-migrations"
+            / transaction.name
+            / "legacy-_Plan"
+            / "unregistered.bin"
+        )
+        sentinel.parent.mkdir(parents=True)
+        sentinel.write_text("preserve me\n", encoding="utf-8")
+    elif drift_kind == "symlink":
+        staging = transaction / "staging"
+        staged_plan = staging / "_Plan"
+        staged_plan.mkdir(parents=True)
+        outside = tmp_path / "outside.txt"
+        outside.write_text("outside\n", encoding="utf-8")
+        (staged_plan / "outside-link").symlink_to(outside)
+    elif drift_kind == "activated":
+        (governance / "_Plan").mkdir()
+    else:
+        journal_path = transaction / "journal.json"
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        if drift_kind == "journal":
+            journal["unknown"] = True
+        else:
+            journal["git_baseline"] = {"repository": True, "head": "drift"}
+        journal_path.write_text(json.dumps(journal), encoding="utf-8")
+
+    recovery = run_workctl(tmp_path, "layout", "recover", check=False)
+
+    assert recovery.returncode == 2
+    assert expected_error in recovery.stderr
+    assert transaction.is_dir()
+    if drift_kind.startswith("unknown"):
+        assert sentinel.read_text(encoding="utf-8") == "preserve me\n"
+
+
+@pytest.mark.parametrize(
+    "replacement_kind",
+    ["staged-plan-file", "original-plan-file", "registered-directory"],
+)
+def test_layout_preparing_recovery_preserves_registered_path_foreign_bytes(
+    tmp_path: Path, replacement_kind: str
+) -> None:
+    """Known path names cannot authorize deletion of unbound bytes or changed types."""
+    active = write_migratable_legacy(tmp_path)
+    if replacement_kind == "registered-directory":
+        archive = active.parent / "archive"
+        archive.mkdir()
+        (archive / "source.txt").write_text("source\n", encoding="utf-8")
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "preparing"},
+    )
+    assert interrupted.returncode == 2
+    governance = tmp_path / ".work-governance"
+    transaction = next((governance / "runtime").glob("LAY-*"))
+    if replacement_kind == "staged-plan-file":
+        sentinel = transaction / "staging" / "_Plan" / active.name
+    elif replacement_kind == "original-plan-file":
+        sentinel = (
+            governance
+            / "evidence"
+            / "layout-migrations"
+            / transaction.name
+            / "legacy-_Plan"
+            / active.name
+        )
+    else:
+        sentinel = transaction / "staging" / "_Plan" / "archive"
+    sentinel.parent.mkdir(parents=True)
+    sentinel.write_bytes(b"UNBOUND-FOREIGN-BYTES")
+
+    recovered = run_workctl(tmp_path, "layout", "recover")
+
+    assert recovered.stdout.startswith("LAYOUT_PREPARATION_PRESERVED LAY-")
+    assert sentinel.read_bytes() == b"UNBOUND-FOREIGN-BYTES"
+    assert transaction.is_dir()
+    assert json.loads((transaction / "journal.json").read_text(encoding="utf-8"))["status"] == (
+        "aborted"
+    )
+    assert not (governance / "_Plan").exists()
+
+
+@pytest.mark.parametrize(
+    "forgery",
+    ["minimal", "id-mismatch", "marker-only", "invalid-planned"],
+)
+def test_layout_aborted_journal_must_authenticate(tmp_path: Path, forgery: str) -> None:
+    """Forged aborted markers remain recovery-required instead of being ignored."""
+    write_migratable_legacy(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "preparing"},
+    )
+    assert interrupted.returncode == 2
+    transaction = next((tmp_path / ".work-governance" / "runtime").glob("LAY-*"))
+    journal_path = transaction / "journal.json"
+    if forgery == "invalid-planned":
+        run_workctl(tmp_path, "layout", "recover")
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    if forgery == "minimal":
+        journal = {
+            "schema_version": 1,
+            "kind": "layout-migration",
+            "transaction_id": transaction.name,
+            "status": "aborted",
+        }
+    elif forgery == "id-mismatch":
+        journal["transaction_id"] = "LAY-20260727T120000Z-deadbeef-abcdef12"
+        journal["status"] = "aborted"
+        journal["completed_operations"] = ["snapshot", "preparation-preserved"]
+    elif forgery == "marker-only":
+        journal["status"] = "aborted"
+        journal["completed_operations"] = ["snapshot", "preparation-preserved"]
+    else:
+        journal["planned_log_files"] = [42]
+        journal["planned_project_files"] = [{"unbound": "bytes"}]
+    journal_path.write_text(json.dumps(journal), encoding="utf-8")
+
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+
+    assert status["layout_state"] == "LAYOUT_RECOVERY_REQUIRED"
+    assert transaction.is_dir()
+
+
+def test_layout_transaction_nonce_is_unique_at_a_fixed_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retained transactions cannot collide when time and process identity repeat."""
+    namespace = runpy.run_path(str(SCRIPT), run_name="workctl_nonce_test")
+    real_datetime = cast(Any, namespace["datetime"])
+    fixed = real_datetime(2026, 7, 27, 12, 0, 0, tzinfo=namespace["UTC"])
+
+    class FixedDatetime:
+        @classmethod
+        def now(cls, _timezone: object) -> Any:
+            return fixed
+
+    nonces = iter(["1" * 32, "2" * 32])
+    sizes: list[int] = []
+
+    def fake_token_hex(size: int) -> str:
+        sizes.append(size)
+        return next(nonces)
+
+    monkeypatch.setattr(namespace["secrets"], "token_hex", fake_token_hex)
+    new_id = cast(Callable[[str], str], namespace["new_layout_transaction_id"])
+    new_id.__globals__["datetime"] = FixedDatetime
+
+    first = new_id("a" * 64)
+    second = new_id("a" * 64)
+
+    assert first == f"LAY-20260727T120000Z-aaaaaaaa-{'1' * 32}"
+    assert second == f"LAY-20260727T120000Z-aaaaaaaa-{'2' * 32}"
+    assert first != second
+    assert sizes == [16, 16]
+
+
+def test_layout_rejects_unsupported_lineage_path(tmp_path: Path) -> None:
+    """Only direct legacy, canonical, or filename predecessor paths are accepted."""
+    source = write_migratable_legacy(tmp_path)
+    predecessor = source.parent / "PLAN-20260722-001.md"
+    predecessor_frontmatter = canonical_frontmatter("PLAN-20260722-001")
+    predecessor_frontmatter["status"] = "complete"
+    write_markdown_plan(predecessor, predecessor_frontmatter)
+    frontmatter = canonical_frontmatter("PLAN-20260723-001")
+    frontmatter["authority"]["predecessor"] = {
+        "path": "archive/PLAN-20260722-001.md",
+        "plan_id": "PLAN-20260722-001",
+        "revision": 1,
+        "sha256": sha256_path(predecessor),
+    }
+    write_markdown_plan(source, frontmatter)
+
+    migration = run_workctl(tmp_path, "layout", "migrate", check=False)
+
+    assert migration.returncode == 2
+    assert "LAYOUT_LINEAGE_PATH_UNSUPPORTED" in migration.stderr
+
+
+def test_layout_holds_stable_lock_while_waiting_for_legacy_lock(
+    tmp_path: Path,
+) -> None:
+    """A new controller cannot pass another migration waiting on the old lock."""
+    source = write_migratable_legacy(tmp_path)
+    legacy_lock = source.parent / ".workctl.lock"
+    holder_ready = tmp_path / "legacy-holder-ready"
+    release_holder = tmp_path / "release-legacy-holder"
+    first_stable_attempt = tmp_path / "first-stable-attempt"
+    first_legacy_attempt = tmp_path / "first-legacy-attempt"
+    second_stable_attempt = tmp_path / "second-stable-attempt"
+    holder_script = """
+import fcntl
+import pathlib
+import sys
+import time
+
+lock_path = pathlib.Path(sys.argv[1])
+ready_path = pathlib.Path(sys.argv[2])
+release_path = pathlib.Path(sys.argv[3])
+with lock_path.open("w", encoding="utf-8") as handle:
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    ready_path.write_text("ready", encoding="utf-8")
+    deadline = time.monotonic() + 8
+    while not release_path.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if not release_path.exists():
+        raise SystemExit(2)
+"""
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            holder_script,
+            str(legacy_lock),
+            str(holder_ready),
+            str(release_holder),
+        ],
+        cwd=tmp_path,
+    )
+    first: subprocess.Popen[str] | None = None
+    second: subprocess.Popen[str] | None = None
+    try:
+        deadline = time.monotonic() + 3
+        while not holder_ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert holder_ready.exists()
+        first = subprocess.Popen(
+            [sys.executable, str(SCRIPT), "layout", "migrate"],
+            cwd=tmp_path,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env={
+                **os.environ,
+                "WORKCTL_TEST_LOCK_ATTEMPT_FILE": str(first_stable_attempt),
+                "WORKCTL_TEST_LEGACY_LOCK_ATTEMPT_FILE": str(first_legacy_attempt),
+            },
+        )
+        deadline = time.monotonic() + 3
+        while not first_legacy_attempt.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert first_stable_attempt.exists()
+        assert first_legacy_attempt.exists()
+        assert first.poll() is None
+        second = subprocess.Popen(
+            [sys.executable, str(SCRIPT), "layout", "migrate"],
+            cwd=tmp_path,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env={
+                **os.environ,
+                "WORKCTL_TEST_LOCK_ATTEMPT_FILE": str(second_stable_attempt),
+            },
+        )
+        deadline = time.monotonic() + 3
+        while not second_stable_attempt.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert second_stable_attempt.exists()
+        assert second.poll() is None
+        release_holder.write_text("release\n", encoding="utf-8")
+        assert holder.wait(timeout=3) == 0
+        first_stdout, first_stderr = first.communicate(timeout=5)
+        second_stdout, second_stderr = second.communicate(timeout=5)
+        assert first.returncode == 0, (first_stdout, first_stderr)
+        assert second.returncode == 0, (second_stdout, second_stderr)
+        assert first_stdout.startswith("LAYOUT_COMMITTED LAY-")
+        assert second_stdout.strip() == "LAYOUT_ALREADY_READY"
+    finally:
+        release_holder.touch(exist_ok=True)
+        for process in (first, second, holder):
+            if process is not None and process.poll() is None:
+                process.terminate()
+                process.wait(timeout=3)
+
+
+def test_layout_recovery_rejects_git_baseline_drift(tmp_path: Path) -> None:
+    """Recovery cannot activate after tracked project state changes."""
+    write_migratable_legacy(tmp_path)
+    tracked = tmp_path / "tracked.txt"
+    tracked.write_text("baseline\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Work Governance Test"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=tmp_path, check=True)
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "staged"},
+    )
+    assert interrupted.returncode == 2
+    tracked.write_text("drift\n", encoding="utf-8")
+
+    recovery = run_workctl(tmp_path, "layout", "recover", check=False)
+
+    assert recovery.returncode == 2
+    assert "LAYOUT_GIT_BASELINE_DRIFT" in recovery.stderr
+    assert (tmp_path / "_Plan").is_dir()
+    assert not (tmp_path / ".work-governance" / "_Plan").exists()
+
+
+def test_layout_manifests_and_completion_proof_are_reproducible(
+    tmp_path: Path,
+) -> None:
+    """Source evidence, final Plan baseline, and version proof all rehash."""
+    source = write_migratable_legacy(tmp_path)
+    source_bytes = source.read_bytes()
+
+    run_workctl(tmp_path, "layout", "migrate")
+
+    journals = list((tmp_path / ".work-governance" / "runtime").glob("LAY-*/journal.json"))
+    assert len(journals) == 1
+    journal = json.loads(journals[0].read_text(encoding="utf-8"))
+    namespace = runpy.run_path(str(SCRIPT))
+    tree_manifest = cast(Callable[..., list[dict[str, object]]], namespace["tree_manifest"])
+    manifest_digest = cast(Callable[[list[dict[str, object]]], str], namespace["manifest_sha256"])
+    original = Path(journal["paths"]["original_evidence"])
+    canonical = tmp_path / ".work-governance" / "_Plan"
+    assert (
+        manifest_digest(tree_manifest(original, exclude_names={".workctl.lock"}))
+        == journal["legacy_manifest_sha256"]
+    )
+    assert (
+        manifest_digest(tree_manifest(canonical, exclude_names={".workctl.lock"}))
+        == journal["new_layout_baseline_sha256"]
+    )
+    assert (original / source.name).read_bytes() == source_bytes
+    version = yaml.safe_load(
+        (tmp_path / ".work-governance" / "version.yaml").read_text(encoding="utf-8")
+    )
+    evidence = version["migration"]["completion_evidence"]
+    proof = tmp_path / evidence["path"]
+    assert evidence["kind"] == "migration-proof"
+    assert sha256_path(proof) == evidence["sha256"]
+    assert version["migration"]["legacy_manifest_sha256"] == (journal["legacy_manifest_sha256"])
+    assert (
+        version["migration"]["new_layout_baseline_sha256"]
+        == (journal["new_layout_baseline_sha256"])
+    )
+
+
+def test_normal_plan_revision_does_not_reopen_layout_migration(
+    tmp_path: Path,
+) -> None:
+    """The migration baseline proves layout activation, not future Plan bytes."""
+    write_migratable_legacy(tmp_path)
+    run_workctl(tmp_path, "layout", "migrate")
+    version_before = (tmp_path / ".work-governance" / "version.yaml").read_bytes()
+
+    revised = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-revision",
+        "2",
+    )
+
+    assert "TASK_UPDATED T-001 in_progress revision=3" in revised.stdout
+    assert (tmp_path / ".work-governance" / "version.yaml").read_bytes() == version_before
+    assert run_workctl(tmp_path, "layout", "validate").stdout.strip() == "LAYOUT_VALID"
+
+
+def test_layout_converts_lineage_pointer_and_operational_journal_once(
+    tmp_path: Path,
+) -> None:
+    """Recursive hashes and allowlisted operational paths converge in staging."""
+    active = write_migratable_legacy(tmp_path)
+    legacy = active.parent
+    predecessor = legacy / "PLAN-20260722-001.md"
+    predecessor_frontmatter = canonical_frontmatter("PLAN-20260722-001")
+    predecessor_frontmatter["status"] = "complete"
+    write_markdown_plan(predecessor, predecessor_frontmatter)
+    active_frontmatter = canonical_frontmatter("PLAN-20260723-001")
+    active_frontmatter["authority"]["predecessor"] = {
+        "path": "_Plan/PLAN-20260722-001.md",
+        "plan_id": "PLAN-20260722-001",
+        "revision": 1,
+        "sha256": sha256_path(predecessor),
+    }
+    active_frontmatter["authority"]["rollover_id"] = "ROL-20260727-001"
+    active_frontmatter["authority"]["confirmations"]["rollover"] = "C-PLAN-ROLLOVER"
+    active_frontmatter["confirmations"]["required"] = [
+        {
+            "id": "C-PLAN-ROLLOVER",
+            "description": "Approve the successor.",
+            "status": "accepted",
+            "ref": "user:test-rollover",
+            "accepted_at": "2026-07-27T00:00:00+00:00",
+            "evidence_sha256": "1" * 64,
+        }
+    ]
+    write_markdown_plan(active, active_frontmatter)
+    index_path = legacy / "index.yaml"
+    index = yaml.safe_load(index_path.read_text(encoding="utf-8"))
+    index["plans"].insert(
+        0,
+        {
+            "id": "PLAN-20260722-001",
+            "path": predecessor.name,
+            "title": "Predecessor",
+            "created_at": "2026-07-22T00:00:00+00:00",
+        },
+    )
+    index_path.write_text(yaml.safe_dump(index, sort_keys=False), encoding="utf-8")
+    pointer = legacy / "PLAN-20260724-999.md"
+    pointer.write_text(
+        "# Historical pointer\n\n"
+        "- Marker: `WORK_GOVERNANCE_NON_AUTHORITY_POINTER`\n"
+        "- Canonical Plan: [PLAN-20260723-001](PLAN-20260723-001.md)\n"
+        "- Recorded path: `_Plan/PLAN-20260723-001.md`\n",
+        encoding="utf-8",
+    )
+    rollover = legacy / ".rollovers" / "ROL-20260727-001.yaml"
+    rollover.parent.mkdir()
+    rollover.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "rollover_id": "ROL-20260727-001",
+                "status": "committed",
+                "source_plan": {
+                    "path": "_Plan/PLAN-20260722-001.md",
+                    "plan_id": "PLAN-20260722-001",
+                },
+                "description": "Historical prose keeps _Plan/business.md",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    run_workctl(tmp_path, "layout", "migrate")
+
+    migrated_active, _ = read_plan(tmp_path)
+    migrated_predecessor = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260722-001.md"
+    _, predecessor_raw, _ = migrated_predecessor.read_text(encoding="utf-8").split("---\n", 2)
+    predecessor_after = yaml.safe_load(predecessor_raw)
+    migrated_pointer = (tmp_path / ".work-governance" / "_Plan" / "PLAN-20260724-999.md").read_text(
+        encoding="utf-8"
+    )
+    migrated_rollover = yaml.safe_load(
+        (tmp_path / ".work-governance" / "_Plan" / ".rollovers" / rollover.name).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert migrated_active["revision"] == 2
+    assert predecessor_after["revision"] == 1
+    assert migrated_active["authority"]["predecessor"] == {
+        "path": ".work-governance/_Plan/PLAN-20260722-001.md",
+        "plan_id": "PLAN-20260722-001",
+        "revision": 1,
+        "sha256": sha256_path(migrated_predecessor),
+    }
+    assert "Recorded path: `.work-governance/_Plan/PLAN-20260723-001.md`" in migrated_pointer
+    assert migrated_rollover["source_plan"]["path"] == ".work-governance/_Plan/PLAN-20260722-001.md"
+    assert migrated_rollover["description"] == "Historical prose keeps _Plan/business.md"
+
+
+def test_layout_preserves_registered_legacy_worktree_path(tmp_path: Path) -> None:
+    """Layout migration never moves an already registered old worktree."""
+    write_migratable_legacy(tmp_path)
+    (tmp_path / ".gitignore").write_text("/.worktree/\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Work Governance Test"],
+        cwd=tmp_path,
+        check=True,
+    )
+    tracked = tmp_path / "tracked.txt"
+    tracked.write_text("baseline\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=tmp_path, check=True)
+    legacy_worktree = tmp_path / ".worktree" / "legacy"
+    subprocess.run(
+        [
+            "git",
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "legacy-worktree",
+            str(legacy_worktree),
+            "HEAD",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    marker = legacy_worktree / "tracked.txt"
+    marker_bytes = marker.read_bytes()
+
+    run_workctl(tmp_path, "layout", "migrate")
+
+    registered = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+    assert str(legacy_worktree) in registered
+    assert marker.read_bytes() == marker_bytes
+    assert (
+        subprocess.run(
+            ["git", "status", "--short"],
+            cwd=legacy_worktree,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).returncode
+        == 0
+    )
+    namespace = runpy.run_path(str(SCRIPT))
+    worktrees_dir = cast(Callable[[Path], Path], namespace["worktrees_dir"])
+    assert worktrees_dir(tmp_path) == (tmp_path / ".work-governance" / "worktrees")
 
 
 def test_plan_init_status_and_active_conflict(tmp_path: Path) -> None:
@@ -669,7 +2297,9 @@ scope:
     assert frontmatter["scope"]["exclude"][0]["disposition"] == "completed"
     assert frontmatter["status"] == "switching"
     assert frontmatter["revision"] == 3
-    index = yaml.safe_load((tmp_path / "_Plan" / "index.yaml").read_text(encoding="utf-8"))
+    index = yaml.safe_load(
+        (tmp_path / ".work-governance" / "_Plan" / "index.yaml").read_text(encoding="utf-8")
+    )
     assert "status" not in index["plans"][0]
     assert "updated_at" not in index["plans"][0]
 
@@ -849,7 +2479,7 @@ def test_exclusive_lock_blocks_writer_until_release(tmp_path: Path) -> None:
         ]
     }
     write_plan(tmp_path, frontmatter, body)
-    lock_path = tmp_path / "_Plan" / ".workctl.lock"
+    lock_path = tmp_path / ".work-governance" / "workctl.lock"
     holder_ready_path = tmp_path / "holder-ready"
     writer_attempt_path = tmp_path / "writer-attempt"
     release_path = tmp_path / "release-holder"
@@ -1319,7 +2949,7 @@ def test_log_append_is_append_only(tmp_path: Path) -> None:
         "1",
     )
 
-    log_path = tmp_path / ".logs" / "PLAN-20260723-001.jsonl"
+    log_path = tmp_path / ".work-governance" / "logs" / "PLAN-20260723-001.jsonl"
     lines = log_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
     assert json.loads(lines[0])["message"] == "first"
@@ -1328,6 +2958,7 @@ def test_log_append_is_append_only(tmp_path: Path) -> None:
 
 def test_authority_state_unmanaged_empty_allows_governed_init(tmp_path: Path) -> None:
     """No Plan is unmanaged until init creates schema-v3 governed metadata."""
+    run_workctl(tmp_path, "layout", "migrate")
     before = json.loads(run_workctl(tmp_path, "plan", "authority", "check").stdout)
     assert before["authority_state"] == "UNMANAGED_EMPTY"
 
@@ -1341,6 +2972,7 @@ def test_authority_state_unmanaged_empty_allows_governed_init(tmp_path: Path) ->
 
 def test_docs_plan_designated_by_agents_requires_migration(tmp_path: Path) -> None:
     """A rule-designated legacy Plan is confirmed authority, not a filename guess."""
+    run_workctl(tmp_path, "layout", "migrate")
     docs_plan = tmp_path / "docs" / "Plan.md"
     write_markdown_plan(docs_plan, legacy_frontmatter("PLAN-20260722-001"))
     (tmp_path / "AGENTS.md").write_text(
@@ -1357,6 +2989,7 @@ def test_docs_plan_designated_by_agents_requires_migration(tmp_path: Path) -> No
 
 def test_phase_plan_and_next_step_text_do_not_trigger_authority(tmp_path: Path) -> None:
     """Plan-like words alone do not create execution authority."""
+    run_workctl(tmp_path, "layout", "migrate")
     (tmp_path / "Plan.md").write_text(
         "# Phase design\n\nTechnical design evidence and archive notes.\n\n下一步：讨论接口。\n",
         encoding="utf-8",
@@ -1374,6 +3007,7 @@ def test_phase_plan_and_next_step_text_do_not_trigger_authority(tmp_path: Path) 
 
 def test_likely_authority_requires_human_review(tmp_path: Path) -> None:
     """A self-claim plus control signals is reviewable but not auto-confirmed."""
+    run_workctl(tmp_path, "layout", "migrate")
     (tmp_path / "Plan.md").write_text(
         "# Current execution plan\n\n"
         "Target, phase, task queue, confirmation gate, and next step.\n",
@@ -1388,6 +3022,7 @@ def test_likely_authority_requires_human_review(tmp_path: Path) -> None:
 
 def test_agent_candidate_classification_normalizes_relative_path(tmp_path: Path) -> None:
     """Explicit semantic input remains effective with a dotted relative path."""
+    run_workctl(tmp_path, "layout", "migrate")
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "Plan.md").write_text("# Candidate\n", encoding="utf-8")
 
@@ -1472,7 +3107,9 @@ def test_schema_validate_is_distinct_from_full_lineage_validation(tmp_path: Path
                 "classification": "CONFIRMED_AUTHORITY",
                 "sha256": "0" * 64,
                 "revision": 1,
-                "archive_path": ("_Plan/archive/MIG-20260724-001/legacy/docs/Plan.md"),
+                "archive_path": (
+                    ".work-governance/_Plan/archive/MIG-20260724-001/legacy/docs/Plan.md"
+                ),
             }
         ],
         "confirmations": {"baseline": "C-MIGRATION-BASELINE"},
@@ -1571,7 +3208,7 @@ def test_reconcile_confirmation_digest_rejects_changed_prepared_plan(tmp_path: P
 
     assert result.returncode == 2
     assert "CONFIRMATION_EVIDENCE_MISMATCH: baseline" in result.stderr
-    assert not (tmp_path / "_Plan" / ".migrations").exists()
+    assert not (tmp_path / ".work-governance" / "_Plan" / ".migrations").exists()
 
 
 def test_reconcile_requires_all_confirmed_and_likely_sources(tmp_path: Path) -> None:
@@ -1603,7 +3240,9 @@ def test_reconcile_cannot_omit_indexed_active_plan(tmp_path: Path) -> None:
     manifest_path = write_reconciliation_fixture(tmp_path)
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     manifest["sources"] = [
-        source for source in manifest["sources"] if source["path"] != "_Plan/PLAN-20260723-001.md"
+        source
+        for source in manifest["sources"]
+        if source["path"] != ".work-governance/_Plan/PLAN-20260723-001.md"
     ]
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
 
@@ -1619,7 +3258,9 @@ def test_reconcile_cannot_omit_indexed_active_plan(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 2
-    assert "MISSING_MIGRATION_SOURCES: _Plan/PLAN-20260723-001.md" in result.stderr
+    assert (
+        "MISSING_MIGRATION_SOURCES: .work-governance/_Plan/PLAN-20260723-001.md"
+    ) in result.stderr
 
 
 def test_reconcile_archives_both_sources_and_activates_index_last(tmp_path: Path) -> None:
@@ -1640,7 +3281,7 @@ def test_reconcile_archives_both_sources_and_activates_index_last(tmp_path: Path
         str(manifest_path),
     )
     report = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
-    canonical = tmp_path / "_Plan" / "PLAN-20260724-002.md"
+    canonical = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260724-002.md"
     _, raw_frontmatter, _ = canonical.read_text(encoding="utf-8").split("---\n", 2)
     frontmatter = yaml.safe_load(raw_frontmatter)
 
@@ -1653,24 +3294,39 @@ def test_reconcile_archives_both_sources_and_activates_index_last(tmp_path: Path
     assert "(_Plan/PLAN-20260724-002.md)" not in (tmp_path / "docs" / "Plan.md").read_text(
         encoding="utf-8"
     )
-    assert "(../_Plan/PLAN-20260724-002.md)" in (tmp_path / "docs" / "Plan.md").read_text(
-        encoding="utf-8"
-    )
+    assert "(../.work-governance/_Plan/PLAN-20260724-002.md)" in (
+        tmp_path / "docs" / "Plan.md"
+    ).read_text(encoding="utf-8")
     assert "WORK_GOVERNANCE_NON_AUTHORITY_POINTER" in (
-        tmp_path / "_Plan" / "PLAN-20260723-001.md"
+        tmp_path / ".work-governance" / "_Plan" / "PLAN-20260723-001.md"
     ).read_text(encoding="utf-8")
     assert (
-        tmp_path / "_Plan" / "archive" / "MIG-20260724-001" / "legacy" / "docs" / "Plan.md"
+        tmp_path
+        / ".work-governance"
+        / "_Plan"
+        / "archive"
+        / "MIG-20260724-001"
+        / "legacy"
+        / "docs"
+        / "Plan.md"
     ).is_file()
     assert (
-        tmp_path / "_Plan" / "archive" / "MIG-20260724-001" / "unmerged" / "PLAN-20260723-001.md"
+        tmp_path
+        / ".work-governance"
+        / "_Plan"
+        / "archive"
+        / "MIG-20260724-001"
+        / "unmerged"
+        / "PLAN-20260723-001.md"
     ).is_file()
     assert frontmatter["authority"]["canonical_plan_id"] == "PLAN-20260724-002"
     assert frontmatter["schema_version"] == 3
     assert frontmatter["delivery"]["status"] == "pending"
     assert frontmatter["activation"]["status"] == "deferred"
     assert len(frontmatter["authority"]["sources"]) == 2
-    assert "`_Plan/PLAN-20260724-002.md`" in (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    assert "`.work-governance/_Plan/PLAN-20260724-002.md`" in (tmp_path / "AGENTS.md").read_text(
+        encoding="utf-8"
+    )
     assert run_workctl(tmp_path, "plan", "validate").stdout.strip() == "PLAN_VALID"
 
 
@@ -1693,12 +3349,14 @@ def test_source_drift_prevents_migration_activation(tmp_path: Path) -> None:
         str(manifest_path),
         check=False,
     )
-    index = yaml.safe_load((tmp_path / "_Plan" / "index.yaml").read_text(encoding="utf-8"))
+    index = yaml.safe_load(
+        (tmp_path / ".work-governance" / "_Plan" / "index.yaml").read_text(encoding="utf-8")
+    )
 
     assert result.returncode == 2
     assert "SOURCE_DRIFT: docs/Plan.md" in result.stderr
     assert index["active_plan_id"] == "PLAN-20260723-001"
-    assert not (tmp_path / "_Plan" / ".migrations").exists()
+    assert not (tmp_path / ".work-governance" / "_Plan" / ".migrations").exists()
 
 
 def test_interrupted_migration_requires_recovery_then_converges(tmp_path: Path) -> None:
@@ -1750,7 +3408,7 @@ def test_recovery_rechecks_recorded_git_baseline(tmp_path: Path) -> None:
         env={"WORKCTL_TEST_INTERRUPT_AFTER": "archive:docs/Plan.md"},
     )
     assert interrupted.returncode == 2
-    journal_path = tmp_path / "_Plan" / ".migrations" / "MIG-20260724-001.yaml"
+    journal_path = tmp_path / ".work-governance" / "_Plan" / ".migrations" / "MIG-20260724-001.yaml"
     journal = yaml.safe_load(journal_path.read_text(encoding="utf-8"))
     journal["git_baseline"] = "0" * 40
     journal_path.write_text(yaml.safe_dump(journal, sort_keys=False), encoding="utf-8")
@@ -1777,11 +3435,14 @@ def test_recovery_rechecks_staged_agents_replacement_hash(tmp_path: Path) -> Non
         "--manifest",
         str(manifest_path),
         check=False,
-        env={"WORKCTL_TEST_INTERRUPT_AFTER": "pointer:_Plan/PLAN-20260723-001.md"},
+        env={
+            "WORKCTL_TEST_INTERRUPT_AFTER": ("pointer:.work-governance/_Plan/PLAN-20260723-001.md")
+        },
     )
     assert interrupted.returncode == 2
     staged_agents = (
         tmp_path
+        / ".work-governance"
         / "_Plan"
         / ".migrations"
         / "MIG-20260724-001"
@@ -1815,7 +3476,7 @@ def test_post_activation_interrupt_keeps_journal_recoverable(tmp_path: Path) -> 
         check=False,
         env={"WORKCTL_TEST_INTERRUPT_AFTER": "index-activation"},
     )
-    journal_path = tmp_path / "_Plan" / ".migrations" / "MIG-20260724-001.yaml"
+    journal_path = tmp_path / ".work-governance" / "_Plan" / ".migrations" / "MIG-20260724-001.yaml"
     journal = yaml.safe_load(journal_path.read_text(encoding="utf-8"))
     report = json.loads(run_workctl(tmp_path, "plan", "authority", "check").stdout)
 
@@ -1843,7 +3504,16 @@ def test_lineage_pointer_reverted_and_agents_redirected_reopens_reconciliation(
         "--manifest",
         str(manifest_path),
     )
-    archive = tmp_path / "_Plan" / "archive" / "MIG-20260724-001" / "legacy" / "docs" / "Plan.md"
+    archive = (
+        tmp_path
+        / ".work-governance"
+        / "_Plan"
+        / "archive"
+        / "MIG-20260724-001"
+        / "legacy"
+        / "docs"
+        / "Plan.md"
+    )
     (tmp_path / "docs" / "Plan.md").write_bytes(archive.read_bytes())
     (tmp_path / "AGENTS.md").write_text(
         "`docs/Plan.md` is the authoritative current execution Plan and must be updated.\n",
@@ -1871,7 +3541,16 @@ def test_committed_source_reversion_requires_authority_review(tmp_path: Path) ->
         "--manifest",
         str(manifest_path),
     )
-    archive = tmp_path / "_Plan" / "archive" / "MIG-20260724-001" / "legacy" / "docs" / "Plan.md"
+    archive = (
+        tmp_path
+        / ".work-governance"
+        / "_Plan"
+        / "archive"
+        / "MIG-20260724-001"
+        / "legacy"
+        / "docs"
+        / "Plan.md"
+    )
     source = tmp_path / "docs" / "Plan.md"
     source.write_bytes(archive.read_bytes())
 
@@ -1930,14 +3609,14 @@ def test_rollover_requires_complete_terminal_closeout_ready_source(
         "schema_version": 1,
         "rollover_id": "ROL-20260727-001",
         "source_plan": {
-            "path": "_Plan/PLAN-20260723-001.md",
+            "path": ".work-governance/_Plan/PLAN-20260723-001.md",
             "plan_id": "PLAN-20260723-001",
             "revision": 1,
             "sha256": sha256_path(source),
         },
         "index_baseline": {
             "active_plan_id": "PLAN-20260723-001",
-            "sha256": sha256_path(tmp_path / "_Plan" / "index.yaml"),
+            "sha256": sha256_path(tmp_path / ".work-governance" / "_Plan" / "index.yaml"),
         },
         "target_plan": {
             "prepared_file": "successor.md",
@@ -2029,7 +3708,7 @@ def test_rollover_rejects_index_drift_and_target_conflict(tmp_path: Path) -> Non
     index_case.mkdir()
     manifest_path = write_rollover_fixture(index_case)
     bind_rollover_confirmation(index_case, manifest_path)
-    index_path = index_case / "_Plan" / "index.yaml"
+    index_path = index_case / ".work-governance" / "_Plan" / "index.yaml"
     index = yaml.safe_load(index_path.read_text(encoding="utf-8"))
     index["review_marker"] = "drift"
     index_path.write_text(yaml.safe_dump(index, sort_keys=False), encoding="utf-8")
@@ -2046,13 +3725,13 @@ def test_rollover_rejects_index_drift_and_target_conflict(tmp_path: Path) -> Non
 
     assert index_drift.returncode == 2
     assert "INDEX_BASELINE_DRIFT" in index_drift.stderr
-    assert not (index_case / "_Plan" / ".rollovers").exists()
+    assert not (index_case / ".work-governance" / "_Plan" / ".rollovers").exists()
 
     target_case = tmp_path / "target-case"
     target_case.mkdir()
     manifest_path = write_rollover_fixture(target_case)
     bind_rollover_confirmation(target_case, manifest_path)
-    target = target_case / "_Plan" / "PLAN-20260727-001.md"
+    target = target_case / ".work-governance" / "_Plan" / "PLAN-20260727-001.md"
     target.write_text("conflict\n", encoding="utf-8")
     target_conflict = run_workctl(
         target_case,
@@ -2066,14 +3745,15 @@ def test_rollover_rejects_index_drift_and_target_conflict(tmp_path: Path) -> Non
 
     assert target_conflict.returncode == 2
     assert "TARGET_PLAN_CONFLICT" in target_conflict.stderr
-    assert not (target_case / "_Plan" / ".rollovers").exists()
+    assert not (target_case / ".work-governance" / "_Plan" / ".rollovers").exists()
 
 
 def test_rollover_rejects_stale_project_rule_routing(tmp_path: Path) -> None:
     """An explicit predecessor path cannot become competing authority after activation."""
     manifest_path = write_rollover_fixture(tmp_path)
     (tmp_path / "AGENTS.md").write_text(
-        "`_Plan/PLAN-20260723-001.md` is the authoritative current execution Plan.\n",
+        "`.work-governance/_Plan/PLAN-20260723-001.md` is the authoritative "
+        "current execution Plan.\n",
         encoding="utf-8",
     )
 
@@ -2090,7 +3770,7 @@ def test_rollover_rejects_stale_project_rule_routing(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "ROLLOVER_PROJECT_RULE_REWRITE_REQUIRED" in result.stderr
-    assert not (tmp_path / "_Plan" / ".rollovers").exists()
+    assert not (tmp_path / ".work-governance" / "_Plan" / ".rollovers").exists()
 
 
 def test_rollover_requires_digest_bound_confirmation(tmp_path: Path) -> None:
@@ -2123,7 +3803,7 @@ def test_rollover_requires_digest_bound_confirmation(tmp_path: Path) -> None:
     assert "MANIFEST_CONFIRMATION_REQUIRED: rollover" in missing.stderr
     assert mismatch.returncode == 2
     assert "CONFIRMATION_EVIDENCE_MISMATCH: rollover" in mismatch.stderr
-    assert not (tmp_path / "_Plan" / ".rollovers").exists()
+    assert not (tmp_path / ".work-governance" / "_Plan" / ".rollovers").exists()
 
 
 def test_rollover_preserves_predecessor_and_activates_successor_last(
@@ -2144,14 +3824,16 @@ def test_rollover_preserves_predecessor_and_activates_successor_last(
         str(manifest_path),
     )
     status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
-    index = yaml.safe_load((tmp_path / "_Plan" / "index.yaml").read_text(encoding="utf-8"))
-    successor = tmp_path / "_Plan" / "PLAN-20260727-001.md"
+    index = yaml.safe_load(
+        (tmp_path / ".work-governance" / "_Plan" / "index.yaml").read_text(encoding="utf-8")
+    )
+    successor = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260727-001.md"
     _, raw_frontmatter, _ = successor.read_text(encoding="utf-8").split("---\n", 2)
     successor_frontmatter = yaml.safe_load(raw_frontmatter)
     predecessor_candidate = next(
         candidate
         for candidate in status["authority_candidates"]
-        if candidate["path"] == "_Plan/PLAN-20260723-001.md"
+        if candidate["path"] == ".work-governance/_Plan/PLAN-20260723-001.md"
     )
 
     assert "ROLLOVER_COMMITTED ROL-20260727-001" in result.stdout
@@ -2162,7 +3844,7 @@ def test_rollover_preserves_predecessor_and_activates_successor_last(
         "PLAN-20260727-001",
     }
     assert successor_frontmatter["authority"]["predecessor"] == {
-        "path": "_Plan/PLAN-20260723-001.md",
+        "path": ".work-governance/_Plan/PLAN-20260723-001.md",
         "plan_id": "PLAN-20260723-001",
         "revision": 1,
         "sha256": predecessor_sha256,
@@ -2274,7 +3956,7 @@ def test_rollover_recovery_rechecks_source_and_target_hashes(tmp_path: Path) -> 
         env={"WORKCTL_TEST_INTERRUPT_AFTER": "rollover-target-plan"},
     )
     assert interrupted.returncode == 2
-    target = target_case / "_Plan" / "PLAN-20260727-001.md"
+    target = target_case / ".work-governance" / "_Plan" / "PLAN-20260727-001.md"
     target.write_text("target drift\n", encoding="utf-8")
     target_drift = run_workctl(
         target_case,
@@ -2307,7 +3989,7 @@ def test_rollover_recovery_rejects_internally_inconsistent_journal(
         env={"WORKCTL_TEST_INTERRUPT_AFTER": "rollover-target-plan"},
     )
     assert interrupted.returncode == 2
-    journal_path = tmp_path / "_Plan" / ".rollovers" / "ROL-20260727-001.yaml"
+    journal_path = tmp_path / ".work-governance" / "_Plan" / ".rollovers" / "ROL-20260727-001.yaml"
     journal = yaml.safe_load(journal_path.read_text(encoding="utf-8"))
     journal["proposal_sha256"] = "0" * 64
     journal_path.write_text(yaml.safe_dump(journal, sort_keys=False), encoding="utf-8")
@@ -2343,7 +4025,7 @@ def test_rollover_recovery_rederives_target_from_prepared_contract(
         env={"WORKCTL_TEST_INTERRUPT_AFTER": "rollover-target-plan"},
     )
     assert interrupted.returncode == 2
-    journal_path = tmp_path / "_Plan" / ".rollovers" / "ROL-20260727-001.yaml"
+    journal_path = tmp_path / ".work-governance" / "_Plan" / ".rollovers" / "ROL-20260727-001.yaml"
     journal = yaml.safe_load(journal_path.read_text(encoding="utf-8"))
     staged_target = tmp_path / journal["staged_plan"]
     materialized_target = tmp_path / journal["target_path"]
@@ -2395,7 +4077,7 @@ def test_incomplete_rollover_blocks_reconciliation_before_any_write(
         "target_plan": {"prepared_file": prepared.name},
         "sources": [
             {
-                "path": "_Plan/PLAN-20260723-001.md",
+                "path": ".work-governance/_Plan/PLAN-20260723-001.md",
                 "role": "unmerged-source",
                 "classification": "CONFIRMED_AUTHORITY",
                 "sha256": sha256_path(source),
@@ -2444,7 +4126,7 @@ def test_incomplete_rollover_blocks_reconciliation_before_any_write(
     assert blocked.returncode == 2
     assert "MIGRATION_RECOVERY_REQUIRED" in blocked.stderr
     assert source.read_bytes() == source_bytes
-    assert not (tmp_path / "_Plan" / ".migrations").exists()
+    assert not (tmp_path / ".work-governance" / "_Plan" / ".migrations").exists()
     assert (
         run_workctl(
             tmp_path,
@@ -2466,7 +4148,7 @@ def test_rollover_rejects_symlinked_staging_root_before_outside_write(
     bind_rollover_confirmation(tmp_path, manifest_path)
     outside = tmp_path.parent / f"{tmp_path.name}-outside"
     outside.mkdir()
-    rollovers = tmp_path / "_Plan" / ".rollovers"
+    rollovers = tmp_path / ".work-governance" / "_Plan" / ".rollovers"
     rollovers.symlink_to(outside, target_is_directory=True)
 
     result = run_workctl(
@@ -2480,7 +4162,7 @@ def test_rollover_rejects_symlinked_staging_root_before_outside_write(
     )
 
     assert result.returncode == 2
-    assert "ROLLOVER_PATH_SYMLINK: _Plan/.rollovers" in result.stderr
+    assert "ROLLOVER_PATH_SYMLINK: .work-governance/_Plan/.rollovers" in result.stderr
     assert list(outside.iterdir()) == []
 
 
@@ -3796,7 +5478,7 @@ def test_closeout_includes_full_plan_validation(tmp_path: Path) -> None:
     }
     frontmatter["handoff"] = {"route_status": "terminal", "next_step": "none"}
     write_plan(tmp_path, frontmatter, body)
-    index_path = tmp_path / "_Plan" / "index.yaml"
+    index_path = tmp_path / ".work-governance" / "_Plan" / "index.yaml"
     index = yaml.safe_load(index_path.read_text(encoding="utf-8"))
     index["plans"][0]["status"] = "active"
     index_path.write_text(yaml.safe_dump(index, sort_keys=False), encoding="utf-8")

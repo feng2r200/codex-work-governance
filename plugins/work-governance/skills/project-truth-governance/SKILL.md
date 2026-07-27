@@ -14,10 +14,10 @@ Prefer current, explicit, and executable authorities:
 1. Current user instruction for this task.
 2. Current project `AGENTS.md`, then `CLAUDE.md`.
 3. Current code, configuration, data, logs, tests, and runtime evidence.
-4. Active `_Plan` for future execution and handoff.
+4. Active `.work-governance/_Plan` for future execution and handoff.
 5. Confirmed project docs, product contracts, architecture docs, schemas, or
    Vault notes.
-6. `.logs` as process evidence only.
+6. `.work-governance/logs` as process evidence only.
 7. Memory and old session summaries as leads only.
 
 When sources conflict, use current evidence by default. If the conflict changes

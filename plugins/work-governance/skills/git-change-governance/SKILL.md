@@ -13,20 +13,20 @@ boundary; evidence and Plan authority remain lifecycle responsibilities.
 - Protect `main` and `master` by default. Prefer an existing isolated branch,
   a new branch, or a worktree for substantive changes.
 - When a new worktree is needed, default to
-  `<project-root>/.worktree/<task-or-branch-slug>`. Resolve the project root
+  `<project-root>/.work-governance/worktrees/<task-or-branch-slug>`. Resolve the project root
   first. Derive the directory slug independently from the Git branch: map each
   run outside `[A-Za-z0-9._-]` to `-`, trim leading and trailing `.`, `-`, and
   `_`, and reject an empty slug, `.` or `..`. A slug must be one path component.
   Do not default to a sibling directory, home directory, or system temporary
   directory.
-- Before `git worktree add`, verify that `.worktree/` is ignored and that the
+- Before `git worktree add`, require `LAYOUT_READY`, verify that
+  `.work-governance/worktrees/` is ignored and that the
   exact target neither exists, including as a dangling symlink, nor appears in
-  `git worktree list --porcelain`. Reject a symlinked `.worktree/`. Resolve the
-  physical project and `.worktree/` paths and prove the latter remains directly
-  under the former before appending the validated one-component slug. Prefer
-  an existing project ignore rule; otherwise use the repository-local
-  `.git/info/exclude` for a local-only convention, or update `.gitignore` when
-  the project should share the convention.
+  `git worktree list --porcelain`. Reject a symlinked governance or worktrees
+  path. Resolve the physical project and worktrees paths and prove the latter
+  remains under `.work-governance/` before appending the validated
+  one-component slug. The versioned `.work-governance/.gitignore` contract
+  already ignores `worktrees/`.
 - Worktree placement does not choose branch semantics. For an existing branch,
   attach that exact branch. For a new branch, require an explicit, verified
   start point; never silently default the start point to the current `HEAD`.
@@ -39,9 +39,12 @@ boundary; evidence and Plan authority remain lifecycle responsibilities.
 - Use a worktree path outside the project root only when the user specifies it
   or a verified technical constraint requires it. Report the reason, exact
   path, sandbox/permission impact, and cleanup boundary before creation.
+- Already registered legacy `.worktree/<slug>` paths are never moved or
+  renamed. Continue to use their registered exact paths until removal or prune,
+  but never create new worktrees there.
 - Clean up only the exact registered target with `git worktree remove` after
   checking its dirty, locked, and associated-branch state. Never recursively
-  delete the `.worktree/` root. Deleting the associated branch is a separate
+  delete either worktree root. Deleting the associated branch is a separate
   destructive action and requires explicit authorization.
 - Direct local commit is allowed after authorized, validated work when the
   boundary is clear and no unrelated changes are included.
@@ -69,12 +72,12 @@ Before creating a project-local worktree, resolve and validate its location:
 ```bash
 repo_root=$(cd "$(git rev-parse --show-toplevel)" && pwd -P)
 common_git_dir=$(git rev-parse --path-format=absolute --git-common-dir)
-worktree_root="$repo_root/.worktree"
-git check-ignore -q "$repo_root/.worktree/"
+worktree_root="$repo_root/.work-governance/worktrees"
+git check-ignore -q "$repo_root/.work-governance/worktrees/"
 test ! -L "$worktree_root"
 mkdir -p "$worktree_root"
 worktree_root=$(cd "$worktree_root" && pwd -P)
-test "$(dirname "$worktree_root")" = "$repo_root"
+test "$(dirname "$worktree_root")" = "$repo_root/.work-governance"
 slug="<validated-one-component-slug>"
 target="$worktree_root/$slug"
 test ! -e "$target" && test ! -L "$target"
