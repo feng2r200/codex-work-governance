@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import runpy
+import stat
 import subprocess
 import sys
 import time
@@ -238,7 +239,10 @@ def bind_reconciliation_confirmations(
             ).stdout
         ),
     )
-    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest = cast(
+        dict[str, Any],
+        yaml.safe_load(manifest_path.read_text(encoding="utf-8")),
+    )
     manifest["confirmations"]["baseline"] = {
         "id": "C-MIGRATION-BASELINE",
         "ref": "user:approved-plan",
@@ -252,6 +256,148 @@ def bind_reconciliation_confirmations(
             "accepted_at": "2026-07-24T00:02:00+00:00",
             "evidence_sha256": dry_run["agents_diff_sha256"],
         }
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    return dry_run
+
+
+def make_terminal_rollover_source(cwd: Path) -> Path:
+    """Create a governed, complete, terminal, closeout-ready Plan."""
+    init_plan(cwd)
+    frontmatter, body = read_plan(cwd)
+    frontmatter["status"] = "complete"
+    frontmatter["delivery"] = {
+        "status": "complete",
+        "boundary": "local-source-only",
+        "evidence_ref": "git:terminal-source",
+    }
+    frontmatter["activation"] = {
+        "status": "not_required",
+        "current_ref": "not-applicable",
+        "target_ref": "not-applicable",
+        "decision_ref": "user:source-only",
+    }
+    frontmatter["route"] = {
+        "route_status": "terminal",
+        "slice_status": "complete",
+        "next_phase": "none",
+        "validation_standard": "Every obligation has fresh evidence.",
+        "confirmation_gate": "none",
+    }
+    frontmatter["handoff"] = {"route_status": "terminal", "next_step": "none"}
+    write_plan(cwd, frontmatter, body)
+    return plan_path(cwd)
+
+
+def rollover_target_frontmatter(plan_id: str) -> dict[str, Any]:
+    """Build an active schema-v3 successor contract."""
+    return {
+        "schema_version": 3,
+        "plan_id": plan_id,
+        "title": "Successor Plan",
+        "status": "active",
+        "mode": "autonomous",
+        "revision": 1,
+        "created_at": "2026-07-27T00:00:00+00:00",
+        "updated_at": "2026-07-27T00:00:00+00:00",
+        "scope": {"include": ["Execute the successor route."], "exclude": []},
+        "confirmations": {"required": []},
+        "obligations": [
+            {"id": "O-001", "description": "Deliver the successor.", "status": "pending"}
+        ],
+        "tasks": [{"id": "T-001", "description": "Execute safely.", "status": "pending"}],
+        "validations": [
+            {"id": "V-001", "description": "Validate the successor.", "status": "pending"}
+        ],
+        "artifacts": [{"id": "A-001", "path": "successor.txt", "status": "pending"}],
+        "authority": {
+            "model": "single-active",
+            "state": "governed",
+            "canonical_plan_id": plan_id,
+            "sources": [],
+            "confirmations": {},
+        },
+        "delivery": {
+            "status": "pending",
+            "boundary": "successor-delivery",
+            "evidence_ref": "project:successor-not-yet-delivered",
+        },
+        "activation": {
+            "status": "not_required",
+            "current_ref": "not-applicable",
+            "target_ref": "not-applicable",
+            "decision_ref": "user:source-only",
+        },
+        "route": {
+            "route_status": "active",
+            "slice_status": "initialized",
+            "next_phase": "Execute T-001.",
+            "validation_standard": "Fresh evidence covers O-001 and V-001.",
+            "confirmation_gate": "none",
+        },
+        "handoff": {"route_status": "active", "next_step": "Execute T-001."},
+    }
+
+
+def write_rollover_fixture(cwd: Path) -> Path:
+    """Create a terminal source, prepared successor, and rollover manifest."""
+    source = make_terminal_rollover_source(cwd)
+    source_frontmatter, _ = read_plan(cwd)
+    prepared = cwd / "successor.md"
+    write_markdown_plan(
+        prepared,
+        rollover_target_frontmatter("PLAN-20260727-001"),
+        "# Successor authority\n",
+    )
+    index = cwd / "_Plan" / "index.yaml"
+    manifest = {
+        "schema_version": 1,
+        "rollover_id": "ROL-20260727-001",
+        "source_plan": {
+            "path": "_Plan/PLAN-20260723-001.md",
+            "plan_id": source_frontmatter["plan_id"],
+            "revision": source_frontmatter["revision"],
+            "sha256": sha256_path(source),
+        },
+        "index_baseline": {
+            "active_plan_id": source_frontmatter["plan_id"],
+            "sha256": sha256_path(index),
+        },
+        "target_plan": {
+            "prepared_file": "successor.md",
+            "plan_id": "PLAN-20260727-001",
+            "revision": 1,
+            "sha256": sha256_path(prepared),
+        },
+        "confirmations": {},
+    }
+    manifest_path = cwd / "rollover.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    return manifest_path
+
+
+def bind_rollover_confirmation(cwd: Path, manifest_path: Path) -> dict[str, Any]:
+    """Bind C-PLAN-ROLLOVER to the exact dry-run proposal digest."""
+    dry_run = cast(
+        dict[str, Any],
+        json.loads(
+            run_workctl(
+                cwd,
+                "plan",
+                "rollover",
+                "apply",
+                "--manifest",
+                str(manifest_path),
+                "--dry-run",
+            ).stdout
+        ),
+    )
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["confirmations"]["rollover"] = {
+        "id": "C-PLAN-ROLLOVER",
+        "ref": "user:approved-rollover",
+        "accepted_at": "2026-07-27T00:01:00+00:00",
+        "evidence_sha256": dry_run["proposal_sha256"],
+    }
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
     return dry_run
 
@@ -662,6 +808,30 @@ def test_atomic_write_failure_preserves_original_file(
 
     assert target.read_text(encoding="utf-8") == "original\n"
     assert list(tmp_path.glob(".state.yaml.*")) == []
+
+
+def test_atomic_write_fsyncs_file_new_directories_and_replaced_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Atomic writes synchronize both file content and directory entries."""
+    namespace = runpy.run_path(str(SCRIPT))
+    write_atomic = cast(Callable[[Path, str], None], namespace["write_atomic"])
+    real_fsync = os.fsync
+    synchronized_modes: list[int] = []
+
+    def record_fsync(fd: int) -> None:
+        synchronized_modes.append(os.fstat(fd).st_mode)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", record_fsync)
+    target = tmp_path / "new-parent" / "nested" / "state.yaml"
+
+    write_atomic(target, "durable\n")
+
+    assert target.read_text(encoding="utf-8") == "durable\n"
+    assert any(stat.S_ISREG(mode) for mode in synchronized_modes)
+    assert sum(stat.S_ISDIR(mode) for mode in synchronized_modes) >= 3
 
 
 def test_exclusive_lock_blocks_writer_until_release(tmp_path: Path) -> None:
@@ -1711,6 +1881,607 @@ def test_committed_source_reversion_requires_authority_review(tmp_path: Path) ->
     assert before["authority_state"] == "AUTHORITY_REVIEW_REQUIRED"
     assert recovered.returncode == 2
     assert "NO_INCOMPLETE_MIGRATION" in recovered.stderr
+
+
+def test_rollover_dry_run_is_stable_and_requires_fixed_confirmation(
+    tmp_path: Path,
+) -> None:
+    """A terminal rollover exposes one stable digest and its fixed gate."""
+    manifest_path = write_rollover_fixture(tmp_path)
+
+    first = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "rollover",
+            "apply",
+            "--manifest",
+            str(manifest_path),
+            "--dry-run",
+        ).stdout
+    )
+    second = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "rollover",
+            "apply",
+            "--manifest",
+            str(manifest_path),
+            "--dry-run",
+        ).stdout
+    )
+
+    assert first == second
+    assert first["confirmations_required"] == ["C-PLAN-ROLLOVER"]
+    assert first["source_plan"]["plan_id"] == "PLAN-20260723-001"
+    assert first["target_plan"]["plan_id"] == "PLAN-20260727-001"
+
+
+def test_rollover_requires_complete_terminal_closeout_ready_source(
+    tmp_path: Path,
+) -> None:
+    """Non-complete and closeout-blocked predecessors cannot roll over."""
+    init_plan(tmp_path)
+    source = plan_path(tmp_path)
+    prepared = tmp_path / "successor.md"
+    write_markdown_plan(prepared, rollover_target_frontmatter("PLAN-20260727-001"))
+    manifest: dict[str, Any] = {
+        "schema_version": 1,
+        "rollover_id": "ROL-20260727-001",
+        "source_plan": {
+            "path": "_Plan/PLAN-20260723-001.md",
+            "plan_id": "PLAN-20260723-001",
+            "revision": 1,
+            "sha256": sha256_path(source),
+        },
+        "index_baseline": {
+            "active_plan_id": "PLAN-20260723-001",
+            "sha256": sha256_path(tmp_path / "_Plan" / "index.yaml"),
+        },
+        "target_plan": {
+            "prepared_file": "successor.md",
+            "plan_id": "PLAN-20260727-001",
+            "revision": 1,
+            "sha256": sha256_path(prepared),
+        },
+    }
+    manifest_path = tmp_path / "rollover.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    non_complete = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--dry-run",
+        check=False,
+    )
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["status"] = "complete"
+    frontmatter["route"] = {
+        "route_status": "terminal",
+        "slice_status": "complete",
+        "next_phase": "none",
+        "validation_standard": "Fresh evidence.",
+        "confirmation_gate": "none",
+    }
+    frontmatter["handoff"] = {"route_status": "terminal", "next_step": "none"}
+    write_plan(tmp_path, frontmatter, body)
+    manifest["source_plan"]["sha256"] = sha256_path(source)
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    closeout_blocked = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--dry-run",
+        check=False,
+    )
+
+    assert non_complete.returncode == 2
+    assert "ROLLOVER_SOURCE_NOT_COMPLETE" in non_complete.stderr
+    assert closeout_blocked.returncode == 2
+    assert "ROLLOVER_SOURCE_NOT_CLOSEOUT_READY" in closeout_blocked.stderr
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_error"),
+    [
+        ("revision", 99, "ROLLOVER_SOURCE_REVISION_MISMATCH"),
+        ("sha256", "0" * 64, "ROLLOVER_SOURCE_HASH_MISMATCH"),
+    ],
+)
+def test_rollover_rejects_source_contract_drift(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    expected_error: str,
+) -> None:
+    """Source revision and hash are immutable proposal inputs."""
+    manifest_path = write_rollover_fixture(tmp_path)
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["source_plan"][field] = value
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert expected_error in result.stderr
+
+
+def test_rollover_rejects_index_drift_and_target_conflict(tmp_path: Path) -> None:
+    """Index drift and an existing successor abort before journal creation."""
+    index_case = tmp_path / "index-case"
+    index_case.mkdir()
+    manifest_path = write_rollover_fixture(index_case)
+    bind_rollover_confirmation(index_case, manifest_path)
+    index_path = index_case / "_Plan" / "index.yaml"
+    index = yaml.safe_load(index_path.read_text(encoding="utf-8"))
+    index["review_marker"] = "drift"
+    index_path.write_text(yaml.safe_dump(index, sort_keys=False), encoding="utf-8")
+
+    index_drift = run_workctl(
+        index_case,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+    )
+
+    assert index_drift.returncode == 2
+    assert "INDEX_BASELINE_DRIFT" in index_drift.stderr
+    assert not (index_case / "_Plan" / ".rollovers").exists()
+
+    target_case = tmp_path / "target-case"
+    target_case.mkdir()
+    manifest_path = write_rollover_fixture(target_case)
+    bind_rollover_confirmation(target_case, manifest_path)
+    target = target_case / "_Plan" / "PLAN-20260727-001.md"
+    target.write_text("conflict\n", encoding="utf-8")
+    target_conflict = run_workctl(
+        target_case,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+    )
+
+    assert target_conflict.returncode == 2
+    assert "TARGET_PLAN_CONFLICT" in target_conflict.stderr
+    assert not (target_case / "_Plan" / ".rollovers").exists()
+
+
+def test_rollover_rejects_stale_project_rule_routing(tmp_path: Path) -> None:
+    """An explicit predecessor path cannot become competing authority after activation."""
+    manifest_path = write_rollover_fixture(tmp_path)
+    (tmp_path / "AGENTS.md").write_text(
+        "`_Plan/PLAN-20260723-001.md` is the authoritative current execution Plan.\n",
+        encoding="utf-8",
+    )
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "ROLLOVER_PROJECT_RULE_REWRITE_REQUIRED" in result.stderr
+    assert not (tmp_path / "_Plan" / ".rollovers").exists()
+
+
+def test_rollover_requires_digest_bound_confirmation(tmp_path: Path) -> None:
+    """Apply rejects a missing or mismatched C-PLAN-ROLLOVER record."""
+    manifest_path = write_rollover_fixture(tmp_path)
+    missing = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+    )
+    bind_rollover_confirmation(tmp_path, manifest_path)
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["confirmations"]["rollover"]["evidence_sha256"] = "0" * 64
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    mismatch = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+    )
+
+    assert missing.returncode == 2
+    assert "MANIFEST_CONFIRMATION_REQUIRED: rollover" in missing.stderr
+    assert mismatch.returncode == 2
+    assert "CONFIRMATION_EVIDENCE_MISMATCH: rollover" in mismatch.stderr
+    assert not (tmp_path / "_Plan" / ".rollovers").exists()
+
+
+def test_rollover_preserves_predecessor_and_activates_successor_last(
+    tmp_path: Path,
+) -> None:
+    """A confirmed rollover preserves bytes, lineage, history, and one authority."""
+    manifest_path = write_rollover_fixture(tmp_path)
+    bind_rollover_confirmation(tmp_path, manifest_path)
+    predecessor = plan_path(tmp_path)
+    predecessor_sha256 = sha256_path(predecessor)
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+    )
+    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    index = yaml.safe_load((tmp_path / "_Plan" / "index.yaml").read_text(encoding="utf-8"))
+    successor = tmp_path / "_Plan" / "PLAN-20260727-001.md"
+    _, raw_frontmatter, _ = successor.read_text(encoding="utf-8").split("---\n", 2)
+    successor_frontmatter = yaml.safe_load(raw_frontmatter)
+    predecessor_candidate = next(
+        candidate
+        for candidate in status["authority_candidates"]
+        if candidate["path"] == "_Plan/PLAN-20260723-001.md"
+    )
+
+    assert "ROLLOVER_COMMITTED ROL-20260727-001" in result.stdout
+    assert sha256_path(predecessor) == predecessor_sha256
+    assert index["active_plan_id"] == "PLAN-20260727-001"
+    assert {item["id"] for item in index["plans"]} == {
+        "PLAN-20260723-001",
+        "PLAN-20260727-001",
+    }
+    assert successor_frontmatter["authority"]["predecessor"] == {
+        "path": "_Plan/PLAN-20260723-001.md",
+        "plan_id": "PLAN-20260723-001",
+        "revision": 1,
+        "sha256": predecessor_sha256,
+    }
+    assert predecessor_candidate["classification"] == "NON_AUTHORITY"
+    assert "completed-plan" in predecessor_candidate["signals"]
+    assert status["authority_state"] == "GOVERNED_ACTIVE"
+    assert run_workctl(tmp_path, "plan", "validate").stdout.strip() == "PLAN_VALID"
+
+
+def test_interrupted_rollover_freezes_work_then_recovers_idempotently(
+    tmp_path: Path,
+) -> None:
+    """Target-written/index-not-activated interruption requires named recovery."""
+    manifest_path = write_rollover_fixture(tmp_path)
+    bind_rollover_confirmation(tmp_path, manifest_path)
+
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={"WORKCTL_TEST_INTERRUPT_AFTER": "rollover-target-plan"},
+    )
+    during = json.loads(run_workctl(tmp_path, "plan", "authority", "check").stdout)
+    blocked = run_workctl(
+        tmp_path,
+        "plan",
+        "revise",
+        "--expected-revision",
+        "1",
+        "--status",
+        "active",
+        check=False,
+    )
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "recover",
+        "--rollover-id",
+        "ROL-20260727-001",
+    )
+    repeated = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "recover",
+        "--rollover-id",
+        "ROL-20260727-001",
+    )
+    after = json.loads(run_workctl(tmp_path, "plan", "authority", "check").stdout)
+
+    assert interrupted.returncode == 2
+    assert "SIMULATED_MIGRATION_INTERRUPT: rollover-target-plan" in interrupted.stderr
+    assert during["authority_state"] == "MIGRATION_RECOVERY_REQUIRED"
+    assert blocked.returncode == 2
+    assert "AUTHORITY_BLOCKED: MIGRATION_RECOVERY_REQUIRED" in blocked.stderr
+    assert "ROLLOVER_COMMITTED" in recovered.stdout
+    assert "ROLLOVER_ALREADY_COMMITTED" in repeated.stdout
+    assert after["authority_state"] == "GOVERNED_ACTIVE"
+
+
+def test_rollover_recovery_rechecks_source_and_target_hashes(tmp_path: Path) -> None:
+    """Recovery refuses predecessor drift and conflicting target bytes."""
+    source_case = tmp_path / "source-case"
+    source_case.mkdir()
+    manifest_path = write_rollover_fixture(source_case)
+    bind_rollover_confirmation(source_case, manifest_path)
+    interrupted = run_workctl(
+        source_case,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={"WORKCTL_TEST_INTERRUPT_AFTER": "rollover-target-plan"},
+    )
+    assert interrupted.returncode == 2
+    plan_path(source_case).write_text("source drift\n", encoding="utf-8")
+    source_drift = run_workctl(
+        source_case,
+        "plan",
+        "rollover",
+        "recover",
+        "--rollover-id",
+        "ROL-20260727-001",
+        check=False,
+    )
+    assert source_drift.returncode == 2
+    assert "ROLLOVER_SOURCE_DRIFT" in source_drift.stderr
+
+    target_case = tmp_path / "target-case"
+    target_case.mkdir()
+    manifest_path = write_rollover_fixture(target_case)
+    bind_rollover_confirmation(target_case, manifest_path)
+    interrupted = run_workctl(
+        target_case,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={"WORKCTL_TEST_INTERRUPT_AFTER": "rollover-target-plan"},
+    )
+    assert interrupted.returncode == 2
+    target = target_case / "_Plan" / "PLAN-20260727-001.md"
+    target.write_text("target drift\n", encoding="utf-8")
+    target_drift = run_workctl(
+        target_case,
+        "plan",
+        "rollover",
+        "recover",
+        "--rollover-id",
+        "ROL-20260727-001",
+        check=False,
+    )
+
+    assert target_drift.returncode == 2
+    assert "TARGET_PLAN_CONFLICT" in target_drift.stderr
+
+
+def test_rollover_recovery_rejects_internally_inconsistent_journal(
+    tmp_path: Path,
+) -> None:
+    """Recovery cross-binds the journal, staged Plan, index, and proposal."""
+    manifest_path = write_rollover_fixture(tmp_path)
+    bind_rollover_confirmation(tmp_path, manifest_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={"WORKCTL_TEST_INTERRUPT_AFTER": "rollover-target-plan"},
+    )
+    assert interrupted.returncode == 2
+    journal_path = tmp_path / "_Plan" / ".rollovers" / "ROL-20260727-001.yaml"
+    journal = yaml.safe_load(journal_path.read_text(encoding="utf-8"))
+    journal["proposal_sha256"] = "0" * 64
+    journal_path.write_text(yaml.safe_dump(journal, sort_keys=False), encoding="utf-8")
+
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "recover",
+        "--rollover-id",
+        "ROL-20260727-001",
+        check=False,
+    )
+
+    assert recovered.returncode == 2
+    assert "ROLLOVER_PROPOSAL_HASH_MISMATCH" in recovered.stderr
+
+
+def test_rollover_recovery_rederives_target_from_prepared_contract(
+    tmp_path: Path,
+) -> None:
+    """Updating self-reported target hashes cannot authorize changed target bytes."""
+    manifest_path = write_rollover_fixture(tmp_path)
+    bind_rollover_confirmation(tmp_path, manifest_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={"WORKCTL_TEST_INTERRUPT_AFTER": "rollover-target-plan"},
+    )
+    assert interrupted.returncode == 2
+    journal_path = tmp_path / "_Plan" / ".rollovers" / "ROL-20260727-001.yaml"
+    journal = yaml.safe_load(journal_path.read_text(encoding="utf-8"))
+    staged_target = tmp_path / journal["staged_plan"]
+    materialized_target = tmp_path / journal["target_path"]
+    changed_bytes = staged_target.read_bytes() + b"\nChanged outside the prepared contract.\n"
+    staged_target.write_bytes(changed_bytes)
+    materialized_target.write_bytes(changed_bytes)
+    journal["target_sha256"] = sha256_path(staged_target)
+    journal_path.write_text(yaml.safe_dump(journal, sort_keys=False), encoding="utf-8")
+
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "recover",
+        "--rollover-id",
+        "ROL-20260727-001",
+        check=False,
+    )
+
+    assert recovered.returncode == 2
+    assert "STAGED_ROLLOVER_TARGET_CONTRACT_MISMATCH" in recovered.stderr
+
+
+def test_incomplete_rollover_blocks_reconciliation_before_any_write(
+    tmp_path: Path,
+) -> None:
+    """A second structural transaction cannot start during rollover recovery."""
+    rollover_manifest = write_rollover_fixture(tmp_path)
+    bind_rollover_confirmation(tmp_path, rollover_manifest)
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(rollover_manifest),
+        check=False,
+        env={"WORKCTL_TEST_INTERRUPT_AFTER": "rollover-target-plan"},
+    )
+    assert interrupted.returncode == 2
+
+    source = plan_path(tmp_path)
+    source_bytes = source.read_bytes()
+    prepared = tmp_path / "reconciled-successor.md"
+    write_markdown_plan(prepared, canonical_frontmatter("PLAN-20260727-002"))
+    reconcile_manifest: dict[str, Any] = {
+        "schema_version": 1,
+        "migration_id": "MIG-20260727-001",
+        "target_plan": {"prepared_file": prepared.name},
+        "sources": [
+            {
+                "path": "_Plan/PLAN-20260723-001.md",
+                "role": "unmerged-source",
+                "classification": "CONFIRMED_AUTHORITY",
+                "sha256": sha256_path(source),
+                "revision": 1,
+            }
+        ],
+        "confirmations": {},
+    }
+    reconcile_manifest_path = tmp_path / "reconcile-during-rollover.yaml"
+    reconcile_manifest_path.write_text(
+        yaml.safe_dump(reconcile_manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    dry_run = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "reconcile",
+            "apply",
+            "--manifest",
+            str(reconcile_manifest_path),
+            "--dry-run",
+        ).stdout
+    )
+    reconcile_manifest["confirmations"]["baseline"] = {
+        "id": "C-MIGRATION-BASELINE",
+        "ref": "user:reconcile",
+        "accepted_at": "2026-07-27T00:02:00+00:00",
+        "evidence_sha256": dry_run["proposal_sha256"],
+    }
+    reconcile_manifest_path.write_text(
+        yaml.safe_dump(reconcile_manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    blocked = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile",
+        "apply",
+        "--manifest",
+        str(reconcile_manifest_path),
+        check=False,
+    )
+
+    assert blocked.returncode == 2
+    assert "MIGRATION_RECOVERY_REQUIRED" in blocked.stderr
+    assert source.read_bytes() == source_bytes
+    assert not (tmp_path / "_Plan" / ".migrations").exists()
+    assert (
+        run_workctl(
+            tmp_path,
+            "plan",
+            "rollover",
+            "recover",
+            "--rollover-id",
+            "ROL-20260727-001",
+        ).returncode
+        == 0
+    )
+
+
+def test_rollover_rejects_symlinked_staging_root_before_outside_write(
+    tmp_path: Path,
+) -> None:
+    """A symlinked transaction root fails before creating project-external files."""
+    manifest_path = write_rollover_fixture(tmp_path)
+    bind_rollover_confirmation(tmp_path, manifest_path)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    rollovers = tmp_path / "_Plan" / ".rollovers"
+    rollovers.symlink_to(outside, target_is_directory=True)
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "ROLLOVER_PATH_SYMLINK: _Plan/.rollovers" in result.stderr
+    assert list(outside.iterdir()) == []
 
 
 def test_closeout_requires_terminal_route_and_complete_work(tmp_path: Path) -> None:

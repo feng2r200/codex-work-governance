@@ -43,6 +43,12 @@ bound tasks are skipped, exclusion disposition is resolved, and activation is
 complete delivery, no unresolved exclusion disposition, and resolved
 activation with typed decision or runtime evidence.
 
+Do not reopen or structurally revise a completed terminal Plan to admit later
+work. When a distinct route is required, prepare a new schema-v3 Plan contract
+and use the digest-bound `plan rollover apply` flow. The completed predecessor
+remains unchanged; the successor becomes authority only after index-last
+activation.
+
 Verified obligations and validations, final artifacts, and complete delivery
 must be produced by their dedicated evidence-bound transitions. A declined
 activation decision may resolve only its bound activation, exclusion, route,

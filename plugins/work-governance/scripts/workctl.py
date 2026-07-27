@@ -29,6 +29,7 @@ import yaml
 
 PLAN_ID_RE = re.compile(r"^PLAN-\d{8}-\d{3}$")
 MIGRATION_ID_RE = re.compile(r"^MIG-\d{8}-\d{3}$")
+ROLLOVER_ID_RE = re.compile(r"^ROL-\d{8}-\d{3}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 REFERENCE_RE = re.compile(r"^(user|project|git|runtime|evidence|handoff|codex-plugin-list):\S+$")
 ENTRY_ID_PATTERNS = {
@@ -115,6 +116,8 @@ AUTHORITY_BLOCKED_COMMANDS = [
     "plan status",
     "plan reconcile apply",
     "plan reconcile recover",
+    "plan rollover apply",
+    "plan rollover recover",
 ]
 
 
@@ -411,9 +414,68 @@ def incomplete_migration_journals(root: Path) -> list[Path]:
     return journals
 
 
-def authority_metadata_errors(root: Path, doc: PlanDocument) -> list[str]:
+def incomplete_rollover_journals(root: Path) -> list[Path]:
+    """Return rollover journals that have not reached committed state."""
+    rollovers_dir = plan_dir(root) / ".rollovers"
+    if rollovers_dir.is_symlink():
+        raise WorkctlError("ROLLOVER_PATH_SYMLINK: _Plan/.rollovers")
+    if not rollovers_dir.is_dir():
+        return []
+    journals: list[Path] = []
+    for path in sorted(rollovers_dir.glob("ROL-*.yaml")):
+        try:
+            payload = load_yaml_file(path)
+        except WorkctlError:
+            journals.append(path)
+            continue
+        if payload.get("status") != "committed":
+            journals.append(path)
+    return journals
+
+
+def rollover_transaction_paths(
+    root: Path,
+    rollover_id: str,
+) -> tuple[Path, Path, Path]:
+    """Resolve rollover paths and reject every symlink before file access."""
+    raw_rollovers_dir = plan_dir(root) / ".rollovers"
+    raw_rollover_dir = raw_rollovers_dir / rollover_id
+    raw_staging_dir = raw_rollover_dir / "staging"
+    raw_journal_path = raw_rollovers_dir / f"{rollover_id}.yaml"
+    for raw_path in (
+        plan_dir(root),
+        raw_rollovers_dir,
+        raw_rollover_dir,
+        raw_staging_dir,
+        raw_journal_path,
+    ):
+        if raw_path.is_symlink():
+            raise WorkctlError(f"ROLLOVER_PATH_SYMLINK: {raw_path.relative_to(root).as_posix()}")
+    rollover_dir = checked_project_path(root, f"_Plan/.rollovers/{rollover_id}")
+    staging_dir = checked_project_path(
+        root,
+        f"_Plan/.rollovers/{rollover_id}/staging",
+    )
+    journal_path = checked_project_path(
+        root,
+        f"_Plan/.rollovers/{rollover_id}.yaml",
+    )
+    return rollover_dir, staging_dir, journal_path
+
+
+def authority_metadata_errors(
+    root: Path,
+    doc: PlanDocument,
+    *,
+    seen: set[Path] | None = None,
+) -> list[str]:
     """Validate deterministic single-active authority metadata and lineage."""
     errors: list[str] = []
+    resolved_path = doc.path.resolve()
+    lineage = set() if seen is None else set(seen)
+    if resolved_path in lineage:
+        return [f"authority predecessor cycle: {relative_project_path(root, doc.path)}"]
+    lineage.add(resolved_path)
     authority = doc.frontmatter.get("authority")
     if not isinstance(authority, dict):
         return ["active Plan lacks authority metadata"]
@@ -423,6 +485,60 @@ def authority_metadata_errors(root: Path, doc: PlanDocument) -> list[str]:
         errors.append(f"authority.state must be {AUTHORITY_STATE}")
     if authority.get("canonical_plan_id") != doc.frontmatter.get("plan_id"):
         errors.append("authority.canonical_plan_id must match plan_id")
+    rollover_id = authority.get("rollover_id")
+    predecessor = authority.get("predecessor")
+    predecessor_doc: PlanDocument | None = None
+    if predecessor is None:
+        if rollover_id is not None:
+            errors.append("authority.rollover_id requires authority.predecessor")
+    elif not isinstance(predecessor, dict):
+        errors.append("authority.predecessor must be a mapping")
+    else:
+        if not isinstance(rollover_id, str) or ROLLOVER_ID_RE.fullmatch(rollover_id) is None:
+            errors.append("authority.rollover_id must match ROL-YYYYMMDD-NNN")
+        predecessor_path = predecessor.get("path")
+        predecessor_id = predecessor.get("plan_id")
+        predecessor_revision = predecessor.get("revision")
+        predecessor_sha256 = predecessor.get("sha256")
+        if not isinstance(predecessor_path, str):
+            errors.append("authority.predecessor.path is required")
+        else:
+            try:
+                predecessor_file = checked_project_path(root, predecessor_path)
+            except WorkctlError as exc:
+                errors.append(str(exc))
+            else:
+                if predecessor_file.resolve() == resolved_path:
+                    errors.append("authority predecessor cannot reference itself")
+                elif not predecessor_file.is_file():
+                    errors.append(f"authority predecessor missing: {predecessor_path}")
+                elif (
+                    isinstance(predecessor_sha256, str)
+                    and SHA256_RE.fullmatch(predecessor_sha256) is not None
+                    and sha256_file(predecessor_file) != predecessor_sha256
+                ):
+                    errors.append(f"authority predecessor hash mismatch: {predecessor_path}")
+                else:
+                    try:
+                        predecessor_doc = load_plan(predecessor_file)
+                    except WorkctlError as exc:
+                        errors.append(str(exc))
+        if not isinstance(predecessor_id, str) or PLAN_ID_RE.fullmatch(predecessor_id) is None:
+            errors.append("authority.predecessor.plan_id must match PLAN-YYYYMMDD-NNN")
+        if type(predecessor_revision) is not int or predecessor_revision < 1:
+            errors.append("authority.predecessor.revision must be a positive integer")
+        if (
+            not isinstance(predecessor_sha256, str)
+            or SHA256_RE.fullmatch(predecessor_sha256) is None
+        ):
+            errors.append("authority.predecessor.sha256 must be a SHA256 digest")
+        if predecessor_doc is not None:
+            if predecessor_doc.frontmatter.get("plan_id") != predecessor_id:
+                errors.append("authority predecessor plan_id mismatch")
+            if predecessor_doc.frontmatter.get("revision") != predecessor_revision:
+                errors.append("authority predecessor revision mismatch")
+            if predecessor_doc.frontmatter.get("status") != "complete":
+                errors.append("authority predecessor must be complete")
     migration_id = authority.get("migration_id")
     if migration_id is not None and (
         not isinstance(migration_id, str) or MIGRATION_ID_RE.fullmatch(migration_id) is None
@@ -473,37 +589,64 @@ def authority_metadata_errors(root: Path, doc: PlanDocument) -> list[str]:
     confirmation_map = authority.get("confirmations", {})
     if not isinstance(confirmation_map, dict):
         errors.append("authority.confirmations must be a mapping")
-    elif migration_id is not None:
-        baseline_id = confirmation_map.get("baseline")
-        if not isinstance(baseline_id, str):
-            errors.append("authority.confirmations.baseline is required for migrations")
-        else:
-            try:
-                require_confirmation(doc.frontmatter, baseline_id)
-            except WorkctlError as exc:
-                errors.append(str(exc))
-            baseline = confirmations(doc.frontmatter).get(baseline_id)
-            evidence_sha256 = baseline.get("evidence_sha256") if baseline else None
-            if not isinstance(evidence_sha256, str) or SHA256_RE.fullmatch(evidence_sha256) is None:
-                errors.append(f"{baseline_id} requires evidence_sha256")
-        agents_id = confirmation_map.get("agents_rewrite")
-        if agents_id is not None:
-            if not isinstance(agents_id, str):
-                errors.append("authority.confirmations.agents_rewrite must be a string")
+    else:
+        if predecessor is not None:
+            rollover_confirmation_id = confirmation_map.get("rollover")
+            if not isinstance(rollover_confirmation_id, str):
+                errors.append("authority.confirmations.rollover is required for rollovers")
             else:
                 try:
-                    require_confirmation(doc.frontmatter, agents_id)
+                    require_confirmation(doc.frontmatter, rollover_confirmation_id)
                 except WorkctlError as exc:
                     errors.append(str(exc))
-                agents_confirmation = confirmations(doc.frontmatter).get(agents_id)
+                rollover_confirmation = confirmations(doc.frontmatter).get(rollover_confirmation_id)
                 evidence_sha256 = (
-                    agents_confirmation.get("evidence_sha256") if agents_confirmation else None
+                    rollover_confirmation.get("evidence_sha256") if rollover_confirmation else None
                 )
                 if (
                     not isinstance(evidence_sha256, str)
                     or SHA256_RE.fullmatch(evidence_sha256) is None
                 ):
-                    errors.append(f"{agents_id} requires evidence_sha256")
+                    errors.append(f"{rollover_confirmation_id} requires evidence_sha256")
+        if migration_id is not None:
+            baseline_id = confirmation_map.get("baseline")
+            if not isinstance(baseline_id, str):
+                errors.append("authority.confirmations.baseline is required for migrations")
+            else:
+                try:
+                    require_confirmation(doc.frontmatter, baseline_id)
+                except WorkctlError as exc:
+                    errors.append(str(exc))
+                baseline = confirmations(doc.frontmatter).get(baseline_id)
+                evidence_sha256 = baseline.get("evidence_sha256") if baseline else None
+                if (
+                    not isinstance(evidence_sha256, str)
+                    or SHA256_RE.fullmatch(evidence_sha256) is None
+                ):
+                    errors.append(f"{baseline_id} requires evidence_sha256")
+            agents_id = confirmation_map.get("agents_rewrite")
+            if agents_id is not None:
+                if not isinstance(agents_id, str):
+                    errors.append("authority.confirmations.agents_rewrite must be a string")
+                else:
+                    try:
+                        require_confirmation(doc.frontmatter, agents_id)
+                    except WorkctlError as exc:
+                        errors.append(str(exc))
+                    agents_confirmation = confirmations(doc.frontmatter).get(agents_id)
+                    evidence_sha256 = (
+                        agents_confirmation.get("evidence_sha256") if agents_confirmation else None
+                    )
+                    if (
+                        not isinstance(evidence_sha256, str)
+                        or SHA256_RE.fullmatch(evidence_sha256) is None
+                    ):
+                        errors.append(f"{agents_id} requires evidence_sha256")
+    if predecessor_doc is not None:
+        errors.extend(
+            f"predecessor lineage: {error}"
+            for error in authority_metadata_errors(root, predecessor_doc, seen=lineage)
+        )
     return errors
 
 
@@ -539,15 +682,24 @@ def inspect_authority(
     """Resolve the deterministic authority state for a project."""
     candidates = discover_authority_candidates(root, explicit_candidates)
     blockers: list[str] = []
-    journals = [
+    migration_journals = [
         journal
         for journal in incomplete_migration_journals(root)
         if ignore_journal is None or journal.resolve() != ignore_journal.resolve()
     ]
-    if journals:
+    rollover_journals = [
+        journal
+        for journal in incomplete_rollover_journals(root)
+        if ignore_journal is None or journal.resolve() != ignore_journal.resolve()
+    ]
+    if migration_journals or rollover_journals:
         blockers.extend(
             f"incomplete migration journal: {relative_project_path(root, journal)}"
-            for journal in journals
+            for journal in migration_journals
+        )
+        blockers.extend(
+            f"incomplete rollover journal: {relative_project_path(root, journal)}"
+            for journal in rollover_journals
         )
         state = "MIGRATION_RECOVERY_REQUIRED"
         return AuthorityReport(state, candidates, blockers, allowed_commands_for_state(state))
@@ -686,9 +838,34 @@ def dump_plan(doc: PlanDocument) -> str:
     return f"---\n{frontmatter}---\n{doc.body.lstrip()}"
 
 
+def fsync_directory(path: Path) -> None:
+    """Synchronize one directory entry set to durable storage."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    fd = os.open(path, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def ensure_directory_durable(path: Path) -> None:
+    """Create a directory chain and synchronize each new parent entry."""
+    missing: list[Path] = []
+    cursor = path
+    while not cursor.exists():
+        missing.append(cursor)
+        if cursor.parent == cursor:
+            break
+        cursor = cursor.parent
+    path.mkdir(parents=True, exist_ok=True)
+    for directory in reversed(missing):
+        fsync_directory(directory.parent)
+        fsync_directory(directory)
+
+
 def write_atomic_bytes(path: Path, content: bytes) -> None:
-    """Atomically replace a file with exact bytes and fsync the result."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Atomically and durably replace a file with exact bytes."""
+    ensure_directory_durable(path.parent)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     tmp_path = Path(tmp_name)
     try:
@@ -697,6 +874,7 @@ def write_atomic_bytes(path: Path, content: bytes) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_path, path)
+        fsync_directory(path.parent)
     finally:
         with contextlib.suppress(FileNotFoundError):
             tmp_path.unlink()
@@ -1098,6 +1276,42 @@ def validate_frontmatter(
                 errors.append(f"authority.state must be {AUTHORITY_STATE}")
             if authority.get("canonical_plan_id") != plan_id:
                 errors.append("authority.canonical_plan_id must match plan_id")
+            rollover_id = authority.get("rollover_id")
+            predecessor = authority.get("predecessor")
+            if predecessor is None:
+                if rollover_id is not None:
+                    errors.append("authority.rollover_id requires authority.predecessor")
+            elif not isinstance(predecessor, dict):
+                errors.append("authority.predecessor must be a mapping")
+            else:
+                if (
+                    not isinstance(rollover_id, str)
+                    or ROLLOVER_ID_RE.fullmatch(rollover_id) is None
+                ):
+                    errors.append("authority.rollover_id must match ROL-YYYYMMDD-NNN")
+                predecessor_path = predecessor.get("path")
+                if (
+                    not isinstance(predecessor_path, str)
+                    or not predecessor_path
+                    or Path(predecessor_path).is_absolute()
+                    or ".." in Path(predecessor_path).parts
+                ):
+                    errors.append("authority.predecessor.path must be a project-relative path")
+                predecessor_id = predecessor.get("plan_id")
+                if (
+                    not isinstance(predecessor_id, str)
+                    or PLAN_ID_RE.fullmatch(predecessor_id) is None
+                ):
+                    errors.append("authority.predecessor.plan_id must match PLAN-YYYYMMDD-NNN")
+                predecessor_revision = predecessor.get("revision")
+                if type(predecessor_revision) is not int or predecessor_revision < 1:
+                    errors.append("authority.predecessor.revision must be a positive integer")
+                predecessor_sha256 = predecessor.get("sha256")
+                if (
+                    not isinstance(predecessor_sha256, str)
+                    or SHA256_RE.fullmatch(predecessor_sha256) is None
+                ):
+                    errors.append("authority.predecessor.sha256 must be a SHA256 digest")
             migration_id = authority.get("migration_id")
             if migration_id is not None and (
                 not isinstance(migration_id, str) or MIGRATION_ID_RE.fullmatch(migration_id) is None
@@ -1149,6 +1363,10 @@ def validate_frontmatter(
                 for key, value in confirmations_value.items()
             ):
                 errors.append("authority.confirmations entries must map strings to strings")
+            elif predecessor is not None and not isinstance(
+                confirmations_value.get("rollover"), str
+            ):
+                errors.append("authority.confirmations.rollover is required for rollovers")
         route = frontmatter.get("route")
         if not isinstance(route, dict):
             errors.append("route must be a mapping for schema_version 2 or 3")
@@ -1312,7 +1530,12 @@ def validate_frontmatter(
     return errors
 
 
-def validate_plan(root: Path) -> list[str]:
+def validate_plan(
+    root: Path,
+    *,
+    ignore_journal: Path | None = None,
+) -> list[str]:
+    """Validate the active Plan, index, authority, and complete lineage."""
     try:
         index = load_yaml_file(index_path(root))
         doc = load_plan(active_plan_path(root))
@@ -1344,7 +1567,7 @@ def validate_plan(root: Path) -> list[str]:
             errors.append("index path must match active Plan file")
         if {"status", "updated_at"} & set(index_item):
             errors.append("index must not duplicate mutable Plan fields")
-    report = inspect_authority(root)
+    report = inspect_authority(root, ignore_journal=ignore_journal)
     if report.state != "GOVERNED_ACTIVE":
         errors.append(f"authority state is {report.state}")
         errors.extend(report.blockers)
@@ -3049,16 +3272,598 @@ def resume_migration(
     print(f"MIGRATION_COMMITTED {journal['migration_id']} plan={journal['target_plan_id']}")
 
 
+def require_terminal_rollover_source(
+    root: Path,
+    source_doc: PlanDocument,
+    report: AuthorityReport | None = None,
+) -> None:
+    """Require a complete, terminal, closeout-ready rollover predecessor."""
+    if source_doc.frontmatter.get("status") != "complete":
+        raise WorkctlError("ROLLOVER_SOURCE_NOT_COMPLETE")
+    route = source_doc.frontmatter.get("route")
+    if not isinstance(route, dict) or route.get("route_status") != "terminal":
+        raise WorkctlError("ROLLOVER_SOURCE_NOT_TERMINAL")
+    if report is not None:
+        validation_errors = validate_plan(root)
+        readiness_report = report
+    else:
+        validation_errors = validate_frontmatter(
+            source_doc.frontmatter,
+            reject_blocking_artifacts=True,
+        )
+        validation_errors.extend(authority_metadata_errors(root, source_doc))
+        readiness_report = AuthorityReport(
+            "GOVERNED_ACTIVE",
+            [],
+            [],
+            allowed_commands_for_state("GOVERNED_ACTIVE"),
+        )
+    readiness = closeout_readiness(
+        source_doc.frontmatter,
+        readiness_report,
+        validation_errors,
+    )
+    if not readiness["ready"]:
+        raise WorkctlError(
+            "ROLLOVER_SOURCE_NOT_CLOSEOUT_READY: "
+            + "; ".join(str(blocker) for blocker in readiness["blockers"])
+        )
+
+
+def rollover_proposal_payload(
+    rollover_id: str,
+    source_plan: dict[str, Any],
+    index_baseline: dict[str, Any],
+    *,
+    target_path: str,
+    target_plan_id: str,
+    target_revision: object,
+    prepared_plan_sha256: str,
+) -> dict[str, Any]:
+    """Build the canonical payload authorized by ``C-PLAN-ROLLOVER``."""
+    return {
+        "rollover_id": rollover_id,
+        "source_plan": source_plan,
+        "index_baseline": index_baseline,
+        "target_plan": {
+            "path": target_path,
+            "plan_id": target_plan_id,
+            "revision": target_revision,
+            "prepared_plan_sha256": prepared_plan_sha256,
+        },
+    }
+
+
+def prepare_rollover(
+    root: Path,
+    manifest_path: Path,
+    *,
+    require_confirmations: bool,
+) -> tuple[dict[str, Any], PlanDocument]:
+    """Validate a terminal rollover manifest and build the successor Plan."""
+    manifest = load_yaml_file(manifest_path)
+    if manifest.get("schema_version") != 1:
+        raise WorkctlError("INVALID_ROLLOVER_MANIFEST_SCHEMA")
+    rollover_id = manifest.get("rollover_id")
+    if not isinstance(rollover_id, str) or ROLLOVER_ID_RE.fullmatch(rollover_id) is None:
+        raise WorkctlError("INVALID_ROLLOVER_ID")
+
+    report = inspect_authority(root)
+    if report.state != "GOVERNED_ACTIVE":
+        raise WorkctlError(
+            f"AUTHORITY_BLOCKED: {report.state}; allowed={','.join(report.allowed_commands)}"
+        )
+    source_doc = load_plan(active_plan_path(root))
+    require_terminal_rollover_source(root, source_doc, report)
+    source_relative = relative_project_path(root, source_doc.path)
+    source_candidate = next(
+        (candidate for candidate in report.candidates if candidate.path == source_relative),
+        None,
+    )
+    if source_candidate is not None and "project-rule-explicit" in source_candidate.signals:
+        raise WorkctlError(f"ROLLOVER_PROJECT_RULE_REWRITE_REQUIRED: {source_relative}")
+
+    source_value = manifest.get("source_plan")
+    if not isinstance(source_value, dict):
+        raise WorkctlError("MANIFEST_SOURCE_PLAN_REQUIRED")
+    expected_source_path = source_value.get("path")
+    expected_source_id = source_value.get("plan_id")
+    expected_source_revision = source_value.get("revision")
+    expected_source_sha256 = source_value.get("sha256")
+    if expected_source_path != source_relative:
+        raise WorkctlError(
+            f"ROLLOVER_SOURCE_PATH_MISMATCH: expected {source_relative}, "
+            f"found {expected_source_path}"
+        )
+    if expected_source_id != source_doc.frontmatter.get("plan_id"):
+        raise WorkctlError(
+            "ROLLOVER_SOURCE_ID_MISMATCH: "
+            f"expected {source_doc.frontmatter.get('plan_id')}, found {expected_source_id}"
+        )
+    if expected_source_revision != source_doc.frontmatter.get("revision"):
+        raise WorkctlError(
+            "ROLLOVER_SOURCE_REVISION_MISMATCH: "
+            f"expected {source_doc.frontmatter.get('revision')}, "
+            f"found {expected_source_revision}"
+        )
+    actual_source_sha256 = sha256_file(source_doc.path)
+    if expected_source_sha256 != actual_source_sha256:
+        raise WorkctlError(
+            "ROLLOVER_SOURCE_HASH_MISMATCH: "
+            f"expected {actual_source_sha256}, found {expected_source_sha256}"
+        )
+    source_record = {
+        "path": source_relative,
+        "plan_id": str(expected_source_id),
+        "revision": expected_source_revision,
+        "sha256": actual_source_sha256,
+    }
+
+    index_value = manifest.get("index_baseline")
+    if not isinstance(index_value, dict):
+        raise WorkctlError("MANIFEST_INDEX_BASELINE_REQUIRED")
+    expected_index_active = index_value.get("active_plan_id")
+    expected_index_sha256 = index_value.get("sha256")
+    source_plan_id = source_doc.frontmatter.get("plan_id")
+    if expected_index_active != source_plan_id:
+        raise WorkctlError(
+            f"INDEX_ACTIVE_PLAN_MISMATCH: expected {source_plan_id}, found {expected_index_active}"
+        )
+    actual_index_sha256 = sha256_file(index_path(root))
+    if expected_index_sha256 != actual_index_sha256:
+        raise WorkctlError(
+            f"INDEX_BASELINE_DRIFT: expected {expected_index_sha256}, found {actual_index_sha256}"
+        )
+    index_baseline = {
+        "active_plan_id": str(source_plan_id),
+        "sha256": actual_index_sha256,
+    }
+
+    target_value = manifest.get("target_plan")
+    if not isinstance(target_value, dict):
+        raise WorkctlError("MANIFEST_TARGET_PLAN_REQUIRED")
+    prepared_file = target_value.get("prepared_file")
+    if not isinstance(prepared_file, str):
+        raise WorkctlError("MANIFEST_TARGET_PREPARED_FILE_REQUIRED")
+    prepared_path = manifest_input_path(manifest_path, prepared_file)
+    prepared_doc = load_plan(prepared_path)
+    prepared_sha256 = sha256_file(prepared_path)
+    target_plan_id = prepared_doc.frontmatter.get("plan_id")
+    target_revision = prepared_doc.frontmatter.get("revision")
+    if target_value.get("plan_id") != target_plan_id:
+        raise WorkctlError("TARGET_PLAN_ID_DRIFT")
+    if target_value.get("revision") != target_revision:
+        raise WorkctlError("TARGET_PLAN_REVISION_DRIFT")
+    if target_value.get("sha256") != prepared_sha256:
+        raise WorkctlError("TARGET_PLAN_HASH_DRIFT")
+    if not isinstance(target_plan_id, str) or PLAN_ID_RE.fullmatch(target_plan_id) is None:
+        raise WorkctlError("INVALID_TARGET_PLAN_ID")
+    if target_plan_id == source_plan_id:
+        raise WorkctlError("TARGET_PLAN_MUST_BE_NEW")
+    if prepared_doc.frontmatter.get("schema_version") != 3:
+        raise WorkctlError("ROLLOVER_TARGET_MUST_USE_SCHEMA_VERSION_3")
+    if prepared_doc.frontmatter.get("status") != "active":
+        raise WorkctlError("TARGET_PLAN_MUST_BE_ACTIVE")
+    target_relative = f"_Plan/{target_plan_id}.md"
+    target_path = checked_project_path(root, target_relative)
+    if target_path.exists():
+        raise WorkctlError(f"TARGET_PLAN_CONFLICT: {target_relative}")
+
+    proposal_payload = rollover_proposal_payload(
+        rollover_id,
+        source_record,
+        index_baseline,
+        target_path=target_relative,
+        target_plan_id=target_plan_id,
+        target_revision=target_revision,
+        prepared_plan_sha256=prepared_sha256,
+    )
+    proposal_sha256 = sha256_bytes(
+        json.dumps(proposal_payload, sort_keys=True, separators=(",", ":")).encode()
+    )
+
+    confirmations_value = manifest.get("confirmations")
+    if not isinstance(confirmations_value, dict):
+        if require_confirmations:
+            raise WorkctlError("MANIFEST_CONFIRMATIONS_REQUIRED")
+        confirmations_value = {}
+    rollover_confirmation = confirmation_from_manifest(
+        confirmations_value,
+        "rollover",
+        required=require_confirmations,
+    )
+    if rollover_confirmation is None:
+        rollover_confirmation = (
+            "C-PLAN-ROLLOVER",
+            "PENDING",
+            "PENDING",
+            proposal_sha256,
+        )
+    confirmation_id, confirmation_ref, accepted_at, evidence_sha256 = rollover_confirmation
+    if confirmation_id != "C-PLAN-ROLLOVER":
+        raise WorkctlError("ROLLOVER_CONFIRMATION_ID_MUST_BE_C-PLAN-ROLLOVER")
+    if require_confirmations and evidence_sha256 != proposal_sha256:
+        raise WorkctlError(f"CONFIRMATION_EVIDENCE_MISMATCH: rollover expected {proposal_sha256}")
+
+    target_frontmatter = copy.deepcopy(prepared_doc.frontmatter)
+    add_or_replace_confirmation(
+        target_frontmatter,
+        accepted_confirmation(
+            confirmation_id,
+            confirmation_ref,
+            accepted_at,
+            evidence_sha256,
+            "Approve the terminal predecessor and exact successor Plan contract.",
+        ),
+    )
+    target_frontmatter["authority"] = {
+        "model": AUTHORITY_MODEL,
+        "state": AUTHORITY_STATE,
+        "canonical_plan_id": target_plan_id,
+        "rollover_id": rollover_id,
+        "predecessor": source_record,
+        "sources": [],
+        "confirmations": {"rollover": confirmation_id},
+    }
+    target_doc = PlanDocument(target_path, target_frontmatter, prepared_doc.body)
+    require_valid_candidate(target_doc)
+
+    manifest["rollover_id"] = rollover_id
+    manifest["source_plan"] = source_record
+    manifest["index_baseline"] = index_baseline
+    manifest["target_relative"] = target_relative
+    manifest["prepared_path"] = str(prepared_path)
+    manifest["prepared_plan_sha256"] = prepared_sha256
+    manifest["proposal_sha256"] = proposal_sha256
+    return manifest, target_doc
+
+
+def stage_rollover(
+    root: Path,
+    manifest: dict[str, Any],
+    target_doc: PlanDocument,
+) -> Path:
+    """Stage immutable rollover inputs and create the recovery journal."""
+    rollover_id = str(manifest["rollover_id"])
+    _rollover_dir, staging_dir, journal_path = rollover_transaction_paths(
+        root,
+        rollover_id,
+    )
+    if journal_path.exists():
+        raise WorkctlError(f"ROLLOVER_JOURNAL_EXISTS: {rollover_id}")
+
+    source = manifest["source_plan"]
+    assert isinstance(source, dict)
+    source_path = checked_project_path(root, str(source["path"]))
+    if sha256_file(source_path) != source["sha256"]:
+        raise WorkctlError(f"ROLLOVER_SOURCE_DRIFT: {source['path']}")
+    index_baseline = manifest["index_baseline"]
+    assert isinstance(index_baseline, dict)
+    if sha256_file(index_path(root)) != index_baseline["sha256"]:
+        raise WorkctlError("INDEX_BASELINE_DRIFT")
+
+    prepared_path = Path(str(manifest["prepared_path"]))
+    if sha256_file(prepared_path) != manifest["prepared_plan_sha256"]:
+        raise WorkctlError("TARGET_PLAN_HASH_DRIFT")
+    staged_prepared_plan = staging_dir / "prepared-plan.md"
+    write_atomic_bytes(staged_prepared_plan, prepared_path.read_bytes())
+    staged_plan = staging_dir / "target-plan.md"
+    write_atomic(staged_plan, dump_plan(target_doc))
+    staged_index = staging_dir / "target-index.yaml"
+    write_atomic(
+        staged_index,
+        yaml.safe_dump(activated_index(root, target_doc), sort_keys=False),
+    )
+    journal = {
+        "schema_version": 1,
+        "kind": "rollover",
+        "rollover_id": rollover_id,
+        "status": "staged",
+        "created_at": utc_now(),
+        "updated_at": utc_now(),
+        "source_plan": source,
+        "index_baseline": index_baseline,
+        "target_plan_id": target_doc.frontmatter["plan_id"],
+        "target_path": relative_project_path(root, target_doc.path),
+        "staged_prepared_plan": relative_project_path(root, staged_prepared_plan),
+        "staged_plan": relative_project_path(root, staged_plan),
+        "target_sha256": sha256_file(staged_plan),
+        "staged_index": relative_project_path(root, staged_index),
+        "target_index_sha256": sha256_file(staged_index),
+        "prepared_plan_sha256": manifest["prepared_plan_sha256"],
+        "proposal_sha256": manifest["proposal_sha256"],
+        "rollover_confirmation": confirmations(target_doc.frontmatter)["C-PLAN-ROLLOVER"],
+        "completed_operations": [],
+    }
+    write_atomic(journal_path, yaml.safe_dump(journal, sort_keys=False))
+    return journal_path
+
+
+def validate_rollover_journal(
+    root: Path,
+    journal_path: Path,
+) -> tuple[dict[str, Any], PlanDocument]:
+    """Validate a rollover journal and its staged authority contract."""
+    journal = load_yaml_file(journal_path)
+    rollover_id = journal.get("rollover_id")
+    if (
+        journal.get("schema_version") != 1
+        or journal.get("kind") != "rollover"
+        or journal.get("status") not in {"staged", "applying", "committed"}
+        or not isinstance(rollover_id, str)
+        or ROLLOVER_ID_RE.fullmatch(rollover_id) is None
+        or journal_path.name != f"{rollover_id}.yaml"
+    ):
+        raise WorkctlError("INVALID_ROLLOVER_JOURNAL")
+
+    source = journal.get("source_plan")
+    index_baseline = journal.get("index_baseline")
+    if not isinstance(source, dict) or not isinstance(index_baseline, dict):
+        raise WorkctlError("INVALID_ROLLOVER_JOURNAL")
+    completed_operations = journal.get("completed_operations")
+    if not isinstance(completed_operations, list) or not all(
+        isinstance(operation, str) for operation in completed_operations
+    ):
+        raise WorkctlError("INVALID_ROLLOVER_JOURNAL")
+    source_plan_id = source.get("plan_id")
+    source_revision = source.get("revision")
+    source_path_value = source.get("path")
+    source_sha256 = source.get("sha256")
+    if (
+        not isinstance(source_plan_id, str)
+        or PLAN_ID_RE.fullmatch(source_plan_id) is None
+        or type(source_revision) is not int
+        or source_revision < 1
+        or not isinstance(source_path_value, str)
+        or not isinstance(source_sha256, str)
+        or SHA256_RE.fullmatch(source_sha256) is None
+        or index_baseline.get("active_plan_id") != source_plan_id
+        or not isinstance(index_baseline.get("sha256"), str)
+        or SHA256_RE.fullmatch(str(index_baseline.get("sha256"))) is None
+    ):
+        raise WorkctlError("INVALID_ROLLOVER_JOURNAL")
+
+    target_plan_id = journal.get("target_plan_id")
+    target_path_value = journal.get("target_path")
+    if (
+        not isinstance(target_plan_id, str)
+        or PLAN_ID_RE.fullmatch(target_plan_id) is None
+        or target_path_value != f"_Plan/{target_plan_id}.md"
+        or target_plan_id == source_plan_id
+    ):
+        raise WorkctlError("INVALID_ROLLOVER_JOURNAL")
+    expected_staging_root = f"_Plan/.rollovers/{rollover_id}/staging"
+    if (
+        journal.get("staged_prepared_plan") != f"{expected_staging_root}/prepared-plan.md"
+        or journal.get("staged_plan") != f"{expected_staging_root}/target-plan.md"
+        or journal.get("staged_index") != f"{expected_staging_root}/target-index.yaml"
+    ):
+        raise WorkctlError("INVALID_ROLLOVER_JOURNAL")
+    for field in (
+        "target_sha256",
+        "target_index_sha256",
+        "prepared_plan_sha256",
+        "proposal_sha256",
+    ):
+        value = journal.get(field)
+        if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+            raise WorkctlError("INVALID_ROLLOVER_JOURNAL")
+
+    staged_prepared_plan = checked_project_path(
+        root,
+        str(journal["staged_prepared_plan"]),
+    )
+    staged_plan = checked_project_path(root, str(journal["staged_plan"]))
+    staged_index = checked_project_path(root, str(journal["staged_index"]))
+    if sha256_file(staged_prepared_plan) != journal["prepared_plan_sha256"]:
+        raise WorkctlError("STAGED_PREPARED_PLAN_HASH_MISMATCH")
+    if sha256_file(staged_plan) != journal["target_sha256"]:
+        raise WorkctlError("STAGED_ROLLOVER_PLAN_HASH_MISMATCH")
+    if sha256_file(staged_index) != journal["target_index_sha256"]:
+        raise WorkctlError("STAGED_ROLLOVER_INDEX_HASH_MISMATCH")
+    prepared_doc = load_plan(staged_prepared_plan)
+    target_doc = load_plan(staged_plan)
+    if prepared_doc.frontmatter.get("plan_id") != target_plan_id or prepared_doc.frontmatter.get(
+        "revision"
+    ) != target_doc.frontmatter.get("revision"):
+        raise WorkctlError("INVALID_ROLLOVER_JOURNAL")
+    expected_proposal = rollover_proposal_payload(
+        rollover_id,
+        source,
+        index_baseline,
+        target_path=str(target_path_value),
+        target_plan_id=target_plan_id,
+        target_revision=prepared_doc.frontmatter.get("revision"),
+        prepared_plan_sha256=str(journal["prepared_plan_sha256"]),
+    )
+    expected_proposal_sha256 = sha256_bytes(
+        json.dumps(expected_proposal, sort_keys=True, separators=(",", ":")).encode()
+    )
+    if expected_proposal_sha256 != journal["proposal_sha256"]:
+        raise WorkctlError("ROLLOVER_PROPOSAL_HASH_MISMATCH")
+
+    authority = target_doc.frontmatter.get("authority")
+    if (
+        target_doc.frontmatter.get("plan_id") != target_plan_id
+        or not isinstance(authority, dict)
+        or authority.get("rollover_id") != rollover_id
+        or authority.get("predecessor") != source
+    ):
+        raise WorkctlError("INVALID_ROLLOVER_JOURNAL")
+    authority_confirmations = authority.get("confirmations")
+    confirmation_id = (
+        authority_confirmations.get("rollover")
+        if isinstance(authority_confirmations, dict)
+        else None
+    )
+    confirmation = (
+        confirmations(target_doc.frontmatter).get(confirmation_id)
+        if isinstance(confirmation_id, str)
+        else None
+    )
+    journal_confirmation = journal.get("rollover_confirmation")
+    if (
+        confirmation_id != "C-PLAN-ROLLOVER"
+        or confirmation is None
+        or not isinstance(journal_confirmation, dict)
+        or confirmation != journal_confirmation
+        or confirmation.get("status") != "accepted"
+        or confirmation.get("evidence_sha256") != journal["proposal_sha256"]
+    ):
+        raise WorkctlError("INVALID_ROLLOVER_JOURNAL")
+    expected_frontmatter = copy.deepcopy(prepared_doc.frontmatter)
+    add_or_replace_confirmation(expected_frontmatter, journal_confirmation)
+    expected_frontmatter["authority"] = {
+        "model": AUTHORITY_MODEL,
+        "state": AUTHORITY_STATE,
+        "canonical_plan_id": target_plan_id,
+        "rollover_id": rollover_id,
+        "predecessor": source,
+        "sources": [],
+        "confirmations": {"rollover": "C-PLAN-ROLLOVER"},
+    }
+    expected_target_doc = PlanDocument(
+        staged_plan,
+        expected_frontmatter,
+        prepared_doc.body,
+    )
+    if staged_plan.read_bytes() != dump_plan(expected_target_doc).encode():
+        raise WorkctlError("STAGED_ROLLOVER_TARGET_CONTRACT_MISMATCH")
+
+    staged_index_value = load_yaml_file(staged_index)
+    indexed_target = next(
+        (
+            item
+            for item in staged_index_value.get("plans", [])
+            if isinstance(item, dict) and item.get("id") == target_plan_id
+        ),
+        None,
+    )
+    if (
+        staged_index_value.get("active_plan_id") != target_plan_id
+        or not isinstance(indexed_target, dict)
+        or indexed_target.get("path") != f"{target_plan_id}.md"
+    ):
+        raise WorkctlError("INVALID_ROLLOVER_JOURNAL")
+    return journal, target_doc
+
+
+def resume_rollover(root: Path, journal_path: Path) -> None:
+    """Idempotently roll a staged successor forward to index-last activation."""
+    journal, staged_target_doc = validate_rollover_journal(root, journal_path)
+    if journal.get("status") == "committed":
+        print(f"ROLLOVER_ALREADY_COMMITTED {journal['rollover_id']}")
+        return
+    rollover_id = str(journal["rollover_id"])
+
+    source = journal.get("source_plan")
+    index_baseline = journal.get("index_baseline")
+    if not isinstance(source, dict) or not isinstance(index_baseline, dict):
+        raise WorkctlError("INVALID_ROLLOVER_JOURNAL")
+    source_path = checked_project_path(root, str(source.get("path")))
+    if sha256_file(source_path) != source.get("sha256"):
+        raise WorkctlError(f"ROLLOVER_SOURCE_DRIFT: {source.get('path')}")
+    source_doc = load_plan(source_path)
+    if source_doc.frontmatter.get("plan_id") != source.get("plan_id") or source_doc.frontmatter.get(
+        "revision"
+    ) != source.get("revision"):
+        raise WorkctlError("ROLLOVER_SOURCE_METADATA_DRIFT")
+    require_terminal_rollover_source(root, source_doc)
+
+    staged_plan = staged_target_doc.path
+    staged_index = checked_project_path(root, str(journal["staged_index"]))
+
+    current_index_sha256 = sha256_file(index_path(root))
+    expected_index_sha256 = index_baseline.get("sha256")
+    target_index_sha256 = journal.get("target_index_sha256")
+    if current_index_sha256 not in {expected_index_sha256, target_index_sha256}:
+        raise WorkctlError("INDEX_BASELINE_DRIFT")
+    target = checked_project_path(root, str(journal.get("target_path")))
+    if target.exists() and sha256_file(target) != journal.get("target_sha256"):
+        raise WorkctlError(f"TARGET_PLAN_CONFLICT: {journal.get('target_path')}")
+    if not target.exists():
+        write_atomic_bytes(target, staged_plan.read_bytes())
+    record_operation(journal_path, journal, "rollover-target-plan")
+
+    if current_index_sha256 == expected_index_sha256:
+        write_atomic_bytes(index_path(root), staged_index.read_bytes())
+    record_operation(journal_path, journal, "rollover-index-activation")
+
+    report = inspect_authority(root, ignore_journal=journal_path)
+    validation_errors = validate_plan(root, ignore_journal=journal_path)
+    if report.state != "GOVERNED_ACTIVE" or validation_errors:
+        details = [*report.blockers, *validation_errors]
+        raise WorkctlError(f"ROLLOVER_ACTIVATED_BUT_INVALID: {report.state}; {'; '.join(details)}")
+    journal["status"] = "committed"
+    write_journal(journal_path, journal)
+    print(f"ROLLOVER_COMMITTED {rollover_id} plan={journal['target_plan_id']}")
+
+
+def cmd_plan_rollover_apply(args: argparse.Namespace) -> None:
+    """Dry-run or apply a confirmed terminal Plan rollover."""
+    root = project_root()
+    manifest_path = Path(args.manifest).resolve()
+    if args.dry_run:
+        manifest, target_doc = prepare_rollover(
+            root,
+            manifest_path,
+            require_confirmations=False,
+        )
+        payload = {
+            "rollover_id": manifest["rollover_id"],
+            "source_plan": manifest["source_plan"],
+            "index_baseline": manifest["index_baseline"],
+            "target_plan": {
+                "path": relative_project_path(root, target_doc.path),
+                "plan_id": target_doc.frontmatter["plan_id"],
+                "revision": target_doc.frontmatter["revision"],
+                "prepared_plan_sha256": manifest["prepared_plan_sha256"],
+            },
+            "proposal_sha256": manifest["proposal_sha256"],
+            "confirmations_required": ["C-PLAN-ROLLOVER"],
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    with lock(root):
+        if incomplete_migration_journals(root) or incomplete_rollover_journals(root):
+            raise WorkctlError("MIGRATION_RECOVERY_REQUIRED")
+        manifest, target_doc = prepare_rollover(
+            root,
+            manifest_path,
+            require_confirmations=True,
+        )
+        journal_path = stage_rollover(root, manifest, target_doc)
+        resume_rollover(root, journal_path)
+
+
+def cmd_plan_rollover_recover(args: argparse.Namespace) -> None:
+    """Recover one named rollover transaction idempotently."""
+    root = project_root()
+    rollover_id = args.rollover_id
+    if ROLLOVER_ID_RE.fullmatch(rollover_id) is None:
+        raise WorkctlError("INVALID_ROLLOVER_ID")
+    with lock(root):
+        if incomplete_migration_journals(root):
+            raise WorkctlError("MIGRATION_RECOVERY_REQUIRED")
+        _rollover_dir, _staging_dir, journal_path = rollover_transaction_paths(
+            root,
+            rollover_id,
+        )
+        if not journal_path.is_file():
+            raise WorkctlError(f"ROLLOVER_JOURNAL_NOT_FOUND: {rollover_id}")
+        resume_rollover(root, journal_path)
+
+
 def cmd_plan_reconcile_apply(args: argparse.Namespace) -> None:
     """Apply a confirmed, prehashed reconciliation transaction."""
     root = project_root()
     manifest_path = Path(args.manifest).resolve()
-    manifest, target_doc, diff_text = prepare_reconciliation(
-        root,
-        manifest_path,
-        require_confirmations=not args.dry_run,
-    )
     if args.dry_run:
+        manifest, target_doc, diff_text = prepare_reconciliation(
+            root,
+            manifest_path,
+            require_confirmations=False,
+        )
         payload = {
             "migration_id": manifest["migration_id"],
             "target_plan": relative_project_path(root, target_doc.path),
@@ -3076,8 +3881,13 @@ def cmd_plan_reconcile_apply(args: argparse.Namespace) -> None:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return
     with lock(root):
-        if incomplete_migration_journals(root):
+        if incomplete_migration_journals(root) or incomplete_rollover_journals(root):
             raise WorkctlError("MIGRATION_RECOVERY_REQUIRED")
+        manifest, target_doc, _diff_text = prepare_reconciliation(
+            root,
+            manifest_path,
+            require_confirmations=True,
+        )
         report = inspect_authority(root)
         if report.state == "GOVERNED_ACTIVE":
             raise WorkctlError("RECONCILIATION_NOT_REQUIRED")
@@ -3089,6 +3899,8 @@ def cmd_plan_reconcile_recover(args: argparse.Namespace) -> None:
     """Recover the only incomplete migration or a named migration."""
     root = project_root()
     with lock(root):
+        if incomplete_rollover_journals(root):
+            raise WorkctlError("ROLLOVER_RECOVERY_REQUIRED")
         report = inspect_authority(root)
         journals = incomplete_migration_journals(root)
         if args.migration_id:
@@ -3161,6 +3973,15 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile_recover = reconcile_sub.add_parser("recover")
     reconcile_recover.add_argument("--migration-id")
     reconcile_recover.set_defaults(func=cmd_plan_reconcile_recover)
+    rollover = plan_sub.add_parser("rollover")
+    rollover_sub = rollover.add_subparsers(dest="rollover_action", required=True)
+    rollover_apply = rollover_sub.add_parser("apply")
+    rollover_apply.add_argument("--manifest", required=True)
+    rollover_apply.add_argument("--dry-run", action="store_true")
+    rollover_apply.set_defaults(func=cmd_plan_rollover_apply)
+    rollover_recover = rollover_sub.add_parser("recover")
+    rollover_recover.add_argument("--rollover-id", required=True)
+    rollover_recover.set_defaults(func=cmd_plan_rollover_recover)
     closeout_check = plan_sub.add_parser("closeout-check")
     closeout_check.set_defaults(func=cmd_plan_closeout_check)
     complete = plan_sub.add_parser("complete")

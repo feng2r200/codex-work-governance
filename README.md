@@ -47,8 +47,8 @@ The controller uses `_Plan/index.yaml` only to locate the active Plan.
 `_Plan/<plan-id>.md` frontmatter is the sole mutable execution authority. The
 controller enforces one active execution authority, expected revisions,
 dependency and confirmation gates, migration lineage, artifact quarantine
-states, atomic Plan writes, recoverable reconciliation, terminal closeout, and
-append-only logs.
+states, atomic Plan writes, recoverable reconciliation and terminal Plan
+rollover, terminal closeout, and append-only logs.
 
 Confirmation decisions are made only through `plan confirm` and may be
 `accepted` or `declined`. Activation, confirmation-bound exclusions, and
@@ -117,6 +117,29 @@ writes non-authoritative pointers with path-correct links, and activates the
 new index last. Recovery rechecks staged hashes and the Git baseline.
 `plan closeout-check` and `plan complete` include full Plan validation and
 enforce route-level terminal completion.
+
+A complete terminal Plan starts a distinct successor through a confirmed
+rollover instead of reopening or overwriting the predecessor:
+
+```sh
+uv run --script /path/to/workctl.py plan rollover apply \
+  --manifest /path/to/rollover.yaml --dry-run
+uv run --script /path/to/workctl.py plan rollover apply \
+  --manifest /path/to/rollover.yaml
+uv run --script /path/to/workctl.py plan rollover recover \
+  --rollover-id ROL-YYYYMMDD-NNN
+```
+
+The manifest fixes the predecessor ID, revision, path and SHA256, the exact
+`_Plan/index.yaml` baseline, and a prepared schema-v3 successor contract. Apply
+requires `C-PLAN-ROLLOVER` to carry the dry-run proposal digest. The transaction
+preserves the completed predecessor bytes, records recursive predecessor
+lineage in the successor, stages the successor and replacement index, and
+activates the index last. An incomplete rollover freezes ordinary work in
+`MIGRATION_RECOVERY_REQUIRED` until the named recovery converges. If
+`AGENTS.md` or `CLAUDE.md` explicitly names the predecessor path as authority,
+that routing must be separately revised before rollover so it cannot recreate
+competing authority after activation.
 
 ## Validate
 
