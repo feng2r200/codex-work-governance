@@ -16,9 +16,10 @@ During execution:
 - keep changes scoped to the obligation;
 - avoid parallel writes to the same data or remote surface;
 - use deterministic scripts for repeated fragile work;
-- record key evidence in `.logs/` only when a Plan exists and the record has
+- record key evidence in `.work-governance/logs/` only when a Plan exists and the record has
   handoff value;
-- never promote `.logs` content into Plan facts without confirmation.
+- never promote `.work-governance/logs` content into Plan facts without
+  confirmation.
 
 When recovering suspect artifacts, identify the repair task with
 `resolves_artifacts`. This exception permits only the declared recovery work;

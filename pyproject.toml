@@ -1,11 +1,11 @@
 [project]
 name = "work-governance"
-version = "0.1.0"
+version = "1.0.0"
 description = "Local Codex work governance plugin controller and tests"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = [
-  "pyyaml>=6.0.2",
+  "pyyaml==6.0.3",
 ]
 
 [dependency-groups]
@@ -26,4 +26,8 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["plugins/work-governance/scripts/workctl.py", "tests"]
+files = [
+  "plugins/work-governance/hooks/session_start.py",
+  "plugins/work-governance/scripts/workctl.py",
+  "tests",
+]

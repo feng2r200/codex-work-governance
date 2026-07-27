@@ -17,7 +17,7 @@ def test_worktree_default_is_project_local_and_external_paths_are_exceptional() 
     """Keep worktree isolation inside the project unless an exception is justified."""
     skill = SKILL_PATH.read_text(encoding="utf-8")
 
-    assert "<project-root>/.worktree/<task-or-branch-slug>" in skill
+    assert "<project-root>/.work-governance/worktrees/<task-or-branch-slug>" in skill
     assert "[A-Za-z0-9._-]" in skill
     assert "trim leading and trailing `.`, `-`, and\n  `_`" in skill
     assert "reject an empty slug, `.` or `..`" in skill
@@ -25,7 +25,7 @@ def test_worktree_default_is_project_local_and_external_paths_are_exceptional() 
     assert 'repo_root=$(cd "$(git rev-parse --show-toplevel)" && pwd -P)' in skill
     assert 'test ! -L "$worktree_root"' in skill
     assert 'worktree_root=$(cd "$worktree_root" && pwd -P)' in skill
-    assert 'test "$(dirname "$worktree_root")" = "$repo_root"' in skill
+    assert 'test "$(dirname "$worktree_root")" = "$repo_root/.work-governance"' in skill
     assert 'test ! -e "$target" && test ! -L "$target"' in skill
     assert "nor appears in\n  `git worktree list --porcelain`" in skill
     assert "Use a worktree path outside the project root only" in skill
@@ -41,6 +41,7 @@ def test_worktree_commands_preserve_explicit_branch_semantics() -> None:
     assert "never silently default the start point to the current `HEAD`" in skill
     assert "Use detached mode only when the task explicitly calls for it" in skill
     assert 'git worktree add "$repo_root/.worktree/<task-or-branch-slug>" -b' not in skill
+    assert "never create new worktrees there" in skill
 
 
 def test_worktree_permission_and_cleanup_boundaries_are_explicit() -> None:
@@ -55,8 +56,10 @@ def test_worktree_permission_and_cleanup_boundaries_are_explicit() -> None:
     assert "Deleting the associated branch is a separate" in skill
 
 
-def test_repository_ignores_the_project_local_worktree_root() -> None:
-    """Prevent nested worktrees from appearing as ordinary repository changes."""
-    ignore_entries = (REPOSITORY_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+def test_skill_uses_the_versioned_layout_ignore_contract() -> None:
+    """Keep new worktrees under the canonical locally ignored runtime path."""
+    skill = SKILL_PATH.read_text(encoding="utf-8")
 
-    assert "/.worktree/" in ignore_entries
+    assert 'worktree_root="$repo_root/.work-governance/worktrees"' in skill
+    assert 'git check-ignore -q "$repo_root/.work-governance/worktrees/"' in skill
+    assert "versioned `.work-governance/.gitignore` contract" in skill

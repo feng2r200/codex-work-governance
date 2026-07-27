@@ -324,7 +324,7 @@ wheels = [
 
 [[package]]
 name = "work-governance"
-version = "0.1.0"
+version = "1.0.0"
 source = { virtual = "." }
 dependencies = [
     { name = "pyyaml" },
@@ -339,7 +339,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pyyaml", specifier = ">=6.0.2" }]
+requires-dist = [{ name = "pyyaml", specifier = "==6.0.3" }]
 
 [package.metadata.requires-dev]
 dev = [

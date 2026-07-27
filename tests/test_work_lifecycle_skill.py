@@ -114,3 +114,15 @@ def test_summary_is_reply_protocol_not_plan_schema() -> None:
 
     assert "This is a reply protocol, not a Plan task-schema extension" in skill
     assert "turn the Plan into a process log" in skill
+
+
+def test_lifecycle_requires_current_bootstrap_and_canonical_layout() -> None:
+    """Plan-controlled work fails closed when SessionStart readiness is absent."""
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+
+    assert ".work-governance/bootstrap-state.json" in skill
+    assert "untrusted, disabled, skipped by managed policy, absent, or stale" in skill
+    assert "`ENVIRONMENT_BLOCKED`" in skill
+    assert ".work-governance/_Plan/index.yaml" in skill
+    assert ".work-governance/workctl.lock" in skill
+    assert "controller commands require `LAYOUT_READY`" in skill

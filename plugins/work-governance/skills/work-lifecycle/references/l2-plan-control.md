@@ -5,13 +5,15 @@ facts, confirmation gates, artifacts, acceptance criteria, or rollback state.
 
 ## Authority discovery
 
-Every project uses a single active execution authority. Before Plan-controlled
-work, the Agent discovers:
+Every project uses a single active execution authority under a separately
+validated project layout. Before Plan-controlled work, require a current READY
+bootstrap receipt, require `layout status` to report `LAYOUT_READY`, then the
+Agent discovers:
 
 - a Plan explicitly named by the current user;
 - a Plan designated as current, authoritative, or mandatory by `AGENTS.md` or
   `CLAUDE.md`;
-- the active Plan located by `_Plan/index.yaml`;
+- the active Plan located by `.work-governance/_Plan/index.yaml`;
 - conventional paths such as `Plan.md` and `docs/Plan.md` as candidates only;
 - historical sources already recorded in migration lineage.
 
@@ -50,15 +52,30 @@ validation, reconciliation, and recovery.
 
 Plan files:
 
-- `_Plan/index.yaml`: active plan index.
-- `_Plan/<plan-id>.md`: Markdown with YAML frontmatter as the only machine
+- `.work-governance/_Plan/index.yaml`: active plan index.
+- `.work-governance/_Plan/<plan-id>.md`: Markdown with YAML frontmatter as the only machine
   authority.
-- `_Plan/archive/<migration-id>/`: immutable original migration sources.
-- `_Plan/.migrations/<migration-id>.yaml`: recoverable transaction journal.
-- `_Plan/.rollovers/<rollover-id>.yaml`: recoverable terminal-Plan rollover
+- `.work-governance/_Plan/archive/<migration-id>/`: immutable original migration sources.
+- `.work-governance/_Plan/.migrations/<migration-id>.yaml`: recoverable transaction journal.
+- `.work-governance/_Plan/.rollovers/<rollover-id>.yaml`: recoverable terminal-Plan rollover
   journal.
-- `.logs/`: append-only process evidence; add it to `.git/info/exclude` in Git
-  projects.
+- `.work-governance/logs/`: append-only local process evidence.
+
+The project-root `_Plan/` is not an authority candidate after layout 1.0. Only
+the bootstrap legacy classifier may inspect it. Layout state is independent
+from Plan authority:
+
+- `LAYOUT_READY`: the version and ignore contracts are committed.
+- `LEGACY_CLASSIFICATION_REQUIRED`: old-root evidence is incomplete or mixed.
+- `LAYOUT_MIGRATION_REQUIRED`: a safe bootstrap action remains.
+- `LAYOUT_RECOVERY_REQUIRED`: a durable layout transaction must recover.
+- `RECONCILIATION_REQUIRED`: old and new authorities coexist.
+- `LEGACY_ROOT_REAPPEARED`: old Plugin behavior recreated a governed old root.
+- `ENVIRONMENT_BLOCKED`: the layout, receipt, trust, dependency, or control
+  path is invalid.
+
+Only `layout status|validate|migrate|recover` are available until
+`LAYOUT_READY`. No-Plan bootstrap does not create a Plan or index.
 
 Schema-v3 Plans also carry:
 

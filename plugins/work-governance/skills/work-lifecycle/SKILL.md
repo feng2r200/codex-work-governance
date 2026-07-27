@@ -17,9 +17,15 @@ component, and the recovery condition.
 - Keep root `AGENTS.md` thin: route and hard constraints live there; reusable
   method lives in this plugin.
 - Use `workctl.py` for deterministic Plan mutations when a Plan is admitted.
-- Do not create `_Plan/` or `.logs/` for No-Plan tasks.
-- Keep `_Plan/index.yaml` as the active Plan locator and
-  `_Plan/<plan-id>.md` frontmatter as the sole mutable machine authority;
+- Require the current SessionStart context and
+  `.work-governance/bootstrap-state.json` to report `READY` for the exact
+  installed Plugin build before Plan-controlled work. If the hook is
+  untrusted, disabled, skipped by managed policy, absent, or stale, report
+  `ENVIRONMENT_BLOCKED` and the recovery condition.
+- Do not create a Plan, index, or log entry for No-Plan tasks. Layout bootstrap
+  may create `.work-governance/version.yaml` and ignored local infrastructure.
+- Keep `.work-governance/_Plan/index.yaml` as the active Plan locator and
+  `.work-governance/_Plan/<plan-id>.md` frontmatter as the sole mutable machine authority;
   Markdown body is only explanation and handoff.
 - Separate local slice completion, delivery completion, and route-level
   activation. Missing authority for a required future action creates a
@@ -27,8 +33,9 @@ component, and the recovery condition.
 - Before Plan-controlled work, inspect Plan authority. Continue real work only
   in `GOVERNED_ACTIVE`; use only inspect, validation, reconciliation, or
   recovery commands in every other authority state.
-- In Git projects, version `_Plan/` by default and add `.logs/` to
-  `.git/info/exclude` by default.
+- In Git projects, version `.work-governance/_Plan/`, `version.yaml`, and
+  `.gitignore` by default. The exact `.work-governance/.gitignore` contract
+  excludes only local runtime content.
 - High-impact, destructive, remote, production, data, structure-revision, and
   substantive rollback decisions require confirmation before action.
 - A SubAgent may execute only within an explicit delegation contract. The parent
@@ -67,13 +74,15 @@ component, and the recovery condition.
 Classify the request:
 
 - `No-Plan`: single-step query, explanation, pure information confirmation, or
-  low-risk tiny edit with no handoff value. Do not create `_Plan/` or `.logs/`.
+  low-risk tiny edit with no handoff value. Do not create a Plan, index, or log
+  entry.
 - `Plan-controlled`: file edits with verification, multiple obligations,
   cross-module work, long-running work, role isolation, high-impact choices,
   remote/data/production actions, structural governance changes, or work that
   must be handed to a future agent.
 
-When admitting a Plan, create or use `_Plan/index.yaml` and `_Plan/<plan-id>.md`.
+When admitting a Plan, create or use `.work-governance/_Plan/index.yaml` and
+`.work-governance/_Plan/<plan-id>.md`.
 Use IDs `PLAN-YYYYMMDD-NNN`, `O-`, `T-`, `V-`, and `A-`.
 
 Never infer a second execution authority from a filename, Git history, a phase
@@ -85,11 +94,15 @@ review; a confirmed second authority requires reconciliation.
 Run the controller from the project root:
 
 ```bash
-uv run --script plugins/work-governance/scripts/workctl.py plan status
+uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
+  --script plugins/work-governance/scripts/workctl.py plan status
 ```
 
-All Plan writes must use the controller or an equivalent atomic write path with
-revision checks, short lock, and validation.
+Run `layout status` first. Except for `layout status|validate|migrate|recover`,
+controller commands require `LAYOUT_READY`. READY bootstrap uses
+`.work-governance/cache/uv` and invokes the controller offline. All Plan writes
+must use the controller or an equivalent atomic write path with revision checks,
+the stable `.work-governance/workctl.lock`, and validation.
 
 ## SubAgent Delegation
 
