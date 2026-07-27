@@ -1,0 +1,33 @@
+schema_version: 1
+kind: rollover
+rollover_id: ROL-20260727-002
+status: committed
+created_at: '2026-07-27T08:18:57+00:00'
+updated_at: '2026-07-27T08:18:57+00:00'
+source_plan:
+  path: _Plan/PLAN-20260727-001.md
+  plan_id: PLAN-20260727-001
+  revision: 39
+  sha256: 5eab54f3694200f36c31f01296a1037df8f7e0a68c00b64d741059ee0d32afcb
+index_baseline:
+  active_plan_id: PLAN-20260727-001
+  sha256: 56e4b675e3213a74fba227f0f59d1a2e17a5f1e315a9926303c0c5e7442002b3
+target_plan_id: PLAN-20260727-002
+target_path: _Plan/PLAN-20260727-002.md
+staged_prepared_plan: _Plan/.rollovers/ROL-20260727-002/staging/prepared-plan.md
+staged_plan: _Plan/.rollovers/ROL-20260727-002/staging/target-plan.md
+target_sha256: d441f8ce3e964ed9ad44d7b6af97b8a079f3cac366d19a99e21c555f470cc177
+staged_index: _Plan/.rollovers/ROL-20260727-002/staging/target-index.yaml
+target_index_sha256: fc2ae4f0b47b065c3c43bf09169bfb6361d470caea54d102dad523f387fb14a3
+prepared_plan_sha256: 7846d882293c128d4a9088b359aaf22da78a19ed7db584ba18ba62f526780cdd
+proposal_sha256: e17d00c7214b3f187899c6b40107b31a21c209fa4f678452cb958183fb48dfa4
+rollover_confirmation:
+  id: C-PLAN-ROLLOVER
+  description: Approve the terminal predecessor and exact successor Plan contract.
+  status: accepted
+  ref: user:2026-07-27-implement-provided-plan
+  accepted_at: '2026-07-27T08:18:48Z'
+  evidence_sha256: e17d00c7214b3f187899c6b40107b31a21c209fa4f678452cb958183fb48dfa4
+completed_operations:
+- rollover-target-plan
+- rollover-index-activation

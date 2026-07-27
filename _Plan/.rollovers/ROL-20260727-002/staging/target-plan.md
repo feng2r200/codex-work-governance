@@ -1,0 +1,329 @@
+---
+schema_version: 3
+plan_id: PLAN-20260727-002
+title: Work Governance 1.0 unified project root and legacy layout migration
+status: active
+mode: autonomous
+revision: 1
+created_at: '2026-07-27T08:07:06Z'
+updated_at: '2026-07-27T08:07:06Z'
+scope:
+  include:
+  - Release a 1.0.0 candidate whose only project-level root is .work-governance/.
+  - Move Plan authority, local logs, worktree defaults, cache, proposals, evidence,
+    runtime state, bootstrap receipts, and the stable controller lock under the governance
+    root.
+  - Add deterministic layout status, validate, migrate, and recover commands and gate
+    ordinary controller commands on LAYOUT_READY.
+  - Implement strict legacy _Plan classification and recoverable migration with durable
+    manifests, staged conversion, index-last authority activation, and committed version.yaml.
+  - Preserve unrelated business _Plan and .logs content, and preserve already registered
+    legacy .worktree paths.
+  - Add a SessionStart bootstrap hook, standard-library runner, isolated UV cache,
+    offline controller contract, documentation, privacy guidance, and full tests.
+  - Commit Plan admission, the validated implementation, and the repository self-hosted
+    layout migration as three separate local delivery boundaries.
+  - Preserve live Plugin activation and the subsequent first-load self-hosted migration
+    as a separately confirmed route-level action.
+  exclude:
+  - description: Push, publish to a remote, create remote branches, or open a pull
+      request.
+    disposition: forbidden
+    resolution_ref: user:2026-07-27-implementation-plan
+  - description: Reinstall or switch the live Codex Plugin before explicit approval.
+    disposition: pending_confirmation
+    confirmation_id: C-LIVE-SWITCH
+  - description: Move or rename already registered legacy .worktree entries.
+    disposition: forbidden
+    resolution_ref: user:2026-07-27-implementation-plan
+  - description: Delete retained feature branches or registered worktrees.
+    disposition: forbidden
+    resolution_ref: user:2026-07-27-implementation-plan
+confirmations:
+  required:
+  - id: C-LIVE-SWITCH
+    description: Decide whether to install and activate the independently validated
+      1.0.0 candidate in the live Codex environment and run fresh-session migration
+      verification.
+    status: pending
+  - id: C-PLAN-ROLLOVER
+    description: Approve the terminal predecessor and exact successor Plan contract.
+    status: accepted
+    ref: user:2026-07-27-implement-provided-plan
+    accepted_at: '2026-07-27T08:18:48Z'
+    evidence_sha256: e17d00c7214b3f187899c6b40107b31a21c209fa4f678452cb958183fb48dfa4
+obligations:
+- id: O-001
+  description: governance_root(root) is the sole derivation source for Plan, logs,
+    worktrees, cache, proposals, evidence, runtime, bootstrap receipt, and the stable
+    lock; normal authority scans only .work-governance/_Plan and root _Plan, .logs,
+    and .worktree are not normal authority or write targets.
+  status: pending
+- id: O-002
+  description: Layout status and Plan authority are independent axes; layout status,
+    validate, migrate, and recover are deterministic, ordinary commands fail closed
+    unless LAYOUT_READY, and No-Plan bootstrap creates no Plan or index.
+  status: pending
+- id: O-003
+  description: Automatic legacy migration requires the conjunction of a non-symlinked
+    ordinary tree, valid index, one direct-child active Plan, supported schema and
+    authority model, closed registered inventory, completed migration and rollover
+    journals, matching generated pointer or managed project-rule marker, no competing
+    new authority, and unchanged post-snapshot input hashes; every missing condition
+    maps fail closed to classification, recovery, or reconciliation rather than migrate.
+  status: pending
+- id: O-004
+  description: Migration acquires .work-governance/workctl.lock before legacy _Plan/.workctl.lock,
+    records Git baseline, complete source manifest, every input hash and an exact
+    conversion table, stages and validates transformations, preserves original bytes
+    and journals, activates index last, commits version.yaml last, and uses deterministic
+    forward recovery after activation begins.
+  status: pending
+- id: O-005
+  description: Field-level conversion is allowlisted to active index and Plan operational
+    paths, current lineage and generated pointers, current migration and rollover
+    operational journals, exact Plugin-managed AGENTS.md or CLAUDE.md marker blocks,
+    and proven governance log evidence references; business Markdown, historical archives,
+    evidence, and artifact paths are never broadly replaced.
+  status: pending
+- id: O-006
+  description: Only log entries proven by Plan ID, log schema, or active evidence
+    reference move; business logs remain, legacy registered worktrees remain at their
+    Git paths, and only new worktrees use .work-governance/worktrees.
+  status: pending
+- id: O-007
+  description: .work-governance/.gitignore ignores only logs, worktrees, cache, proposals,
+    evidence, runtime, bootstrap-state.json, and the lock; _Plan, version.yaml, .gitignore,
+    and confirmed migration proof remain versionable.
+  status: pending
+- id: O-008
+  description: version.yaml records schema, layout and bootstrap contract versions,
+    Plugin compatibility range, legacy action revision, migrated or not_applicable,
+    transaction ID, legacy manifest digest, new-layout baseline digest, and completion
+    evidence; exact build lives only in bootstrap-state.json and ordinary Plan revisions
+    do not participate in migration drift digests.
+  status: pending
+- id: O-009
+  description: SessionStart is a short stable wakener whose action revision, manifest
+    digest, and project input/output fingerprints control incremental execution; it
+    uses only standard library bootstrap, isolated .work-governance/cache/uv, prewarms
+    locked dependencies, runs READY controllers offline, and fail-closes when hook
+    trust or managed policy prevents required bootstrap.
+  status: pending
+- id: O-010
+  description: Bootstrap never runs uv init, changes business dependency groups or
+    global cache configuration, requests Python auto-download, or downloads after
+    READY; repeated unchanged SessionStart is idempotent and detailed evidence remains
+    local.
+  status: pending
+- id: O-011
+  description: Controller, skills, README, privacy, terms, plugin metadata, and tests
+    expose one consistent 1.0 layout contract; the complete candidate passes static,
+    unit, migration, interruption, plugin, skill, isolated-install, offline, and independent
+    validation before implementation and self-migration commits are kept separate
+    and Push remains untouched.
+  status: pending
+tasks:
+- id: T-001
+  description: Commit the admitted successor Plan/index/journal as a governance-only
+    baseline on local main, create branch work-governance-1.0 in the retained legacy
+    .worktree path from that exact commit, and verify GOVERNED_ACTIVE inside it.
+  status: pending
+- id: T-002
+  description: Implement governance-root primitives, layout state and command gates,
+    exact version and ignore contracts, bootstrap receipt, stable lock, new path derivation,
+    and ordinary authority discovery limited to .work-governance/_Plan.
+  status: pending
+  depends_on:
+  - T-001
+- id: T-003
+  description: Implement the full conjunctive legacy classifier, ordered dual-lock
+    protocol, journaled layout migrate/recover, allowlisted field conversion, proven-log
+    migration, input-drift checks, and legacy worktree compatibility.
+  status: pending
+  depends_on:
+  - T-002
+- id: T-004
+  description: Add SessionStart hook and standard-library bootstrap runner, locked
+    isolated UV cache and offline contract, then update lifecycle, Git, project truth,
+    independent validation, README, privacy, terms, plugin metadata, and guidance.
+  status: pending
+  depends_on:
+  - T-003
+- id: T-005
+  description: Add and run the full positive and negative classifier matrix, ordered
+    dual-controller concurrency and input-drift tests, transaction interruption recovery,
+    content preservation, logs/worktree, bootstrap side-effect, controller, skill,
+    documentation, isolated-install, and offline regression suite.
+  status: pending
+  depends_on:
+  - T-004
+- id: T-006
+  description: Perform role-isolated artifact review and evidence audit, fix findings,
+    set the exact 1.0.0+codex cachebuster, create the bounded implementation commit,
+    and locally integrate the candidate without migrating this repository yet.
+  status: pending
+  depends_on:
+  - T-005
+- id: T-007
+  description: If C-LIVE-SWITCH is accepted, install the exact candidate, stop legacy
+    sessions, complete hook trust, open a fresh Codex session on this still-legacy
+    repository, execute its first-load self-hosted migration, validate version, authority,
+    manifests, Git diff, offline controller and recovery evidence, then create a separate
+    migration commit and locally integrate it; if declined, stop after local candidate
+    delivery and report the self-host migration and overall route as incomplete without
+    a terminal claim.
+  status: pending
+  completion_scope: route
+  depends_on:
+  - T-006
+  requires_confirmation: C-LIVE-SWITCH
+validations:
+- id: V-001
+  description: The governance-only Plan admission commit precedes the isolated worktree;
+    the worktree begins at that exact commit and its authority check is GOVERNED_ACTIVE.
+  status: pending
+- id: V-002
+  description: Static path scan and controller tests prove every active path derives
+    from governance_root and no root _Plan, .logs, or new .worktree authority/write
+    contract remains outside the bootstrap classifier and registered-worktree reader.
+  status: pending
+- id: V-003
+  description: Layout status, validate, command gates, No-Plan bootstrap, exact tracked
+    and ignored layout set, version fields, local build receipt, lock path, and Plan
+    revision after LAYOUT_READY pass deterministic tests without migration drift.
+  status: pending
+- id: V-004
+  description: Every conjunctive classifier condition has positive and negative tests;
+    ordinary business, partial, mixed, symlinked, coexisting, incomplete-journal,
+    drifted, and reappeared layouts fail closed with the specified state.
+  status: pending
+- id: V-005
+  description: Ordered dual-lock and old/new-controller concurrency tests, journal
+    Git baseline and complete input manifest assertions, and per-input drift injection
+    prove no stale snapshot can activate.
+  status: pending
+- id: V-006
+  description: Manifest correspondence, allowlisted field updates for index, active
+    Plan, lineage, generated markers, current journals and proven log references,
+    exactly one structural Plan revision bump, preserved source bytes, and absence
+    of broad replacement are proven.
+  status: pending
+- id: V-007
+  description: Proven governance logs migrate with valid evidence references, business
+    logs remain byte-identical, registered legacy worktrees remain usable, and new
+    worktrees use .work-governance/worktrees.
+  status: pending
+- id: V-008
+  description: Repeated unchanged SessionStart is idempotent, fingerprint change reruns,
+    untrusted and managed-policy-skipped hooks fail closed, and sandboxed tests prove
+    no uv init, business dependency edit, global cache change, Python download, or
+    network access after READY.
+  status: pending
+- id: V-009
+  description: Ruff format/check, strict mypy, complete pytest, plugin and all skill
+    validators, isolated installation, bootstrap smoke, and network-denied offline
+    controller smoke pass.
+  status: pending
+- id: V-010
+  description: Independent validation finds no unresolved Blocker, High, or Medium
+    issue in classifier, converter, locking, recovery, bootstrap, tests, evidence,
+    or claims.
+  status: pending
+- id: V-011
+  description: Plan admission, implementation, and self-hosted migration commits are
+    distinct and exact-path staged; accepted activation has live first-load evidence
+    matching the exact candidate and LAYOUT_READY; declined activation cannot substitute
+    for migration evidence or terminal completion; local integration is clean and
+    Push remains untouched.
+  status: pending
+artifacts:
+- id: A-001
+  path: plugins/work-governance/scripts
+  status: pending
+- id: A-002
+  path: plugins/work-governance/hooks
+  status: pending
+- id: A-003
+  path: plugins/work-governance/skills
+  status: pending
+- id: A-004
+  path: tests
+  status: pending
+- id: A-005
+  path: README.md
+  status: pending
+- id: A-006
+  path: PRIVACY.md
+  status: pending
+- id: A-007
+  path: plugins/work-governance/.codex-plugin/plugin.json
+  status: pending
+- id: A-008
+  path: .work-governance
+  status: pending
+- id: A-009
+  path: .work-governance/version.yaml
+  status: pending
+- id: A-010
+  path: .work-governance/.gitignore
+  status: pending
+- id: A-011
+  path: .work-governance/_Plan
+  status: pending
+authority:
+  model: single-active
+  state: governed
+  canonical_plan_id: PLAN-20260727-002
+  rollover_id: ROL-20260727-002
+  predecessor:
+    path: _Plan/PLAN-20260727-001.md
+    plan_id: PLAN-20260727-001
+    revision: 39
+    sha256: 5eab54f3694200f36c31f01296a1037df8f7e0a68c00b64d741059ee0d32afcb
+  sources: []
+  confirmations:
+    rollover: C-PLAN-ROLLOVER
+delivery:
+  status: pending
+  boundary: local-main-fast-forward
+  evidence_ref: project:work-governance-1.0-not-yet-delivered
+activation:
+  status: pending_confirmation
+  current_ref: work-governance@0.1.0+codex.20260727041441
+  target_ref: work-governance@1.0.0+codex.pending
+  confirmation_id: C-LIVE-SWITCH
+route:
+  route_status: active
+  slice_status: initialized
+  next_phase: Commit the admitted Plan baseline, then execute T-001.
+  validation_standard: Fresh evidence must cover O-001 through O-011 and V-001 through
+    V-010 before the live activation gate.
+  confirmation_gate: none
+handoff:
+  route_status: active
+  next_step: Commit the admitted Plan baseline, then execute T-001.
+---
+# Work Governance 1.0 unified project root
+
+This Plan converts the user-approved 1.0 design into one active schema-v3
+execution authority. The sole project-level governance root becomes
+`.work-governance/`; root `_Plan/`, `.logs/`, and `.worktree/` are retained only
+as precisely bounded legacy classifier or registered-worktree inputs.
+
+The route first commits this admitted Plan as a governance-only baseline, then
+uses an isolated legacy worktree for implementation, safety and recovery tests,
+independent validation, and a 1.0.0 candidate. Push and remote publication are
+forbidden.
+
+The repository intentionally remains in the legacy root layout until
+`C-LIVE-SWITCH`. If accepted, the exact candidate is installed and trusted first;
+only a fresh session may then perform the first-load self-hosted migration and
+create its separate migration commit. This preserves the user-specified live
+bootstrap acceptance sequence. If the confirmation is declined, only the local
+candidate slice may be described as delivered: the self-hosted migration,
+`.work-governance` artifacts, overall delivery, and route remain incomplete.
+
+The current user instruction to implement the supplied detailed plan authorizes
+this exact Plan rollover and the local structural migration. It does not authorize
+the separately listed live activation or any remote mutation.
