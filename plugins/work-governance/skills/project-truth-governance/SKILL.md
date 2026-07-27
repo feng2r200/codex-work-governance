@@ -44,6 +44,12 @@ being written down. To promote them:
 - explain the effect on future work;
 - obtain confirmation when promotion changes future execution.
 
+Keep symptoms, hypotheses, probes, and confirmed causes distinct. A passing
+test or successful workaround does not promote a root-cause hypothesis unless
+the evidence discriminates it from materially plausible alternatives. Record
+unknown causes as unknown; do not turn repetition, confidence, or test volume
+into project truth.
+
 ## Reporting
 
 Report the selected authority, why alternatives were rejected, what remains

@@ -13,6 +13,27 @@ Immediate actions:
 - decide whether the issue is local execution, Plan structure, scope, or bottom
   goal mismatch.
 
+Also enter L5 with reason `INEFFECTIVE_LOOP_DETECTED` after two consecutive
+attempts show no material evidence delta or target progress. Preserve the
+attempt tuples and stop adding retries or tests until a changed hypothesis can
+produce discriminating evidence. Explicit monitoring or wait requests are not
+loops merely because the observed state is unchanged.
+
+Before proposing a recovery, write a root-cause challenge:
+
+- exact symptom and boundary where it was observed;
+- falsifiable cause hypothesis and causal chain;
+- evidence supporting and contradicting the hypothesis;
+- cheapest safe discriminating probe;
+- whether each candidate solution removes the cause, contains impact, or hides
+  the symptom;
+- materially plausible minimal containment, causal correction, and alternate
+  route, compared for truth proximity, reversibility, and risk.
+
+Do not resume because a test passes if the causal boundary has not been
+observed. If the root cause remains unknown, label it unknown and select the
+next discriminating probe rather than presenting a workaround as a fix.
+
 High-impact recovery choices require confirmation:
 
 - destructive rollback;
