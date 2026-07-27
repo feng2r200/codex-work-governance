@@ -55,6 +55,8 @@ Plan files:
   authority.
 - `_Plan/archive/<migration-id>/`: immutable original migration sources.
 - `_Plan/.migrations/<migration-id>.yaml`: recoverable transaction journal.
+- `_Plan/.rollovers/<rollover-id>.yaml`: recoverable terminal-Plan rollover
+  journal.
 - `.logs/`: append-only process evidence; add it to `.git/info/exclude` in Git
   projects.
 
@@ -108,6 +110,17 @@ Allowed structural changes:
   `AGENTS.md` rewrite, write the new Plan, and activate the index last.
 - `plan reconcile recover`: idempotently roll an interrupted staged migration
   forward. Recovery never resumes the old queue automatically.
+- `plan rollover apply --manifest ... --dry-run`: require the indexed source
+  Plan to be complete, terminal, and closeout-ready; verify its ID, revision,
+  SHA256 and exact index baseline; validate a new schema-v3 successor; and
+  print the stable proposal digest for `C-PLAN-ROLLOVER`.
+- `plan rollover apply --manifest ...`: after the digest-bound confirmation,
+  preserve the predecessor bytes, record predecessor lineage in the successor,
+  stage the successor and replacement index, and activate the index last.
+- `plan rollover recover --rollover-id ...`: recheck the journal, predecessor,
+  staged target and index hashes, then idempotently finish an interrupted
+  rollover. Ordinary work remains frozen in `MIGRATION_RECOVERY_REQUIRED`
+  until recovery commits.
 - `plan revise`: increment revision and change structure after confirmation
   when required. Activation, confirmation-bound exclusions, and terminal route
   transitions must use their own field-bound decision; an unrelated accepted
@@ -146,6 +159,17 @@ sources, unresolved likely candidates, changed prepared Plans or AGENTS
 replacements, source drift, and Git-baseline drift abort before activation.
 Recovery rechecks every staged hash and the reviewed Git baseline; the journal
 becomes `committed` only after post-activation authority validation succeeds.
+
+A rollover manifest must name a new target Plan and a `ROL-YYYYMMDD-NNN` ID;
+record the current Plan path, ID, revision and SHA256; record the index active
+ID and SHA256; hash the prepared schema-v3 target contract; and bind an accepted
+`C-PLAN-ROLLOVER` record to the dry-run proposal digest. The completed
+predecessor remains unchanged and becomes non-authoritative by classification;
+the successor becomes the sole indexed authority and recursively preserves the
+predecessor path, ID, revision and SHA256. An `AGENTS.md` or `CLAUDE.md` rule
+that explicitly names the predecessor path must be revised under its own
+authority before rollover; otherwise the controller rejects the proposal
+instead of activating a competing authority.
 
 Validation standard: `plan validate` passes; archives hash to the recorded
 sources; historical paths are pointers; the index names only the canonical
