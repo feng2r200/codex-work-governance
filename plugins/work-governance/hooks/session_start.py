@@ -548,6 +548,75 @@ def validate_blocked_record(governance: Path) -> set[Path]:
     return {evidence_path.resolve()}
 
 
+def validate_blocked_evidence_history(
+    governance: Path,
+    current_evidence: set[Path],
+) -> set[Path]:
+    """Validate prior non-authoritative blocked evidence before layout commitment."""
+    project_root = governance.parent
+    bootstrap = governance / "evidence" / "bootstrap"
+    if not bootstrap.exists() and not bootstrap.is_symlink():
+        return current_evidence
+    if bootstrap.is_symlink() or not bootstrap.is_dir():
+        raise BootstrapError("UNCOMMITTED_BOOTSTRAP_EVIDENCE_HISTORY_INVALID")
+    evidence_children = tuple(sorted(bootstrap.iterdir()))
+    if evidence_children and len(current_evidence) != 1:
+        raise BootstrapError("UNCOMMITTED_BOOTSTRAP_EVIDENCE_HISTORY_INVALID")
+
+    claim = governance / "runtime" / CLAIM_NAME
+    if claim.is_symlink() or not claim.is_file():
+        raise BootstrapError("UNCOMMITTED_BOOTSTRAP_EVIDENCE_HISTORY_INVALID")
+    claim_sha256 = sha256_file(claim)
+    expected_keys = (BLOCKED_RECEIPT_KEYS - {"evidence_sha256"}) | {"commands"}
+    allowed = set(current_evidence)
+    for evidence_path in evidence_children:
+        relative = evidence_path.relative_to(project_root).as_posix()
+        try:
+            strict_bootstrap_evidence_relative(relative)
+            reject_symlink_components(project_root, evidence_path)
+        except BootstrapError as exc:
+            raise BootstrapError("UNCOMMITTED_BOOTSTRAP_EVIDENCE_HISTORY_INVALID") from exc
+        if evidence_path.is_symlink() or not evidence_path.is_file():
+            raise BootstrapError("UNCOMMITTED_BOOTSTRAP_EVIDENCE_HISTORY_INVALID")
+        resolved = evidence_path.resolve()
+        if resolved in current_evidence:
+            continue
+        try:
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            raise BootstrapError("UNCOMMITTED_BOOTSTRAP_EVIDENCE_HISTORY_INVALID") from exc
+        commands = evidence.get("commands") if isinstance(evidence, dict) else None
+        if (
+            not isinstance(evidence, dict)
+            or set(evidence) != expected_keys
+            or evidence.get("schema_version") != 1
+            or evidence.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
+            or evidence.get("action_revision") != ACTION_REVISION
+            or evidence.get("status") != "ENVIRONMENT_BLOCKED"
+            or evidence.get("claim_sha256") != claim_sha256
+            or re.fullmatch(r"[0-9a-f]{64}", str(evidence.get("project_input_sha256"))) is None
+            or evidence.get("evidence_ref") != f"evidence:{relative}"
+            or not isinstance(evidence.get("updated_at"), str)
+            or not isinstance(evidence.get("reason"), str)
+            or not isinstance(evidence.get("plugin_build"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", str(evidence.get("plugin_manifest_sha256"))) is None
+            or not isinstance(commands, list)
+            or any(
+                not isinstance(command, dict)
+                or set(command) != {"command", "returncode", "stderr", "stdout"}
+                or not isinstance(command.get("command"), list)
+                or not all(isinstance(argument, str) for argument in command["command"])
+                or type(command.get("returncode")) is not int
+                or not isinstance(command.get("stderr"), str)
+                or not isinstance(command.get("stdout"), str)
+                for command in commands
+            )
+        ):
+            raise BootstrapError("UNCOMMITTED_BOOTSTRAP_EVIDENCE_HISTORY_INVALID")
+        allowed.add(resolved)
+    return allowed
+
+
 def audit_uncommitted_root(governance: Path) -> None:
     """Allow only the bounded footprint created before version commitment."""
     allowed = {
@@ -574,6 +643,7 @@ def audit_uncommitted_root(governance: Path) -> None:
     ):
         raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
     bootstrap_evidence = validate_blocked_record(governance)
+    bootstrap_evidence = validate_blocked_evidence_history(governance, bootstrap_evidence)
     for name in ("logs", "worktrees", "proposals"):
         path = governance / name
         if path.is_symlink() or (path.exists() and not path.is_dir()):

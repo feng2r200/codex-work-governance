@@ -656,6 +656,11 @@ def uncommitted_governance_footprint_errors(root: Path) -> list[str]:
         errors.append("uncommitted governance root has a non-canonical .gitignore")
     bootstrap_evidence, bootstrap_errors = uncommitted_bootstrap_record(root)
     errors.extend(bootstrap_errors)
+    bootstrap_evidence, bootstrap_history_errors = uncommitted_bootstrap_evidence_history(
+        root,
+        bootstrap_evidence,
+    )
+    errors.extend(bootstrap_history_errors)
     for name in ("logs", "worktrees", "proposals"):
         path = governance / name
         if path.is_symlink() or (path.exists() and not path.is_dir()):
@@ -812,6 +817,83 @@ def uncommitted_bootstrap_record(root: Path) -> tuple[set[Path], list[str]]:
     ):
         return set(), ["uncommitted bootstrap evidence contract is invalid"]
     return {evidence_path.resolve()}, []
+
+
+def uncommitted_bootstrap_evidence_history(
+    root: Path,
+    current_evidence: set[Path],
+) -> tuple[set[Path], list[str]]:
+    """Validate prior non-authoritative blocked evidence retained before layout commit."""
+    bootstrap = governance_root(root) / "evidence" / "bootstrap"
+    if not bootstrap.exists() and not bootstrap.is_symlink():
+        return current_evidence, []
+    if bootstrap.is_symlink() or not bootstrap.is_dir():
+        return current_evidence, ["uncommitted bootstrap evidence directory is invalid"]
+    evidence_children = tuple(sorted(bootstrap.iterdir()))
+    if evidence_children and len(current_evidence) != 1:
+        return current_evidence, [
+            "uncommitted bootstrap evidence history lacks one current receipt"
+        ]
+
+    claim_path = bootstrap_claim_path(root)
+    if claim_path.is_symlink() or not claim_path.is_file():
+        return current_evidence, ["uncommitted bootstrap evidence lacks a regular claim"]
+    claim_sha256 = sha256_file(claim_path)
+
+    allowed = set(current_evidence)
+    errors: list[str] = []
+    expected_keys = (BLOCKED_BOOTSTRAP_RECEIPT_KEYS - {"evidence_sha256"}) | {"commands"}
+    for evidence_path in evidence_children:
+        relative = evidence_path.relative_to(root).as_posix()
+        try:
+            strict_bootstrap_evidence_relative(relative)
+            reject_symlink_components(root, evidence_path)
+        except WorkctlError as exc:
+            errors.append(str(exc))
+            continue
+        if evidence_path.is_symlink() or not evidence_path.is_file():
+            errors.append(f"uncommitted bootstrap evidence is not regular: {relative}")
+            continue
+        resolved = evidence_path.resolve()
+        if resolved in current_evidence:
+            continue
+        try:
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            errors.append(f"uncommitted bootstrap evidence is invalid: {relative}")
+            continue
+        expected_ref = f"evidence:{relative}"
+        commands = evidence.get("commands") if isinstance(evidence, dict) else None
+        if (
+            not isinstance(evidence, dict)
+            or set(evidence) != expected_keys
+            or evidence.get("schema_version") != 1
+            or evidence.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
+            or evidence.get("action_revision") != LEGACY_MIGRATION_ACTION_REVISION
+            or evidence.get("status") != "ENVIRONMENT_BLOCKED"
+            or evidence.get("claim_sha256") != claim_sha256
+            or SHA256_RE.fullmatch(str(evidence.get("project_input_sha256"))) is None
+            or evidence.get("evidence_ref") != expected_ref
+            or not isinstance(evidence.get("updated_at"), str)
+            or not isinstance(evidence.get("reason"), str)
+            or not isinstance(evidence.get("plugin_build"), str)
+            or SHA256_RE.fullmatch(str(evidence.get("plugin_manifest_sha256"))) is None
+            or not isinstance(commands, list)
+            or any(
+                not isinstance(command, dict)
+                or set(command) != {"command", "returncode", "stderr", "stdout"}
+                or not isinstance(command.get("command"), list)
+                or not all(isinstance(argument, str) for argument in command["command"])
+                or type(command.get("returncode")) is not int
+                or not isinstance(command.get("stderr"), str)
+                or not isinstance(command.get("stdout"), str)
+                for command in commands
+            )
+        ):
+            errors.append(f"uncommitted bootstrap evidence contract is invalid: {relative}")
+            continue
+        allowed.add(resolved)
+    return allowed, errors
 
 
 def strict_bootstrap_evidence_relative(raw_path: str) -> Path:
