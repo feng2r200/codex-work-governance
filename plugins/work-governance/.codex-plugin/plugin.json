@@ -1,6 +1,6 @@
 {
   "name": "work-governance",
-  "version": "1.0.0+codex.20260727171352",
+  "version": "1.0.1+codex.20260727181800",
   "description": "Govern Codex work and migrate project authority into one versioned local layout.",
   "author": {
     "name": "Work Governance Contributors"
@@ -16,7 +16,7 @@
   "interface": {
     "displayName": "Work Governance",
     "shortDescription": "Govern work lifecycle, evidence, plans, and Git boundaries.",
-    "longDescription": "Work Governance provides a fail-closed lifecycle, a SessionStart layout bootstrap, deterministic Plan control, and focused skills for Git changes, project truth sources, and independent validation.",
+    "longDescription": "Work Governance provides a fail-closed, goal-first lifecycle with ineffective-loop stop-loss, a SessionStart layout bootstrap, deterministic Plan control, and focused skills for Git changes, project truth sources, and independent validation.",
     "developerName": "Work Governance Contributors",
     "category": "Productivity",
     "websiteURL": "https://github.com/feng2r200/codex-work-governance",
