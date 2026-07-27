@@ -70,6 +70,29 @@ def sha256_path(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def file_tree_snapshot(path: Path) -> dict[str, bytes]:
+    """Capture regular-file bytes below a test directory."""
+    return {
+        candidate.relative_to(path).as_posix(): candidate.read_bytes()
+        for candidate in sorted(path.rglob("*"))
+        if candidate.is_file()
+    }
+
+
+def tree_inventory_snapshot(path: Path) -> dict[str, tuple[str, bytes | str]]:
+    """Capture directories, symlinks, and regular bytes without following links."""
+    snapshot: dict[str, tuple[str, bytes | str]] = {}
+    for candidate in sorted(path.rglob("*")):
+        relative = candidate.relative_to(path).as_posix()
+        if candidate.is_symlink():
+            snapshot[relative] = ("symlink", os.readlink(candidate))
+        elif candidate.is_dir():
+            snapshot[relative] = ("directory", "")
+        elif candidate.is_file():
+            snapshot[relative] = ("file", candidate.read_bytes())
+    return snapshot
+
+
 def legacy_frontmatter(plan_id: str, *, status: str = "active") -> dict[str, Any]:
     """Build a schema-v1 Plan fixture without authority metadata."""
     return {
@@ -161,7 +184,32 @@ def write_legacy_active(cwd: Path, plan_id: str = "PLAN-20260723-001") -> Path:
     return path
 
 
-def write_migratable_legacy(cwd: Path, plan_id: str = "PLAN-20260723-001") -> Path:
+def adopt_legacy(cwd: Path, *, ref: str = "user:test-legacy-adoption") -> dict[str, Any]:
+    """Bind the current legacy fixture snapshot to this physical worktree."""
+    status = json.loads(run_workctl(cwd, "layout", "status").stdout)
+    legacy = status["legacy"]
+    result = run_workctl(
+        cwd,
+        "layout",
+        "adopt",
+        "--expected-manifest-sha256",
+        legacy["manifest_sha256"],
+        "--expected-active-plan-id",
+        legacy["active_plan_id"],
+        "--ref",
+        ref,
+    )
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "LEGACY_ADOPTED"
+    return cast(dict[str, Any], payload)
+
+
+def write_migratable_legacy(
+    cwd: Path,
+    plan_id: str = "PLAN-20260723-001",
+    *,
+    adopt: bool = True,
+) -> Path:
     """Create a governed schema-v2 project-root layout eligible for migration."""
     path = cwd / "_Plan" / f"{plan_id}.md"
     write_markdown_plan(path, canonical_frontmatter(plan_id))
@@ -188,6 +236,8 @@ def write_migratable_legacy(cwd: Path, plan_id: str = "PLAN-20260723-001") -> Pa
         f"- Canonical Plan: [{plan_id}]({plan_id}.md)\n",
         encoding="utf-8",
     )
+    if adopt:
+        adopt_legacy(cwd)
     return path
 
 
@@ -502,10 +552,9 @@ def test_layout_preserves_ordinary_business_plan_directory(tmp_path: Path) -> No
     assert not (tmp_path / ".work-governance" / "_Plan").exists()
 
 
-def test_layout_classifier_requires_positive_legacy_ownership_signal(tmp_path: Path) -> None:
-    """A valid-looking business Plan tree is not absorbed without a generated signal."""
-    source = write_migratable_legacy(tmp_path)
-    (source.parent / "PLAN-20260720-999.md").unlink()
+def test_layout_classifier_requires_explicit_worktree_adoption(tmp_path: Path) -> None:
+    """A valid-looking Plan tree is not absorbed without an explicit local receipt."""
+    source = write_migratable_legacy(tmp_path, adopt=False)
 
     status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
     migration = run_workctl(tmp_path, "layout", "migrate", check=False)
@@ -513,11 +562,139 @@ def test_layout_classifier_requires_positive_legacy_ownership_signal(tmp_path: P
     assert status["layout_state"] == "LEGACY_CLASSIFICATION_REQUIRED"
     assert status["legacy"]["classification"] == "AMBIGUOUS"
     assert any(
-        "lacks a matching generated pointer" in reason
+        "lacks an explicit worktree adoption receipt" in reason
         for reason in status["legacy"]["blocking_reasons"]
     )
     assert migration.returncode == 2
     assert source.is_file()
+
+
+def test_controller_resolves_only_the_nearest_linked_worktree_plan(tmp_path: Path) -> None:
+    """Nested invocations use the physical linked worktree that owns their Git marker."""
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=repository,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Work Governance Test"],
+        cwd=repository,
+        check=True,
+    )
+    (repository / ".gitignore").write_text("/.worktree/\n", encoding="utf-8")
+    (repository / "tracked.txt").write_text("baseline\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=repository, check=True)
+    linked = repository / ".worktree" / "feature"
+    subprocess.run(
+        [
+            "git",
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            str(linked),
+            "HEAD",
+        ],
+        cwd=repository,
+        check=True,
+    )
+    run_workctl(repository, "layout", "migrate")
+    run_workctl(
+        repository,
+        "plan",
+        "init",
+        "--plan-id",
+        "PLAN-20260727-101",
+        "--title",
+        "Main Plan",
+    )
+    run_workctl(linked, "layout", "migrate")
+    run_workctl(
+        linked,
+        "plan",
+        "init",
+        "--plan-id",
+        "PLAN-20260727-202",
+        "--title",
+        "Feature Plan",
+    )
+    main_nested = repository / "src" / "deep"
+    linked_nested = linked / "src" / "deep"
+    main_nested.mkdir(parents=True)
+    linked_nested.mkdir(parents=True)
+    main_before = sha256_path(repository / ".work-governance" / "_Plan" / "PLAN-20260727-101.md")
+    linked_before = sha256_path(linked / ".work-governance" / "_Plan" / "PLAN-20260727-202.md")
+
+    main_status = json.loads(run_workctl(main_nested, "plan", "status").stdout)
+    linked_status = json.loads(run_workctl(linked_nested, "plan", "status").stdout)
+
+    assert main_status["plan_id"] == "PLAN-20260727-101"
+    assert linked_status["plan_id"] == "PLAN-20260727-202"
+    assert (
+        sha256_path(repository / ".work-governance" / "_Plan" / "PLAN-20260727-101.md")
+        == main_before
+    )
+    assert (
+        sha256_path(linked / ".work-governance" / "_Plan" / "PLAN-20260727-202.md") == linked_before
+    )
+
+
+def test_legacy_adoption_receipt_cannot_replay_across_worktrees(tmp_path: Path) -> None:
+    """A receipt copied from main does not authorize an identical sibling snapshot."""
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    write_migratable_legacy(repository, adopt=False)
+    (repository / ".gitignore").write_text("/.worktree/\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=repository,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Work Governance Test"],
+        cwd=repository,
+        check=True,
+    )
+    subprocess.run(["git", "add", "."], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-qm", "legacy baseline"], cwd=repository, check=True)
+    linked = repository / ".worktree" / "feature"
+    subprocess.run(
+        [
+            "git",
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            str(linked),
+            "HEAD",
+        ],
+        cwd=repository,
+        check=True,
+    )
+    main_receipt = adopt_legacy(repository)
+    claim_governance_root(linked)
+    linked_receipt = linked / ".work-governance" / "runtime" / "legacy-adoption.json"
+    shutil.copy2(repository / main_receipt["receipt"], linked_receipt)
+
+    replayed = json.loads(run_workctl(linked, "layout", "status").stdout)
+
+    assert replayed["layout_state"] == "LEGACY_CLASSIFICATION_REQUIRED"
+    assert any(
+        "does not match this worktree" in reason
+        for reason in replayed["legacy"]["blocking_reasons"]
+    )
+    adopt_legacy(linked, ref="user:test-linked-adoption")
+    adopted = json.loads(run_workctl(linked, "layout", "status").stdout)
+    assert adopted["layout_state"] == "LAYOUT_MIGRATION_REQUIRED"
+    assert (repository / "_Plan").is_dir()
+    assert (linked / "_Plan").is_dir()
 
 
 @pytest.mark.parametrize("ignore_bytes", [None, "business-cache/\n"])
@@ -835,28 +1012,9 @@ def test_layout_recovery_rejects_snapshot_drift(tmp_path: Path) -> None:
     assert not (tmp_path / ".work-governance" / "_Plan").exists()
 
 
-@pytest.mark.parametrize(
-    ("drift_target", "expected_error"),
-    [
-        ("managed-project-file", "LAYOUT_PROJECT_FILE_DRIFT: AGENTS.md"),
-        (
-            "proven-log",
-            "LAYOUT_LOG_INPUT_DRIFT: .logs/PLAN-20260723-001.jsonl",
-        ),
-    ],
-)
-def test_layout_recovery_rejects_every_staged_side_input_drift(
-    tmp_path: Path, drift_target: str, expected_error: str
-) -> None:
-    """Managed project files and proven logs remain frozen after staging."""
+def test_layout_recovery_rejects_proven_log_drift(tmp_path: Path) -> None:
+    """A proven governance log remains frozen after transaction staging."""
     write_migratable_legacy(tmp_path)
-    agents = tmp_path / "AGENTS.md"
-    agents.write_text(
-        "<!-- WORK_GOVERNANCE:BEGIN -->\n"
-        "`_Plan/PLAN-20260723-001.md` is the authoritative current execution Plan.\n"
-        "<!-- WORK_GOVERNANCE:END -->\n",
-        encoding="utf-8",
-    )
     governed_log = tmp_path / ".logs" / "PLAN-20260723-001.jsonl"
     governed_log.parent.mkdir()
     governed_log.write_text(
@@ -871,13 +1029,15 @@ def test_layout_recovery_rejects_every_staged_side_input_drift(
         env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "staged"},
     )
     assert interrupted.returncode == 2
-    target = agents if drift_target == "managed-project-file" else governed_log
-    target.write_text(target.read_text(encoding="utf-8") + "drift\n", encoding="utf-8")
+    governed_log.write_text(
+        governed_log.read_text(encoding="utf-8") + "drift\n",
+        encoding="utf-8",
+    )
 
     recovery = run_workctl(tmp_path, "layout", "recover", check=False)
 
     assert recovery.returncode == 2
-    assert expected_error in recovery.stderr
+    assert "LAYOUT_LOG_INPUT_DRIFT: .logs/PLAN-20260723-001.jsonl" in recovery.stderr
     assert (tmp_path / "_Plan").is_dir()
     assert not (tmp_path / ".work-governance" / "_Plan").exists()
 
@@ -1003,7 +1163,6 @@ def test_layout_rejects_nested_evidence_symlink_before_transaction_write(
 ) -> None:
     """A nested evidence parent cannot redirect migration proof copies."""
     write_migratable_legacy(tmp_path)
-    claim_governance_root(tmp_path)
     evidence = tmp_path / ".work-governance" / "evidence"
     evidence.mkdir(parents=True)
     outside = tmp_path / "outside"
@@ -1023,8 +1182,6 @@ def test_layout_rejects_nested_evidence_symlink_before_transaction_write(
     [
         "lock-symlink",
         "rules-symlink",
-        "invalid-managed-marker",
-        "aligned-unmanaged-rule",
         "unregistered-active-plan",
         "unfinished-indexed-plan",
     ],
@@ -1042,16 +1199,6 @@ def test_layout_classifier_rejects_unclosed_governance_inventory(
         outside = tmp_path / "rules.md"
         outside.write_text("rules\n", encoding="utf-8")
         (tmp_path / "AGENTS.md").symlink_to(outside)
-    elif hazard == "invalid-managed-marker":
-        (tmp_path / "AGENTS.md").write_text(
-            "<!-- WORK_GOVERNANCE:BEGIN -->\n`_Plan/PLAN-20260723-001.md` is authoritative.\n",
-            encoding="utf-8",
-        )
-    elif hazard == "aligned-unmanaged-rule":
-        (tmp_path / "AGENTS.md").write_text(
-            "`_Plan/PLAN-20260723-001.md` is the authoritative current execution Plan.\n",
-            encoding="utf-8",
-        )
     elif hazard == "unregistered-active-plan":
         extra = source.parent / "PLAN-20260722-999.md"
         write_markdown_plan(extra, canonical_frontmatter("PLAN-20260722-999"))
@@ -1074,6 +1221,27 @@ def test_layout_classifier_rejects_unclosed_governance_inventory(
 
     assert status["layout_state"] == "LEGACY_CLASSIFICATION_REQUIRED"
     assert status["legacy"]["classification"] == "AMBIGUOUS"
+
+
+@pytest.mark.parametrize(
+    "rules_bytes",
+    [
+        b"`_Plan/PLAN-20260723-001.md` is the authoritative current execution Plan.\n",
+        (b"<!-- WORK_GOVERNANCE:BEGIN -->\n`_Plan/PLAN-20260723-001.md` is authoritative.\n"),
+    ],
+)
+def test_layout_never_requires_or_rewrites_project_rule_markers(
+    tmp_path: Path,
+    rules_bytes: bytes,
+) -> None:
+    """User-authored project rules are preserved and are not migration credentials."""
+    write_migratable_legacy(tmp_path)
+    rules = tmp_path / "AGENTS.md"
+    rules.write_bytes(rules_bytes)
+
+    run_workctl(tmp_path, "layout", "migrate")
+
+    assert rules.read_bytes() == rules_bytes
 
 
 def test_layout_incomplete_legacy_journal_requires_recovery(tmp_path: Path) -> None:
@@ -1105,7 +1273,6 @@ def test_layout_incomplete_legacy_journal_requires_recovery(tmp_path: Path) -> N
 def test_layout_old_and_new_authorities_require_reconciliation(tmp_path: Path) -> None:
     """Two pre-commit authority roots cannot be selected by precedence."""
     source = write_migratable_legacy(tmp_path)
-    claim_governance_root(tmp_path)
     canonical = tmp_path / ".work-governance" / "_Plan"
     shutil.copytree(source.parent, canonical)
 
@@ -1163,10 +1330,11 @@ def test_layout_converts_only_allowlisted_operational_content(tmp_path: Path) ->
         '{"schema_version":1,"plan_id":"PLAN-20260723-001"}\n',
         encoding="utf-8",
     )
+    agents_before = (tmp_path / "AGENTS.md").read_bytes()
+    adopt_legacy(tmp_path)
 
     run_workctl(tmp_path, "layout", "migrate")
     migrated, body = read_plan(tmp_path)
-    agents = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
 
     assert migrated["revision"] == 2
     assert migrated["delivery"]["evidence_ref"] == (
@@ -1177,8 +1345,7 @@ def test_layout_converts_only_allowlisted_operational_content(tmp_path: Path) ->
     assert (
         tmp_path / ".work-governance" / "_Plan" / "archive" / "historical.md"
     ).read_bytes() == archive_bytes
-    assert "Business note: `_Plan/do-not-rewrite.md`." in agents
-    assert "`.work-governance/_Plan/PLAN-20260723-001.md` is the authoritative" in agents
+    assert (tmp_path / "AGENTS.md").read_bytes() == agents_before
 
 
 def test_layout_moves_and_rewrites_lineage_and_journal_evidence_refs(
@@ -1246,6 +1413,7 @@ def test_layout_moves_and_rewrites_lineage_and_journal_evidence_refs(
     rollover_log.parent.mkdir(parents=True)
     predecessor_log.write_text("predecessor evidence\n", encoding="utf-8")
     rollover_log.write_text("rollover evidence\n", encoding="utf-8")
+    adopt_legacy(tmp_path)
 
     run_workctl(tmp_path, "layout", "migrate")
 
@@ -1281,6 +1449,7 @@ def test_layout_rejects_a_converted_evidence_ref_without_source_log(
     frontmatter = canonical_frontmatter("PLAN-20260723-001")
     frontmatter["delivery"] = {"evidence_ref": "evidence:.logs/PLAN-20260723-001/missing.json"}
     write_markdown_plan(active, frontmatter)
+    adopt_legacy(tmp_path)
 
     migration = run_workctl(tmp_path, "layout", "migrate", check=False)
     after_failure = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
@@ -1538,6 +1707,7 @@ def test_layout_preparing_recovery_preserves_registered_path_foreign_bytes(
         archive = active.parent / "archive"
         archive.mkdir()
         (archive / "source.txt").write_text("source\n", encoding="utf-8")
+    adopt_legacy(tmp_path)
     interrupted = run_workctl(
         tmp_path,
         "layout",
@@ -1668,6 +1838,7 @@ def test_layout_rejects_unsupported_lineage_path(tmp_path: Path) -> None:
         "sha256": sha256_path(predecessor),
     }
     write_markdown_plan(source, frontmatter)
+    adopt_legacy(tmp_path)
 
     migration = run_workctl(tmp_path, "layout", "migrate", check=False)
 
@@ -1790,6 +1961,7 @@ def test_layout_recovery_rejects_git_baseline_drift(tmp_path: Path) -> None:
     )
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-qm", "baseline"], cwd=tmp_path, check=True)
+    adopt_legacy(tmp_path)
     interrupted = run_workctl(
         tmp_path,
         "layout",
@@ -1839,8 +2011,16 @@ def test_layout_manifests_and_completion_proof_are_reproducible(
     )
     evidence = version["migration"]["completion_evidence"]
     proof = tmp_path / evidence["path"]
+    proof_payload = yaml.safe_load(proof.read_text(encoding="utf-8"))
     assert evidence["kind"] == "migration-proof"
     assert sha256_path(proof) == evidence["sha256"]
+    assert proof_payload["legacy_adoption_sha256"] == journal["legacy_adoption_sha256"]
+    assert "project_files" not in journal
+    assert "planned_project_files" not in journal
+    assert all(
+        conversion["kind"] not in {"managed-project-marker", "generated-pointer"}
+        for conversion in journal["conversion_table"]
+    )
     assert version["migration"]["legacy_manifest_sha256"] == (journal["legacy_manifest_sha256"])
     assert (
         version["migration"]["new_layout_baseline_sha256"]
@@ -1939,6 +2119,8 @@ def test_layout_converts_lineage_pointer_and_operational_journal_once(
         ),
         encoding="utf-8",
     )
+    pointer_before = pointer.read_bytes()
+    adopt_legacy(tmp_path)
 
     run_workctl(tmp_path, "layout", "migrate")
 
@@ -1962,7 +2144,7 @@ def test_layout_converts_lineage_pointer_and_operational_journal_once(
         "revision": 1,
         "sha256": sha256_path(migrated_predecessor),
     }
-    assert "Recorded path: `.work-governance/_Plan/PLAN-20260723-001.md`" in migrated_pointer
+    assert migrated_pointer.encode() == pointer_before
     assert migrated_rollover["source_plan"]["path"] == ".work-governance/_Plan/PLAN-20260722-001.md"
     assert migrated_rollover["description"] == "Historical prose keeps _Plan/business.md"
 
@@ -2003,6 +2185,7 @@ def test_layout_preserves_registered_legacy_worktree_path(tmp_path: Path) -> Non
     )
     marker = legacy_worktree / "tracked.txt"
     marker_bytes = marker.read_bytes()
+    adopt_legacy(tmp_path)
 
     run_workctl(tmp_path, "layout", "migrate")
 
@@ -2987,6 +3170,74 @@ def test_docs_plan_designated_by_agents_requires_migration(tmp_path: Path) -> No
     assert "project-rule-explicit" in report["candidates"][0]["signals"]
 
 
+def test_root_plan_rule_is_ignored_after_layout_ready(tmp_path: Path) -> None:
+    """Project rules cannot return the legacy root to normal authority discovery."""
+    init_plan(tmp_path)
+    root_plan = tmp_path / "_Plan" / "Plan.md"
+    write_markdown_plan(root_plan, legacy_frontmatter("PLAN-20260722-999"))
+    original_bytes = root_plan.read_bytes()
+    conventional_plan = tmp_path / "Plan.md"
+    conventional_plan.write_text("# Business planning notes\n", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text(
+        "`_Plan/Plan.md` is the authoritative execution Plan and must be updated.\n",
+        encoding="utf-8",
+    )
+
+    report = json.loads(run_workctl(tmp_path, "plan", "authority", "inspect").stdout)
+
+    assert report["authority_state"] == "GOVERNED_ACTIVE"
+    assert "_Plan/Plan.md" not in {candidate["path"] for candidate in report["candidates"]}
+    conventional_candidate = next(
+        candidate for candidate in report["candidates"] if candidate["path"] == "Plan.md"
+    )
+    assert conventional_candidate["classification"] == "NON_AUTHORITY"
+    assert "project-rule-explicit" not in conventional_candidate["signals"]
+    assert root_plan.read_bytes() == original_bytes
+
+
+@pytest.mark.parametrize("candidate", ["_Plan/Plan.md", "./_Plan/Plan.md"])
+def test_root_plan_explicit_authority_candidate_is_rejected(
+    tmp_path: Path,
+    candidate: str,
+) -> None:
+    """Explicit semantic input cannot bypass the legacy-root authority boundary."""
+    init_plan(tmp_path)
+    root_plan = tmp_path / "_Plan" / "Plan.md"
+    write_markdown_plan(root_plan, legacy_frontmatter("PLAN-20260722-999"))
+    original_bytes = root_plan.read_bytes()
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "authority",
+        "inspect",
+        "--candidate",
+        f"{candidate}=CONFIRMED_AUTHORITY",
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert f"LEGACY_ROOT_AUTHORITY_FORBIDDEN: {candidate}" in result.stderr
+    assert root_plan.read_bytes() == original_bytes
+
+
+def test_root_plan_symlink_cannot_become_normal_authority(tmp_path: Path) -> None:
+    """A conventional path resolving into root ``_Plan`` is ignored."""
+    init_plan(tmp_path)
+    root_plan = tmp_path / "_Plan" / "Plan.md"
+    write_markdown_plan(root_plan, legacy_frontmatter("PLAN-20260722-999"))
+    (tmp_path / "Plan.md").symlink_to(root_plan.relative_to(tmp_path))
+    (tmp_path / "AGENTS.md").write_text(
+        "`Plan.md` is the authoritative execution Plan and must be updated.\n",
+        encoding="utf-8",
+    )
+
+    report = json.loads(run_workctl(tmp_path, "plan", "authority", "inspect").stdout)
+
+    assert report["authority_state"] == "GOVERNED_ACTIVE"
+    assert "_Plan/Plan.md" not in {candidate["path"] for candidate in report["candidates"]}
+
+
 def test_phase_plan_and_next_step_text_do_not_trigger_authority(tmp_path: Path) -> None:
     """Plan-like words alone do not create execution authority."""
     run_workctl(tmp_path, "layout", "migrate")
@@ -3180,6 +3431,115 @@ def test_reconcile_requires_separate_agents_confirmation_and_shows_diff(
     ]
     assert blocked.returncode == 2
     assert "MANIFEST_CONFIRMATION_REQUIRED: agents_rewrite" in blocked.stderr
+
+
+def test_reconcile_rejects_root_plan_source_without_writing_it(tmp_path: Path) -> None:
+    """Reconciliation cannot archive or pointer-write a project-root Plan."""
+    manifest_path = write_reconciliation_fixture(tmp_path)
+    docs_plan = tmp_path / "docs" / "Plan.md"
+    root_plan = tmp_path / "_Plan" / "Plan.md"
+    root_plan.parent.mkdir()
+    shutil.copy2(docs_plan, root_plan)
+    original_bytes = root_plan.read_bytes()
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["sources"][0]["path"] = "_Plan/Plan.md"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "LEGACY_ROOT_AUTHORITY_FORBIDDEN: _Plan/Plan.md" in result.stderr
+    assert root_plan.read_bytes() == original_bytes
+    assert not (tmp_path / ".work-governance" / "_Plan" / ".migrations").exists()
+
+
+def test_reconcile_rejects_root_plan_as_agents_rewrite_target(tmp_path: Path) -> None:
+    """The separately confirmed rules rewrite is exactly scoped to root AGENTS.md."""
+    manifest_path = write_reconciliation_fixture(tmp_path, include_agents_rewrite=True)
+    agents_path = tmp_path / "AGENTS.md"
+    root_rules = tmp_path / "_Plan" / "Rules.md"
+    root_rules.parent.mkdir()
+    shutil.copy2(agents_path, root_rules)
+    original_bytes = root_rules.read_bytes()
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["agents_rewrite"]["path"] = "_Plan/Rules.md"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "LEGACY_ROOT_AUTHORITY_FORBIDDEN: _Plan/Rules.md" in result.stderr
+    assert root_rules.read_bytes() == original_bytes
+    assert not (tmp_path / ".work-governance" / "_Plan" / ".migrations").exists()
+
+
+@pytest.mark.parametrize(
+    "symlink_component",
+    ["migrations", "migration", "staging"],
+)
+def test_reconcile_stage_rejects_symlink_into_root_plan_before_writing(
+    tmp_path: Path,
+    symlink_component: str,
+) -> None:
+    """Initial staging cannot traverse a transaction symlink into root ``_Plan``."""
+    manifest_path = write_reconciliation_fixture(tmp_path)
+    bind_reconciliation_confirmations(
+        tmp_path,
+        manifest_path,
+        include_agents_confirmation=False,
+    )
+    root_plan = tmp_path / "_Plan"
+    root_plan.mkdir()
+    (root_plan / "business-plan.md").write_bytes(b"ROOT-BUSINESS-BYTES")
+    canonical_plan = tmp_path / ".work-governance" / "_Plan"
+    migrations = canonical_plan / ".migrations"
+    migration_dir = migrations / "MIG-20260724-001"
+    if symlink_component == "migrations":
+        migrations.symlink_to(root_plan, target_is_directory=True)
+    else:
+        migrations.mkdir()
+        if symlink_component == "migration":
+            migration_dir.symlink_to(root_plan, target_is_directory=True)
+        else:
+            migration_dir.mkdir()
+            (migration_dir / "staging").symlink_to(root_plan, target_is_directory=True)
+    root_before = tree_inventory_snapshot(root_plan)
+    canonical_before = tree_inventory_snapshot(canonical_plan)
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "LAYOUT_PATH_SYMLINK: .work-governance/_Plan/.migrations" in result.stderr
+    assert tree_inventory_snapshot(root_plan) == root_before
+    assert tree_inventory_snapshot(canonical_plan) == canonical_before
+    assert not (root_plan / "target-plan.md").exists()
+    assert not (root_plan / "sources").exists()
 
 
 def test_reconcile_confirmation_digest_rejects_changed_prepared_plan(tmp_path: Path) -> None:
@@ -3455,6 +3815,66 @@ def test_recovery_rechecks_staged_agents_replacement_hash(tmp_path: Path) -> Non
 
     assert recovered.returncode == 2
     assert "STAGED_AGENTS_REWRITE_HASH_MISMATCH" in recovered.stderr
+
+
+@pytest.mark.parametrize(
+    "tampered_field",
+    ["archive_path", "target_path", "agents_rewrite.path"],
+)
+def test_recovery_preflights_all_paths_before_any_write(
+    tmp_path: Path,
+    tampered_field: str,
+) -> None:
+    """A forged journal path fails before root or canonical transaction bytes change."""
+    manifest_path = write_reconciliation_fixture(tmp_path, include_agents_rewrite=True)
+    bind_reconciliation_confirmations(
+        tmp_path,
+        manifest_path,
+        include_agents_confirmation=True,
+    )
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={"WORKCTL_TEST_INTERRUPT_AFTER": "archive:docs/Plan.md"},
+    )
+    assert interrupted.returncode == 2
+
+    root_plan = tmp_path / "_Plan"
+    root_plan.mkdir()
+    (root_plan / "business-plan.md").write_bytes(b"ROOT-BUSINESS-BYTES")
+    journal_path = tmp_path / ".work-governance" / "_Plan" / ".migrations" / "MIG-20260724-001.yaml"
+    journal = yaml.safe_load(journal_path.read_text(encoding="utf-8"))
+    forbidden_path = "_Plan/recovery-write.md"
+    if tampered_field == "archive_path":
+        journal["sources"][1]["archive_path"] = forbidden_path
+    elif tampered_field == "target_path":
+        journal["target_path"] = forbidden_path
+    else:
+        journal["agents_rewrite"]["path"] = forbidden_path
+    journal_path.write_text(yaml.safe_dump(journal, sort_keys=False), encoding="utf-8")
+    root_before = file_tree_snapshot(root_plan)
+    transaction_before = file_tree_snapshot(journal_path.parent)
+
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile",
+        "recover",
+        "--migration-id",
+        "MIG-20260724-001",
+        check=False,
+    )
+
+    assert recovered.returncode == 2
+    assert f"LEGACY_ROOT_AUTHORITY_FORBIDDEN: {forbidden_path}" in recovered.stderr
+    assert file_tree_snapshot(root_plan) == root_before
+    assert file_tree_snapshot(journal_path.parent) == transaction_before
+    assert not (tmp_path / forbidden_path).exists()
 
 
 def test_post_activation_interrupt_keeps_journal_recoverable(tmp_path: Path) -> None:

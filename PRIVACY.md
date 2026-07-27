@@ -17,8 +17,11 @@ UV configuration, or Python installations. After readiness, controller checks
 run offline.
 
 Plan state is versionable under `.work-governance/_Plan/`. Process logs,
-bootstrap receipts, dependency cache, migration runtime, and detailed evidence
-remain locally ignored under `.work-governance/` by default. Legacy `.logs/`
+bootstrap and legacy-adoption receipts, dependency cache, migration runtime,
+and detailed evidence remain locally ignored under `.work-governance/` by
+default. A legacy-adoption receipt contains local physical worktree and Git
+identity paths so that it cannot authorize another worktree; only its digest is
+retained in the versionable migration proof. Legacy `.logs/`
 entries move only when Plan ID, log schema, or an active evidence reference
 proves Work Governance ownership; unrelated business logs remain in place.
 Users should not place credentials, secrets, or unnecessary personal data in
