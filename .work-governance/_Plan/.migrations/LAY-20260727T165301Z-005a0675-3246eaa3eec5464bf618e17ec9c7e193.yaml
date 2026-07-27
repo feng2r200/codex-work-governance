@@ -1,0 +1,8 @@
+schema_version: 1
+kind: layout-migration-proof
+transaction_id: LAY-20260727T165301Z-005a0675-3246eaa3eec5464bf618e17ec9c7e193
+status: prepared
+legacy_manifest_sha256: 005a06750e8aff45db859730889631c09fbe856b184ac6ba47762c1626bd90b5
+legacy_adoption_sha256: ac1d49e0493e94d55d1b85c64927b3c2dda5090853ed4432b6b42484f1260bbe
+conversion_table_sha256: 3e5648446e2af5cfd482e3d4037867f478d99793d65c3f42f7d7add3cf907b8e
+created_at: '2026-07-27T16:53:01+00:00'

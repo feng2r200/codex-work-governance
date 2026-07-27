@@ -1,0 +1,15 @@
+schema_version: 1
+layout_version: 1
+bootstrap_contract_version: 1
+plugin_compatibility: '>=1.0.0,<2.0.0'
+legacy_migration_action_revision: 2
+migration:
+  status: migrated
+  transaction_id: LAY-20260727T165301Z-005a0675-3246eaa3eec5464bf618e17ec9c7e193
+  legacy_manifest_sha256: 005a06750e8aff45db859730889631c09fbe856b184ac6ba47762c1626bd90b5
+  new_layout_baseline_sha256: 78664798af54921c3e4f9cb9b446afd29e5813c79e88d43cd90c1f07f88d4c4d
+  completion_evidence:
+    kind: migration-proof
+    path: .work-governance/_Plan/.migrations/LAY-20260727T165301Z-005a0675-3246eaa3eec5464bf618e17ec9c7e193.yaml
+    sha256: 8a5b9cb8925c6ecaebdc4c6209a1062a44d7d9e337948fc086dac64bb221f0c6
+    completed_at: '2026-07-27T16:53:01+00:00'

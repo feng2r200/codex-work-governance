@@ -1,0 +1,8 @@
+/logs/
+/worktrees/
+/cache/
+/proposals/
+/evidence/
+/runtime/
+/bootstrap-state.json
+/workctl.lock
