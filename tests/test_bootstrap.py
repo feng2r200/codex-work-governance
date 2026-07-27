@@ -230,6 +230,133 @@ def test_bootstrap_prewarms_then_runs_controller_offline(tmp_path: Path) -> None
     assert not (project / "pyproject.toml").exists()
 
 
+def test_prewarm_retry_keeps_prior_bootstrap_evidence_and_allows_adoption(
+    tmp_path: Path,
+) -> None:
+    """A failed prewarm followed by classification cannot self-block adoption."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv_log = tmp_path / "uv.jsonl"
+    install_fake_uv(fake_bin, uv_log)
+    project = tmp_path / "project"
+    project.mkdir()
+    write_migratable_legacy(project)
+
+    prewarm_blocked = run_hook(
+        project,
+        fake_bin,
+        uv_log,
+        environment_overrides={"WORK_GOVERNANCE_TEST_FAKE_UV_FAIL_PREWARM": "1"},
+    )
+    classification_blocked = run_hook(
+        project,
+        fake_bin,
+        uv_log,
+        payload={
+            "session_id": "classification-retry",
+            "cwd": str(project),
+            "hook_event_name": "SessionStart",
+            "source": "resume",
+        },
+    )
+    status = json.loads(
+        subprocess.run(
+            [sys.executable, str(WORKCTL), "layout", "status"],
+            cwd=project,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+    )
+    adoption = adopt_legacy(project)
+    migrated = run_hook(
+        project,
+        fake_bin,
+        uv_log,
+        payload={
+            "session_id": "migration-after-history",
+            "cwd": str(project),
+            "hook_event_name": "SessionStart",
+            "source": "resume",
+        },
+    )
+    evidence = list((project / ".work-governance" / "evidence" / "bootstrap").iterdir())
+
+    assert (
+        "CONTROLLER_PREWARM_FAILED" in (prewarm_blocked["hookSpecificOutput"]["additionalContext"])
+    )
+    assert (
+        "LAYOUT_MIGRATION_NOT_READY"
+        in (classification_blocked["hookSpecificOutput"]["additionalContext"])
+    )
+    assert status["layout_state"] == "LEGACY_CLASSIFICATION_REQUIRED"
+    assert status["legacy"]["classification"] == "AMBIGUOUS"
+    assert adoption["status"] == "LEGACY_ADOPTED"
+    assert (
+        "WORK_GOVERNANCE_BOOTSTRAP READY" in (migrated["hookSpecificOutput"]["additionalContext"])
+    )
+    assert (project / ".work-governance" / "version.yaml").is_file()
+    assert not (project / "_Plan").exists()
+    assert len(evidence) == 3
+
+
+@pytest.mark.parametrize("forgery", ["invalid-json", "symlink-current", "missing-receipt"])
+def test_forged_prior_bootstrap_evidence_blocks_next_session(
+    tmp_path: Path,
+    forgery: str,
+) -> None:
+    """An unbound history-shaped file cannot be smuggled through bootstrap retry."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv_log = tmp_path / "uv.jsonl"
+    install_fake_uv(fake_bin, uv_log)
+    project = tmp_path / "project"
+    project.mkdir()
+    write_migratable_legacy(project)
+    run_hook(project, fake_bin, uv_log)
+    governance = project / ".work-governance"
+    receipt_path = governance / "bootstrap-state.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    current_evidence = project / receipt["evidence_ref"].removeprefix("evidence:")
+    forged = governance / "evidence" / "bootstrap" / "20260727T000000.000000Z-999.json"
+    if forgery == "invalid-json":
+        forged.write_text("{}\n", encoding="utf-8")
+    elif forgery == "symlink-current":
+        forged.symlink_to(current_evidence.name)
+    else:
+        receipt_path.unlink()
+
+    controller_status = json.loads(
+        subprocess.run(
+            [sys.executable, str(WORKCTL), "layout", "status"],
+            cwd=project,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+    )
+
+    blocked = run_hook(
+        project,
+        fake_bin,
+        uv_log,
+        payload={
+            "session_id": "forged-history",
+            "cwd": str(project),
+            "hook_event_name": "SessionStart",
+            "source": "resume",
+        },
+    )
+
+    assert (
+        "UNCOMMITTED_BOOTSTRAP_EVIDENCE_HISTORY_INVALID"
+        in (blocked["hookSpecificOutput"]["additionalContext"])
+    )
+    assert controller_status["layout_state"] == "ENVIRONMENT_BLOCKED"
+    assert not (project / ".work-governance" / "version.yaml").exists()
+    assert (project / "_Plan").is_dir()
+
+
 def test_session_start_bootstraps_only_the_nearest_linked_worktree(tmp_path: Path) -> None:
     """A nested SessionStart cwd creates governance only in its linked worktree."""
     repository = tmp_path / "repository"
