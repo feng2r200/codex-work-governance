@@ -330,9 +330,9 @@ def create_bootstrap_claim(
     controller_sha256: str,
     input_digest: str,
 ) -> None:
-    """Exclusively claim a newly created root before creating local infrastructure."""
+    """Exclusively create or validate the local ownership claim."""
     runtime = staging / "runtime"
-    runtime.mkdir()
+    runtime.mkdir(exist_ok=True)
     claim = runtime / CLAIM_NAME
     payload = {
         "schema_version": 1,
@@ -345,11 +345,15 @@ def create_bootstrap_claim(
         "controller_sha256": controller_sha256,
         "project_input_sha256": input_digest,
     }
-    descriptor = os.open(
-        str(claim),
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-        0o600,
-    )
+    try:
+        descriptor = os.open(
+            str(claim),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+    except FileExistsError:
+        validate_bootstrap_claim(project_root, claim)
+        return
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
@@ -714,6 +718,7 @@ def ensure_local_directories(
     """Prove first ownership, then create only declared local infrastructure."""
     governance = project_root / GOVERNANCE_DIR
     staging = project_root / BOOTSTRAP_STAGING_NAME
+    committed_layout = False
     if governance.is_symlink():
         raise BootstrapError("GOVERNANCE_ROOT_SYMLINK")
     if not governance.exists():
@@ -752,6 +757,7 @@ def ensure_local_directories(
     elif staging.exists() or staging.is_symlink():
         raise BootstrapError("GOVERNANCE_BOOTSTRAP_STAGING_CONFLICT")
     if (governance / "version.yaml").exists() or (governance / "version.yaml").is_symlink():
+        committed_layout = True
         validate_layout_version(project_root, governance)
     else:
         validate_bootstrap_claim(project_root, governance / "runtime" / CLAIM_NAME)
@@ -765,11 +771,24 @@ def ensure_local_directories(
                 relative = current.relative_to(project_root).as_posix()
                 raise BootstrapError(f"GOVERNANCE_CONTROL_PATH_SYMLINK: {relative}")
             current.mkdir(exist_ok=True)
+    if committed_layout:
+        create_bootstrap_claim(
+            project_root,
+            governance,
+            controller_sha256=controller_sha256,
+            input_digest=input_digest,
+        )
+        validate_bootstrap_claim(project_root, governance / "runtime" / CLAIM_NAME)
+        failure_journal = governance / "runtime" / FAILURE_JOURNAL_NAME
+        if failure_journal.exists() or failure_journal.is_symlink():
+            recover_blocked_failure(governance)
     return governance
 
 
 def project_input_digest(project_root: Path) -> str:
     """Fingerprint layout inputs while excluding normal canonical Plan revisions."""
+    if os.environ.get("WORK_GOVERNANCE_TEST_FAIL_PROJECT_INPUT_DIGEST") == "1":
+        raise OSError("BOOTSTRAP_TEST_PROJECT_INPUT_DIGEST_FAILED")
     governance = project_root / GOVERNANCE_DIR
     version = governance / "version.yaml"
     paths: List[Tuple[str, Path]] = [
@@ -839,6 +858,23 @@ def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def invalidate_bootstrap_receipt(project_root: Path, path: Path) -> None:
+    """Durably remove a stale receipt when exact failure provenance is unavailable."""
+    reject_symlink_components(project_root, path)
+    if path.is_symlink():
+        raise BootstrapError("GOVERNANCE_BOOTSTRAP_RECEIPT_SYMLINK")
+    if not path.exists():
+        return
+    if not path.is_file():
+        raise BootstrapError("GOVERNANCE_BOOTSTRAP_RECEIPT_INVALID")
+    path.unlink()
+    directory_descriptor = os.open(str(path.parent), os.O_RDONLY)
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
 
 
 def json_payload_bytes(payload: Mapping[str, Any]) -> bytes:
@@ -1175,15 +1211,9 @@ def main() -> int:
         return 0
     except (BootstrapError, OSError, subprocess.SubprocessError) as exc:
         reason = str(exc).replace("\n", " ")[:500]
-        blocked_receipt = {
-            **base_receipt,
-            "status": "ENVIRONMENT_BLOCKED",
-            "reason": reason,
-        }
         try:
             if (
                 governance is not None
-                and not (governance / "version.yaml").exists()
                 and isinstance(build, str)
                 and isinstance(manifest_digest, str)
                 and isinstance(input_digest, str)
@@ -1197,17 +1227,8 @@ def main() -> int:
                     input_digest=input_digest,
                     records=records,
                 )
-            elif governance is not None and (governance / "version.yaml").is_file():
-                if evidence is None:
-                    evidence = evidence_path(governance)
-                evidence_relative = evidence.relative_to(governance.parent).as_posix()
-                blocked_receipt["evidence_ref"] = f"evidence:{evidence_relative}"
-                atomic_write_json(
-                    evidence,
-                    {**blocked_receipt, "commands": records},
-                )
-                if receipt_path is not None:
-                    atomic_write_json(receipt_path, blocked_receipt)
+            elif governance is not None and receipt_path is not None:
+                invalidate_bootstrap_receipt(governance.parent, receipt_path)
         except (BootstrapError, OSError) as record_error:
             reason = f"{reason}; BLOCKED_RECORD_FAILED: {record_error}"[:500]
         emit_context(

@@ -2796,7 +2796,9 @@ def test_suspect_artifact_blocks_validation_and_task_progress(tmp_path: Path) ->
     frontmatter["artifacts"] = [{"id": "A-001", "path": "out.txt", "status": "suspect"}]
     write_plan(tmp_path, frontmatter, body)
 
+    layout_validation = run_workctl(tmp_path, "layout", "validate")
     validation = run_workctl(tmp_path, "plan", "validate", check=False)
+    assert layout_validation.stdout.strip() == "LAYOUT_VALID"
     assert validation.returncode == 1
     assert "A-001 is suspect" in validation.stderr
 

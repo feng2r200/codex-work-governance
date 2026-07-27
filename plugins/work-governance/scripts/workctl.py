@@ -3121,6 +3121,7 @@ def validate_plan(
     root: Path,
     *,
     ignore_journal: Path | None = None,
+    reject_blocking_artifacts: bool = True,
 ) -> list[str]:
     """Validate the active Plan, index, authority, and complete lineage."""
     try:
@@ -3128,7 +3129,10 @@ def validate_plan(
         doc = load_plan(active_plan_path(root))
     except WorkctlError as exc:
         return [str(exc)]
-    errors = validate_frontmatter(doc.frontmatter, reject_blocking_artifacts=True)
+    errors = validate_frontmatter(
+        doc.frontmatter,
+        reject_blocking_artifacts=reject_blocking_artifacts,
+    )
     if index.get("schema_version") != 1:
         errors.append("index schema_version must be 1")
     if index.get("active_plan_id") != doc.frontmatter.get("plan_id"):
@@ -3342,7 +3346,7 @@ def cmd_layout_validate(_args: argparse.Namespace) -> None:
         raise WorkctlError(f"LAYOUT_INVALID: {report.state}{suffix}")
     errors = layout_version_errors(root)
     if index_path(root).exists():
-        errors.extend(validate_plan(root))
+        errors.extend(validate_plan(root, reject_blocking_artifacts=False))
     if errors:
         raise WorkctlError("LAYOUT_INVALID: " + "; ".join(errors))
     print("LAYOUT_VALID")
