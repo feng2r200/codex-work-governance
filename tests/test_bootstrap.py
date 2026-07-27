@@ -20,6 +20,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPOSITORY_ROOT / "plugins" / "work-governance"
 HOOK = PLUGIN_ROOT / "hooks" / "session_start.py"
 HOOKS_CONFIG = PLUGIN_ROOT / "hooks" / "hooks.json"
+WORKCTL = PLUGIN_ROOT / "scripts" / "workctl.py"
 
 
 def install_fake_uv(directory: Path, log_path: Path) -> Path:
@@ -97,8 +98,42 @@ def read_uv_commands(log_path: Path) -> list[list[str]]:
     return [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
 
 
+def adopt_legacy(project: Path) -> dict[str, Any]:
+    """Bind the reviewed bootstrap fixture to its physical project root."""
+    status_result = subprocess.run(
+        [sys.executable, str(WORKCTL), "layout", "status"],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    status = json.loads(status_result.stdout)
+    legacy = status["legacy"]
+    adopt_result = subprocess.run(
+        [
+            sys.executable,
+            str(WORKCTL),
+            "layout",
+            "adopt",
+            "--expected-manifest-sha256",
+            legacy["manifest_sha256"],
+            "--expected-active-plan-id",
+            legacy["active_plan_id"],
+            "--ref",
+            "user:test-bootstrap-adoption",
+        ],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    payload = json.loads(adopt_result.stdout)
+    assert payload["status"] == "LEGACY_ADOPTED"
+    return cast(dict[str, Any], payload)
+
+
 def write_migratable_legacy(project: Path) -> None:
-    """Create a minimal governed legacy Plan eligible for automatic migration."""
+    """Create a minimal governed legacy Plan that still requires explicit adoption."""
     plan_id = "PLAN-20260723-001"
     plan_root = project / "_Plan"
     plan_root.mkdir()
@@ -195,6 +230,54 @@ def test_bootstrap_prewarms_then_runs_controller_offline(tmp_path: Path) -> None
     assert not (project / "pyproject.toml").exists()
 
 
+def test_session_start_bootstraps_only_the_nearest_linked_worktree(tmp_path: Path) -> None:
+    """A nested SessionStart cwd creates governance only in its linked worktree."""
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=repository,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Work Governance Test"],
+        cwd=repository,
+        check=True,
+    )
+    (repository / ".gitignore").write_text("/.worktree/\n", encoding="utf-8")
+    (repository / "tracked.txt").write_text("baseline\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repository, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=repository, check=True)
+    linked = repository / ".worktree" / "feature"
+    subprocess.run(
+        [
+            "git",
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            str(linked),
+            "HEAD",
+        ],
+        cwd=repository,
+        check=True,
+    )
+    nested = linked / "nested"
+    nested.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv_log = tmp_path / "uv.jsonl"
+    install_fake_uv(fake_bin, uv_log)
+
+    output = run_hook(nested, fake_bin, uv_log)
+
+    assert "WORK_GOVERNANCE_BOOTSTRAP READY" in (output["hookSpecificOutput"]["additionalContext"])
+    assert (linked / ".work-governance" / "version.yaml").is_file()
+    assert not (repository / ".work-governance").exists()
+
+
 def test_default_hook_config_is_stable_and_covers_every_session_source() -> None:
     """Use the default plugin hook path with one short stable command."""
     payload = json.loads(HOOKS_CONFIG.read_text(encoding="utf-8"))
@@ -243,7 +326,7 @@ def test_unchanged_bootstrap_is_incremental_and_offline(tmp_path: Path) -> None:
 
 
 def test_migrated_layout_remains_ready_on_second_session(tmp_path: Path) -> None:
-    """Bootstrap accepts the controller's nonce-suffixed transaction on resume."""
+    """Explicit adoption lets the next bootstrap migrate and later sessions remain READY."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     uv_log = tmp_path / "uv.jsonl"
@@ -252,13 +335,25 @@ def test_migrated_layout_remains_ready_on_second_session(tmp_path: Path) -> None
     project.mkdir()
     write_migratable_legacy(project)
 
-    first = run_hook(project, fake_bin, uv_log)
-    second = run_hook(
+    blocked = run_hook(project, fake_bin, uv_log)
+    adopt_legacy(project)
+    migrated = run_hook(
         project,
         fake_bin,
         uv_log,
         payload={
             "session_id": "migration-resume",
+            "cwd": str(project),
+            "hook_event_name": "SessionStart",
+            "source": "resume",
+        },
+    )
+    resumed = run_hook(
+        project,
+        fake_bin,
+        uv_log,
+        payload={
+            "session_id": "migration-ready-resume",
             "cwd": str(project),
             "hook_event_name": "SessionStart",
             "source": "resume",
@@ -270,8 +365,10 @@ def test_migrated_layout_remains_ready_on_second_session(tmp_path: Path) -> None
     ]
     receipt = json.loads((governance / "bootstrap-state.json").read_text(encoding="utf-8"))
 
-    assert "WORK_GOVERNANCE_BOOTSTRAP READY" in first["hookSpecificOutput"]["additionalContext"]
-    assert "WORK_GOVERNANCE_BOOTSTRAP READY" in second["hookSpecificOutput"]["additionalContext"]
+    assert "ENVIRONMENT_BLOCKED" in blocked["hookSpecificOutput"]["additionalContext"]
+    assert "LAYOUT_MIGRATION_NOT_READY" in blocked["hookSpecificOutput"]["additionalContext"]
+    assert "WORK_GOVERNANCE_BOOTSTRAP READY" in migrated["hookSpecificOutput"]["additionalContext"]
+    assert "WORK_GOVERNANCE_BOOTSTRAP READY" in resumed["hookSpecificOutput"]["additionalContext"]
     assert len(transactions) == 1
     assert re.fullmatch(r"LAY-\d{8}T\d{6}Z-[0-9a-f]{8}-[0-9a-f]{32}", transactions[0])
     assert receipt["status"] == "READY"
@@ -403,6 +500,7 @@ def test_bootstrap_validates_migration_proof_contract_beyond_its_hash(
         f"transaction_id: {transaction_id}\n"
         "status: prepared\n"
         f"legacy_manifest_sha256: {'1' * 64}\n"
+        f"legacy_adoption_sha256: {'4' * 64}\n"
         f"conversion_table_sha256: {'2' * 64}\n"
         "created_at: '2026-07-27T00:00:00+00:00'\n"
     )
@@ -421,7 +519,7 @@ def test_bootstrap_validates_migration_proof_contract_beyond_its_hash(
             "layout_version: 1\n"
             "bootstrap_contract_version: 1\n"
             "plugin_compatibility: '>=1.0.0,<2.0.0'\n"
-            "legacy_migration_action_revision: 1\n"
+            "legacy_migration_action_revision: 2\n"
             "migration:\n"
             "  status: migrated\n"
             f"  transaction_id: {transaction_id}\n"
