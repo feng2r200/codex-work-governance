@@ -241,6 +241,61 @@ def write_migratable_legacy(
     return path
 
 
+def write_legacy_reconciliation_proposal(cwd: Path) -> Path:
+    """Create the closed pending proposal shape observed in PharmaceuticalGroup."""
+    proposal = cwd / "_Plan" / "proposals" / "MIG-20260727-001"
+    prepared = proposal / "PLAN-20260727-001.prepared.md"
+    replacement = proposal / "AGENTS.proposed.md"
+    manifest = proposal / "reconciliation.yaml"
+    prepared_frontmatter = canonical_frontmatter("PLAN-20260727-001")
+    prepared_frontmatter["schema_version"] = 3
+    prepared_frontmatter.pop("authority")
+    prepared_frontmatter["delivery"] = {
+        "status": "pending",
+        "boundary": "prepared-reconciliation",
+        "evidence_ref": "project:MIG-20260727-001",
+    }
+    prepared_frontmatter["activation"] = {
+        "status": "deferred",
+        "current_ref": "legacy",
+        "target_ref": "reconciled",
+    }
+    write_markdown_plan(prepared, prepared_frontmatter, "# Pending reconciled authority\n")
+    replacement.write_text(
+        "# AGENTS.md\n\nPending proposal bytes; never apply during layout migration.\n",
+        encoding="utf-8",
+    )
+    active = cwd / "_Plan" / "PLAN-20260723-001.md"
+    payload = {
+        "migration_id": "MIG-20260727-001",
+        "target_plan": {"prepared_file": prepared.name},
+        "git_baseline": "34095d9dcb71ed51841de984350c7fbc871e8358",
+        "sources": [
+            {
+                "path": "_Plan/PLAN-20260723-001.md",
+                "role": "unmerged-source",
+                "sha256": sha256_path(active),
+                "revision": 1,
+                "classification": "CONFIRMED_AUTHORITY",
+            },
+            {
+                "path": "docs/Plan.md",
+                "role": "merged-source",
+                "sha256": "0" * 64,
+                "classification": "CONFIRMED_AUTHORITY",
+            },
+        ],
+        "agents_rewrite": {
+            "path": "AGENTS.md",
+            "sha256": "1" * 64,
+            "replacement_file": replacement.name,
+        },
+        "confirmations": {},
+    }
+    manifest.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    return proposal
+
+
 def claim_governance_root(cwd: Path) -> None:
     """Create the durable first-owner claim used by the controller."""
     namespace = runpy.run_path(str(SCRIPT), run_name="workctl_test_fixture")
@@ -567,6 +622,235 @@ def test_layout_classifier_requires_explicit_worktree_adoption(tmp_path: Path) -
     )
     assert migration.returncode == 2
     assert source.is_file()
+
+
+def test_layout_migrates_observed_pending_reconciliation_proposal_side_tree(
+    tmp_path: Path,
+) -> None:
+    """A valid old proposal remains pending and byte-identical outside Plan authority."""
+    source = write_migratable_legacy(tmp_path, adopt=False)
+    proposal = write_legacy_reconciliation_proposal(tmp_path)
+    proposal_before = file_tree_snapshot(proposal)
+
+    before_adoption = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+
+    assert before_adoption["layout_state"] == "LEGACY_CLASSIFICATION_REQUIRED"
+    assert before_adoption["legacy"]["blocking_reasons"] == [
+        "legacy authority lacks an explicit worktree adoption receipt"
+    ]
+
+    adopt_legacy(tmp_path)
+    ready_to_migrate = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    assert ready_to_migrate["layout_state"] == "LAYOUT_MIGRATION_REQUIRED"
+
+    run_workctl(tmp_path, "layout", "migrate")
+
+    target_proposal = tmp_path / ".work-governance" / "proposals" / "MIG-20260727-001"
+    assert file_tree_snapshot(target_proposal) == proposal_before
+    assert not (tmp_path / ".work-governance" / "_Plan" / "proposals").exists()
+    assert not (tmp_path / "_Plan").exists()
+    migrated = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260723-001.md"
+    migrated_frontmatter = yaml.safe_load(migrated.read_text(encoding="utf-8").split("---\n")[1])
+    assert migrated_frontmatter["revision"] == 2
+    assert source.name == migrated.name
+    assert (
+        yaml.safe_load((target_proposal / "reconciliation.yaml").read_text(encoding="utf-8"))[
+            "confirmations"
+        ]
+        == {}
+    )
+
+
+@pytest.mark.parametrize(
+    "invalid_kind",
+    [
+        "mixed-business-file",
+        "symlink",
+        "malformed-manifest",
+        "broken-prepared-reference",
+        "nonempty-confirmations",
+    ],
+)
+def test_layout_rejects_unproven_legacy_proposal_content(
+    tmp_path: Path,
+    invalid_kind: str,
+) -> None:
+    """Directory naming alone never proves proposal ownership."""
+    write_migratable_legacy(tmp_path, adopt=False)
+    proposal = write_legacy_reconciliation_proposal(tmp_path)
+    if invalid_kind == "mixed-business-file":
+        (proposal / "business.txt").write_text("not governance-owned\n", encoding="utf-8")
+    elif invalid_kind == "symlink":
+        (proposal / "linked.md").symlink_to(tmp_path / "_Plan" / "index.yaml")
+    elif invalid_kind == "malformed-manifest":
+        (proposal / "reconciliation.yaml").write_text("- not-a-mapping\n", encoding="utf-8")
+    elif invalid_kind == "broken-prepared-reference":
+        (proposal / "PLAN-20260727-001.prepared.md").unlink()
+    else:
+        manifest_path = proposal / "reconciliation.yaml"
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        manifest["confirmations"] = {
+            "C-MIGRATION-BASELINE": {
+                "status": "accepted",
+                "ref": "user:prior-decision",
+            }
+        }
+        manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    assert status["layout_state"] == "LEGACY_CLASSIFICATION_REQUIRED"
+    assert any(
+        "legacy proposal" in reason or "LAYOUT_PATH_SYMLINK" in reason
+        for reason in status["legacy"]["blocking_reasons"]
+    )
+    manifest_sha256 = status["legacy"]["manifest_sha256"]
+    if isinstance(manifest_sha256, str):
+        adoption = run_workctl(
+            tmp_path,
+            "layout",
+            "adopt",
+            "--expected-manifest-sha256",
+            manifest_sha256,
+            "--expected-active-plan-id",
+            "PLAN-20260723-001",
+            "--ref",
+            "user:test-invalid-proposal",
+            check=False,
+        )
+        assert adoption.returncode == 2
+    assert (tmp_path / "_Plan").is_dir()
+
+
+def test_layout_recovers_after_proposal_side_tree_activation(tmp_path: Path) -> None:
+    """A crash after proposal rename resumes without duplicate or guessed content."""
+    write_migratable_legacy(tmp_path, adopt=False)
+    proposal = write_legacy_reconciliation_proposal(tmp_path)
+    proposal_before = file_tree_snapshot(proposal)
+    adopt_legacy(tmp_path)
+
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "proposal-activation"},
+    )
+
+    assert interrupted.returncode == 2
+    assert "LAYOUT_TEST_INTERRUPTED: proposal-activation" in interrupted.stderr
+    target = tmp_path / ".work-governance" / "proposals" / "MIG-20260727-001"
+    assert file_tree_snapshot(target) == proposal_before
+    assert not (tmp_path / ".work-governance" / "version.yaml").exists()
+
+    recovered = run_workctl(tmp_path, "layout", "recover")
+
+    assert "LAYOUT_COMMITTED" in recovered.stdout
+    assert file_tree_snapshot(target) == proposal_before
+    assert run_workctl(tmp_path, "layout", "validate").stdout.strip() == "LAYOUT_VALID"
+
+
+def test_layout_recovers_between_multiple_proposal_activations(tmp_path: Path) -> None:
+    """A crash between per-proposal renames resumes the journal-bound remainder."""
+    write_migratable_legacy(tmp_path, adopt=False)
+    first = write_legacy_reconciliation_proposal(tmp_path)
+    second = first.parent / "MIG-20260727-002"
+    shutil.copytree(first, second)
+    second_manifest_path = second / "reconciliation.yaml"
+    second_manifest = yaml.safe_load(second_manifest_path.read_text(encoding="utf-8"))
+    second_manifest["migration_id"] = second.name
+    second_manifest_path.write_text(
+        yaml.safe_dump(second_manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    first_before = file_tree_snapshot(first)
+    second_before = file_tree_snapshot(second)
+    adopt_legacy(tmp_path)
+
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "proposal-activation-MIG-20260727-001"},
+    )
+    target_root = tmp_path / ".work-governance" / "proposals"
+    journal_path = next((tmp_path / ".work-governance" / "runtime").glob("LAY-*/journal.json"))
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    staged_root = Path(journal["paths"]["staged_proposals"])
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+
+    assert interrupted.returncode == 2
+    assert "LAYOUT_TEST_INTERRUPTED: proposal-activation-MIG-20260727-001" in interrupted.stderr
+    assert file_tree_snapshot(target_root / first.name) == first_before
+    assert file_tree_snapshot(staged_root / second.name) == second_before
+    assert status["layout_state"] == "LAYOUT_RECOVERY_REQUIRED"
+
+    recovered = run_workctl(tmp_path, "layout", "recover")
+
+    assert recovered.stdout.startswith("LAYOUT_COMMITTED LAY-")
+    assert file_tree_snapshot(target_root / first.name) == first_before
+    assert file_tree_snapshot(target_root / second.name) == second_before
+    assert run_workctl(tmp_path, "layout", "validate").stdout.strip() == "LAYOUT_VALID"
+
+
+def test_layout_recovery_rejects_staged_proposal_drift(tmp_path: Path) -> None:
+    """A changed staged proposal cannot cross the activation boundary."""
+    write_migratable_legacy(tmp_path, adopt=False)
+    write_legacy_reconciliation_proposal(tmp_path)
+    adopt_legacy(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "staged"},
+    )
+    assert interrupted.returncode == 2
+    journal_path = next((tmp_path / ".work-governance" / "runtime").glob("LAY-*/journal.json"))
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    staged_manifest = (
+        Path(journal["paths"]["staged_proposals"]) / "MIG-20260727-001" / "reconciliation.yaml"
+    )
+    staged_manifest.write_text(
+        staged_manifest.read_text(encoding="utf-8") + "# drift\n",
+        encoding="utf-8",
+    )
+
+    recovery = run_workctl(tmp_path, "layout", "recover", check=False)
+
+    assert recovery.returncode == 2
+    assert "STAGED_LAYOUT_PROPOSALS_MANIFEST_MISMATCH" in recovery.stderr
+    assert (tmp_path / "_Plan").is_dir()
+
+
+def test_layout_recovery_rejects_original_evidence_drift_after_staging(
+    tmp_path: Path,
+) -> None:
+    """A staged recovery cannot commit after its durable original copy changes."""
+    write_migratable_legacy(tmp_path, adopt=False)
+    write_legacy_reconciliation_proposal(tmp_path)
+    adopt_legacy(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "staged"},
+    )
+    assert interrupted.returncode == 2
+    governance = tmp_path / ".work-governance"
+    journal_path = next((governance / "runtime").glob("LAY-*/journal.json"))
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    original = Path(journal["paths"]["original_evidence"]) / str(journal["active_plan_path"])
+    original.write_bytes(original.read_bytes() + b"\nORIGINAL-EVIDENCE-DRIFT\n")
+
+    recovery = run_workctl(tmp_path, "layout", "recover", check=False)
+
+    assert recovery.returncode == 2
+    assert "LAYOUT_ORIGINAL_EVIDENCE_MANIFEST_MISMATCH" in recovery.stderr
+    assert json.loads(journal_path.read_text(encoding="utf-8"))["status"] == "staged"
+    assert not (governance / "version.yaml").exists()
+    assert (tmp_path / "_Plan").is_dir()
 
 
 def test_controller_resolves_only_the_nearest_linked_worktree_plan(tmp_path: Path) -> None:
@@ -1562,6 +1846,170 @@ def test_layout_recovery_abandons_a_preparing_interruption(tmp_path: Path) -> No
     )
 
 
+def test_layout_recovery_abandons_preparing_with_unstaged_proposal(
+    tmp_path: Path,
+) -> None:
+    """A snapshot crash before proposal staging remains safely recoverable."""
+    active = write_migratable_legacy(tmp_path, adopt=False)
+    proposal = write_legacy_reconciliation_proposal(tmp_path)
+    proposal_before = file_tree_snapshot(proposal)
+    adopt_legacy(tmp_path)
+
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "preparing"},
+    )
+    recovered = run_workctl(tmp_path, "layout", "recover")
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+
+    assert interrupted.returncode == 2
+    assert recovered.stdout.startswith("LAYOUT_PREPARATION_PRESERVED LAY-")
+    assert status["layout_state"] == "LAYOUT_MIGRATION_REQUIRED"
+    assert active.is_file()
+    assert file_tree_snapshot(proposal) == proposal_before
+
+
+def test_layout_recovery_abandons_partial_proposal_staging(tmp_path: Path) -> None:
+    """A proposal copied into an otherwise incomplete staging tree is safely preserved."""
+    active = write_migratable_legacy(tmp_path, adopt=False)
+    proposal = write_legacy_reconciliation_proposal(tmp_path)
+    proposal_before = file_tree_snapshot(proposal)
+    adopt_legacy(tmp_path)
+
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "proposal-staging"},
+    )
+    governance = tmp_path / ".work-governance"
+    transaction = next((governance / "runtime").glob("LAY-*"))
+    staged_proposal = transaction / "staging" / "proposals" / proposal.name
+    (staged_proposal / "AGENTS.proposed.md").unlink()
+
+    recovered = run_workctl(tmp_path, "layout", "recover")
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+
+    assert interrupted.returncode == 2
+    assert "LAYOUT_TEST_INTERRUPTED: proposal-staging" in interrupted.stderr
+    assert recovered.stdout.startswith("LAYOUT_PREPARATION_PRESERVED LAY-")
+    assert status["layout_state"] == "LAYOUT_MIGRATION_REQUIRED"
+    assert active.is_file()
+    assert file_tree_snapshot(proposal) == proposal_before
+    assert not (staged_proposal / "AGENTS.proposed.md").exists()
+
+
+def test_layout_recovery_abandons_partial_legacy_plan_copy(tmp_path: Path) -> None:
+    """A crash while the legacy Plan copy still owns proposals remains safely recoverable."""
+    active = write_migratable_legacy(tmp_path, adopt=False)
+    proposal = write_legacy_reconciliation_proposal(tmp_path)
+    proposal_before = file_tree_snapshot(proposal)
+    adopt_legacy(tmp_path)
+
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "legacy-plan-staging"},
+    )
+    governance = tmp_path / ".work-governance"
+    transaction = next((governance / "runtime").glob("LAY-*"))
+    staged_proposal = transaction / "staging" / "_Plan" / "proposals" / proposal.name
+    (staged_proposal / "AGENTS.proposed.md").unlink()
+
+    recovered = run_workctl(tmp_path, "layout", "recover")
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+
+    assert interrupted.returncode == 2
+    assert "LAYOUT_TEST_INTERRUPTED: legacy-plan-staging" in interrupted.stderr
+    assert recovered.stdout.startswith("LAYOUT_PREPARATION_PRESERVED LAY-")
+    assert status["layout_state"] == "LAYOUT_MIGRATION_REQUIRED"
+    assert active.is_file()
+    assert file_tree_snapshot(proposal) == proposal_before
+    assert not (staged_proposal / "AGENTS.proposed.md").exists()
+
+
+def test_layout_preparing_rejects_known_proposal_path_byte_drift(tmp_path: Path) -> None:
+    """A source path allowlist cannot authorize changed proposal bytes during Plan copy."""
+    write_migratable_legacy(tmp_path, adopt=False)
+    proposal = write_legacy_reconciliation_proposal(tmp_path)
+    proposal_before = file_tree_snapshot(proposal)
+    adopt_legacy(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "legacy-plan-staging"},
+    )
+    assert interrupted.returncode == 2
+    governance = tmp_path / ".work-governance"
+    transaction = next((governance / "runtime").glob("LAY-*"))
+    staged_replacement = (
+        transaction / "staging" / "_Plan" / "proposals" / proposal.name / "AGENTS.proposed.md"
+    )
+    staged_replacement.write_text("DRIFTED KNOWN PATH\n", encoding="utf-8")
+
+    recovery = run_workctl(tmp_path, "layout", "recover", check=False)
+
+    assert recovery.returncode == 2
+    assert "LAYOUT_PREPARATION_INVENTORY_INVALID" in recovery.stderr
+    assert staged_replacement.read_text(encoding="utf-8") == "DRIFTED KNOWN PATH\n"
+    assert file_tree_snapshot(proposal) == proposal_before
+
+
+def test_layout_preparing_rejects_rehashed_proposal_submanifest(tmp_path: Path) -> None:
+    """A self-consistent proposal sub-manifest cannot authorize bytes absent from the source."""
+    write_migratable_legacy(tmp_path, adopt=False)
+    proposal = write_legacy_reconciliation_proposal(tmp_path)
+    proposal_before = file_tree_snapshot(proposal)
+    adopt_legacy(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "preparing"},
+    )
+    assert interrupted.returncode == 2
+    governance = tmp_path / ".work-governance"
+    transaction = next((governance / "runtime").glob("LAY-*"))
+    unknown = transaction / "staging" / "proposals" / "MIG-20990101-999"
+    unknown.mkdir(parents=True)
+    payload = b"UNBOUND\n"
+    unknown_file = unknown / "unknown.bin"
+    unknown_file.write_bytes(payload)
+    proposal_manifest = [
+        {"path": unknown.name, "kind": "directory"},
+        {
+            "path": f"{unknown.name}/{unknown_file.name}",
+            "kind": "file",
+            "size": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        },
+    ]
+    journal_path = transaction / "journal.json"
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    journal["legacy_proposals_manifest"] = proposal_manifest
+    journal["legacy_proposals_sha256"] = hashlib.sha256(
+        json.dumps(proposal_manifest, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    journal_path.write_text(json.dumps(journal), encoding="utf-8")
+
+    recovery = run_workctl(tmp_path, "layout", "recover", check=False)
+
+    assert recovery.returncode == 2
+    assert "INVALID_PREPARING_LAYOUT_JOURNAL" in recovery.stderr
+    assert json.loads(journal_path.read_text(encoding="utf-8"))["status"] == "preparing"
+    assert unknown_file.read_bytes() == payload
+    assert file_tree_snapshot(proposal) == proposal_before
+
+
 def test_layout_recovery_resumes_after_preparing_receipt_interrupt(
     tmp_path: Path,
 ) -> None:
@@ -1788,14 +2236,28 @@ def test_layout_preparing_recovery_preserves_registered_path_foreign_bytes(
     sentinel.parent.mkdir(parents=True)
     sentinel.write_bytes(b"UNBOUND-FOREIGN-BYTES")
 
-    recovered = run_workctl(tmp_path, "layout", "recover")
+    recovered = run_workctl(
+        tmp_path,
+        "layout",
+        "recover",
+        check=replacement_kind != "original-plan-file",
+    )
 
-    assert recovered.stdout.startswith("LAYOUT_PREPARATION_PRESERVED LAY-")
     assert sentinel.read_bytes() == b"UNBOUND-FOREIGN-BYTES"
     assert transaction.is_dir()
-    assert json.loads((transaction / "journal.json").read_text(encoding="utf-8"))["status"] == (
-        "aborted"
-    )
+    journal_status = json.loads((transaction / "journal.json").read_text(encoding="utf-8"))[
+        "status"
+    ]
+    if replacement_kind == "original-plan-file":
+        # The durable original-evidence copy is hash-bound to the legacy source.
+        # Foreign bytes there invalidate the preparation inventory and must not
+        # be normalized into an aborted transaction.
+        assert recovered.returncode == 2
+        assert "LAYOUT_PREPARATION_INVENTORY_INVALID" in recovered.stderr
+        assert journal_status == "preparing"
+    else:
+        assert recovered.stdout.startswith("LAYOUT_PREPARATION_PRESERVED LAY-")
+        assert journal_status == "aborted"
     assert not (governance / "_Plan").exists()
 
 

@@ -10,6 +10,8 @@ from typing import cast
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CONTROLLER = REPOSITORY_ROOT / "plugins" / "work-governance" / "scripts" / "workctl.py"
 BOOTSTRAP = REPOSITORY_ROOT / "plugins" / "work-governance" / "hooks" / "session_start.py"
+README = REPOSITORY_ROOT / "README.md"
+PRIVACY = REPOSITORY_ROOT / "PRIVACY.md"
 
 
 def test_all_normal_controller_paths_derive_from_governance_root(
@@ -81,3 +83,18 @@ def test_controller_dependency_and_project_lock_are_exactly_pinned() -> None:
     assert '# dependencies = ["pyyaml==6.0.3"]' in controller
     assert '"pyyaml==6.0.3"' in pyproject
     assert 'specifier = "==6.0.3"' in lock
+
+
+def test_public_contract_explains_proposal_and_executed_hook_boundaries() -> None:
+    """Keep the public recovery and local-evidence claims aligned with 1.0.2."""
+    readme = README.read_text(encoding="utf-8")
+    privacy = PRIVACY.read_text(encoding="utf-8")
+    readme_flat = " ".join(readme.split())
+    privacy_flat = " ".join(privacy.split())
+
+    assert "`hook=executed`" in readme
+    assert "Do not reinterpret such output as a hook-trust failure" in readme_flat
+    assert "The directory name `proposals/` alone is not ownership evidence" in readme_flat
+    assert "it never places proposals under the canonical Plan root" in readme_flat
+    assert "bounded SessionStart source and session identifier" in privacy_flat
+    assert "migration does not apply it or accept its confirmations" in privacy_flat
