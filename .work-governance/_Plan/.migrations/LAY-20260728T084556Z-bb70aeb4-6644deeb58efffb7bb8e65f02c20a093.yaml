@@ -1,0 +1,16 @@
+schema_version: 1
+kind: layout-action-upgrade-proof
+transaction_id: LAY-20260728T084556Z-bb70aeb4-6644deeb58efffb7bb8e65f02c20a093
+status: prepared
+from_action_revision: 2
+to_action_revision: 4
+active_plan_id: PLAN-20260728-001
+active_plan_path: .work-governance/_Plan/PLAN-20260728-001.md
+active_plan_before_sha256: e98974e82eec9eb1d69813d62e198213388e182a2f70e08a819ed18e90e020c5
+active_plan_after_sha256: e98974e82eec9eb1d69813d62e198213388e182a2f70e08a819ed18e90e020c5
+active_plan_revision_before: 44
+active_plan_revision_after: 44
+version_before_sha256: bb70aeb4c236d3d7ca7e6f3a651c1367468eec69162d77712df6b29ec6e83425
+version_after_sha256: 87c2d5baf7c5387c6f43212522b48eea6916151f84d55e995c2a4f0bd8993396
+conversion_table_sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+created_at: '2026-07-28T08:45:56+00:00'

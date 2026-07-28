@@ -2,7 +2,7 @@ schema_version: 1
 layout_version: 1
 bootstrap_contract_version: 1
 plugin_compatibility: '>=1.0.0,<2.0.0'
-legacy_migration_action_revision: 2
+legacy_migration_action_revision: 4
 migration:
   status: migrated
   transaction_id: LAY-20260727T165301Z-005a0675-3246eaa3eec5464bf618e17ec9c7e193
