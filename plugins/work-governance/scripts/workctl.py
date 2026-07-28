@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,6 +34,9 @@ import yaml
 PLAN_ID_RE = re.compile(r"^PLAN-\d{8}-\d{3}$")
 MIGRATION_ID_RE = re.compile(r"^MIG-\d{8}-\d{3}$")
 ROLLOVER_ID_RE = re.compile(r"^ROL-\d{8}-\d{3}$")
+ADMISSION_ID_RE = re.compile(r"^ADM-\d{8}-\d{3}$")
+CONTRACT_UPGRADE_ID_RE = re.compile(r"^UPG-\d{8}-\d{3}$")
+UNKNOWN_ID_RE = re.compile(r"^U-\d{3}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 REFERENCE_RE = re.compile(r"^(user|project|git|runtime|evidence|handoff|codex-plugin-list):\S+$")
 EVIDENCE_REFERENCE_FIELDS = {"evidence_ref", "state_evidence_ref"}
@@ -88,6 +91,26 @@ ACTIVATION_STATES = {
 BLOCKING_ACTIVATION_STATES = {"deferred", "pending_confirmation", "in_progress"}
 ROUTE_STATES = {"active", "awaiting_confirmation", "terminal"}
 CONFIRMATION_STATES = {"pending", "accepted", "declined"}
+UNKNOWN_STATES = {"open", "resolved"}
+VALIDATION_PROVENANCE_KINDS = {
+    "confirmed-obligation",
+    "observed-failure",
+    "code-invariant",
+    "supported-integration-boundary",
+}
+REVISION_KINDS = {
+    "admission",
+    "adaptation",
+    "contract-revision",
+    "contract-upgrade",
+    "confirmation-added",
+    "confirmation-decided",
+    "unknown-added",
+    "unknown-resolved",
+    "controlled-transition",
+}
+EVIDENCE_MANIFEST_MAX_BYTES = 64 * 1024
+EVIDENCE_MANIFEST_MAX_ITEMS = 64
 TASK_TRANSITIONS = {
     "pending": {"in_progress", "blocked", "skipped"},
     "in_progress": {"blocked", "verified", "skipped"},
@@ -129,6 +152,7 @@ PLAN_DIR_NAME = "_Plan"
 LAYOUT_SCHEMA_VERSION = 1
 LAYOUT_VERSION = 1
 BOOTSTRAP_CONTRACT_VERSION = 1
+READY_RECEIPT_SCHEMA_VERSION = 2
 PLUGIN_COMPATIBILITY = ">=1.0.0,<2.0.0"
 LEGACY_MIGRATION_ACTION_REVISION = 4
 SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS = {
@@ -136,7 +160,10 @@ SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS = {
     3,
     LEGACY_MIGRATION_ACTION_REVISION,
 }
+BOOTSTRAP_ACTION_REVISION = 5
+SUPPORTED_BOOTSTRAP_ACTION_REVISIONS = {2, 3, 4, BOOTSTRAP_ACTION_REVISION}
 BOOTSTRAP_CLAIM_NAME = "bootstrap-claim.json"
+BOOTSTRAP_CAPABILITY_NAME = "bootstrap-capability.json"
 LEGACY_ADOPTION_NAME = "legacy-adoption.json"
 BOOTSTRAP_STAGING_NAME = ".work-governance.bootstrap"
 BOOTSTRAP_CLAIM_KEYS = {
@@ -523,6 +550,81 @@ def bootstrap_state_path(root: Path) -> Path:
     return governance_root(root) / "bootstrap-state.json"
 
 
+def load_controller_receipt_v2(
+    path: Path,
+    *,
+    allow_bootstrapping: bool,
+) -> dict[str, Any] | None:
+    """Load a structurally valid READY or bootstrap-only controller receipt."""
+    if path.is_symlink() or not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    required = {
+        "schema_version",
+        "bootstrap_contract_version",
+        "action_revision",
+        "updated_at",
+        "status",
+        "plugin_build",
+        "plugin_manifest_sha256",
+        "project_input_sha256",
+        "project_output_sha256",
+        "layout_state",
+        "evidence_ref",
+        "session_id",
+        "runtime_bundle_ref",
+        "runtime_manifest_sha256",
+        "controller_ref",
+        "controller_sha256",
+        "lifecycle_ref",
+        "lifecycle_sha256",
+    }
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != required
+        or payload.get("schema_version") != READY_RECEIPT_SCHEMA_VERSION
+        or payload.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
+        or payload.get("action_revision") != BOOTSTRAP_ACTION_REVISION
+        or not isinstance(payload.get("session_id"), str)
+        or not payload.get("session_id")
+    ):
+        return None
+    status_and_layout = (payload.get("status"), payload.get("layout_state"))
+    allowed_states = {("READY", "LAYOUT_READY")}
+    if allow_bootstrapping:
+        allowed_states.add(("BOOTSTRAPPING", "BOOTSTRAPPING"))
+    if status_and_layout not in allowed_states:
+        return None
+    for field in (
+        "plugin_manifest_sha256",
+        "project_input_sha256",
+        "project_output_sha256",
+        "runtime_manifest_sha256",
+        "controller_sha256",
+        "lifecycle_sha256",
+    ):
+        value = payload.get(field)
+        if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+            return None
+    return cast(dict[str, Any], payload)
+
+
+def load_ready_receipt_v2(root: Path) -> dict[str, Any] | None:
+    """Load and structurally validate the current session-bound READY receipt."""
+    return load_controller_receipt_v2(
+        bootstrap_state_path(root),
+        allow_bootstrapping=False,
+    )
+
+
+def bootstrap_capability_path(root: Path) -> Path:
+    """Return the current SessionStart-only capability used for layout writes."""
+    return governance_root(root) / "runtime" / BOOTSTRAP_CAPABILITY_NAME
+
+
 def workctl_lock_path(root: Path) -> Path:
     """Return the stable lock shared by every Work Governance 1.x controller."""
     return governance_root(root) / "workctl.lock"
@@ -580,6 +682,84 @@ def checked_project_path(root: Path, raw_path: str) -> Path:
     except ValueError as exc:
         raise WorkctlError(f"PATH_OUTSIDE_PROJECT: {raw_path}") from exc
     return resolved
+
+
+def validate_current_ready_receipt(
+    root: Path,
+    supplied_sha256: str | None,
+    *,
+    require_current_controller: bool,
+    allow_bootstrapping: bool = False,
+) -> dict[str, Any]:
+    """Bind a command to the latest READY receipt and exact runtime bundle."""
+    if not isinstance(supplied_sha256, str) or SHA256_RE.fullmatch(supplied_sha256) is None:
+        raise WorkctlError("BOOTSTRAP_RECEIPT_REQUIRED")
+    candidates = [bootstrap_state_path(root)]
+    if allow_bootstrapping:
+        candidates.append(bootstrap_capability_path(root))
+    regular_candidates = [
+        path for path in candidates if not path.is_symlink() and path.is_file()
+    ]
+    receipt_path = next(
+        (
+            path
+            for path in regular_candidates
+            if sha256_file(path) == supplied_sha256
+        ),
+        None,
+    )
+    if receipt_path is None and regular_candidates:
+        raise WorkctlError("BOOTSTRAP_RECEIPT_SUPERSEDED")
+    if receipt_path is None:
+        raise WorkctlError("BOOTSTRAP_RECEIPT_INVALID")
+    receipt = load_controller_receipt_v2(
+        receipt_path,
+        allow_bootstrapping=allow_bootstrapping,
+    )
+    if receipt is None:
+        raise WorkctlError("BOOTSTRAP_RECEIPT_INVALID")
+    bundle = checked_project_path(root, str(receipt["runtime_bundle_ref"]))
+    controller = checked_project_path(root, str(receipt["controller_ref"]))
+    lifecycle = checked_project_path(root, str(receipt["lifecycle_ref"]))
+    manifest = bundle / "manifest.json"
+    reject_symlink_components(root, bundle)
+    if (
+        bundle.is_symlink()
+        or not bundle.is_dir()
+        or controller.parent != bundle
+        or lifecycle.parent != bundle
+        or controller.name != "workctl.py"
+        or lifecycle.name != "work-lifecycle.SKILL.md"
+        or controller.is_symlink()
+        or lifecycle.is_symlink()
+        or not controller.is_file()
+        or not lifecycle.is_file()
+        or manifest.is_symlink()
+        or not manifest.is_file()
+        or sha256_file(controller) != receipt["controller_sha256"]
+        or sha256_file(lifecycle) != receipt["lifecycle_sha256"]
+        or sha256_file(manifest) != receipt["runtime_manifest_sha256"]
+    ):
+        raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
+    try:
+        runtime_manifest = json.loads(manifest.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID") from exc
+    expected_manifest = {
+        "schema_version": 1,
+        "kind": "work-governance-runtime-bundle",
+        "plugin_build": receipt["plugin_build"],
+        "plugin_manifest_sha256": receipt["plugin_manifest_sha256"],
+        "controller_ref": receipt["controller_ref"],
+        "controller_sha256": receipt["controller_sha256"],
+        "lifecycle_ref": receipt["lifecycle_ref"],
+        "lifecycle_sha256": receipt["lifecycle_sha256"],
+    }
+    if runtime_manifest != expected_manifest:
+        raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
+    if require_current_controller and Path(__file__).resolve() != controller:
+        raise WorkctlError("CONTROLLER_RECEIPT_MISMATCH")
+    return receipt
 
 
 def is_legacy_plan_authority_path(root: Path, raw_path: str, path: Path) -> bool:
@@ -790,11 +970,70 @@ def uncommitted_governance_footprint_errors(root: Path) -> list[str]:
     if runtime.is_symlink() or not runtime.is_dir():
         errors.append("uncommitted governance runtime path is invalid")
     else:
+        bundles_root = runtime / "plugin-builds"
+        if bundles_root.exists() or bundles_root.is_symlink():
+            if bundles_root.is_symlink() or not bundles_root.is_dir():
+                errors.append("uncommitted runtime plugin-builds path is invalid")
+            else:
+                bundles = list(bundles_root.iterdir())
+                if len(bundles) > 16:
+                    errors.append("uncommitted runtime has too many plugin bundles")
+                for bundle in bundles:
+                    manifest_path = bundle / "manifest.json"
+                    if (
+                        bundle.is_symlink()
+                        or not bundle.is_dir()
+                        or SHA256_RE.fullmatch(bundle.name) is None
+                        or manifest_path.is_symlink()
+                        or not manifest_path.is_file()
+                    ):
+                        errors.append("uncommitted runtime plugin bundle is invalid")
+                        continue
+                    try:
+                        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    except (json.JSONDecodeError, OSError):
+                        errors.append("uncommitted runtime plugin manifest is invalid")
+                        continue
+                    controller = bundle / "workctl.py"
+                    lifecycle = bundle / "work-lifecycle.SKILL.md"
+                    expected = {
+                        "schema_version": 1,
+                        "kind": "work-governance-runtime-bundle",
+                        "plugin_build": payload.get("plugin_build")
+                        if isinstance(payload, dict)
+                        else None,
+                        "plugin_manifest_sha256": bundle.name,
+                        "controller_ref": relative_project_path(root, controller),
+                        "controller_sha256": sha256_file(controller)
+                        if controller.is_file() and not controller.is_symlink()
+                        else None,
+                        "lifecycle_ref": relative_project_path(root, lifecycle),
+                        "lifecycle_sha256": sha256_file(lifecycle)
+                        if lifecycle.is_file() and not lifecycle.is_symlink()
+                        else None,
+                    }
+                    if payload != expected:
+                        errors.append("uncommitted runtime plugin bundle is invalid")
+        capability = runtime / BOOTSTRAP_CAPABILITY_NAME
+        if capability.exists() or capability.is_symlink():
+            try:
+                if capability.is_symlink() or not capability.is_file():
+                    raise WorkctlError("bootstrap capability is not regular")
+                validate_current_ready_receipt(
+                    root,
+                    sha256_file(capability),
+                    require_current_controller=False,
+                    allow_bootstrapping=True,
+                )
+            except WorkctlError:
+                errors.append("uncommitted runtime bootstrap capability is invalid")
         runtime_unknown = sorted(
             child.name
             for child in runtime.iterdir()
             if child.name != BOOTSTRAP_CLAIM_NAME
+            and child.name != BOOTSTRAP_CAPABILITY_NAME
             and child.name != LEGACY_ADOPTION_NAME
+            and child.name != "plugin-builds"
             and LAYOUT_TRANSACTION_RE.fullmatch(child.name) is None
         )
         if runtime_unknown:
@@ -921,7 +1160,7 @@ def uncommitted_bootstrap_record(root: Path) -> tuple[set[Path], list[str]]:
     if (
         receipt.get("schema_version") != 1
         or receipt.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
-        or receipt.get("action_revision") not in SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS
+        or receipt.get("action_revision") not in SUPPORTED_BOOTSTRAP_ACTION_REVISIONS
         or receipt.get("status") != "ENVIRONMENT_BLOCKED"
         or not isinstance(receipt.get("updated_at"), str)
         or not isinstance(receipt.get("reason"), str)
@@ -965,7 +1204,7 @@ def uncommitted_bootstrap_record(root: Path) -> tuple[set[Path], list[str]]:
         not isinstance(evidence, dict)
         or evidence_keys not in (legacy_evidence_keys, current_evidence_keys)
         or (
-            receipt.get("action_revision") == LEGACY_MIGRATION_ACTION_REVISION
+            receipt.get("action_revision") == BOOTSTRAP_ACTION_REVISION
             and evidence_keys != current_evidence_keys
         )
         or (
@@ -1036,7 +1275,7 @@ def uncommitted_bootstrap_evidence_history(
             not isinstance(evidence, dict)
             or evidence_keys not in (legacy_keys, current_keys)
             or (
-                evidence.get("action_revision") == LEGACY_MIGRATION_ACTION_REVISION
+                evidence.get("action_revision") == BOOTSTRAP_ACTION_REVISION
                 and evidence_keys != current_keys
             )
             or (
@@ -1052,7 +1291,7 @@ def uncommitted_bootstrap_evidence_history(
             )
             or evidence.get("schema_version") != 1
             or evidence.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
-            or evidence.get("action_revision") not in SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS
+            or evidence.get("action_revision") not in SUPPORTED_BOOTSTRAP_ACTION_REVISIONS
             or evidence.get("status") != "ENVIRONMENT_BLOCKED"
             or evidence.get("claim_sha256") != claim_sha256
             or SHA256_RE.fullmatch(str(evidence.get("project_input_sha256"))) is None
@@ -2925,9 +3164,6 @@ def lock(root: Path) -> Iterator[None]:
     if lock_path.is_symlink() or (lock_path.exists() and not lock_path.is_file()):
         raise WorkctlError("LAYOUT_STABLE_LOCK_INVALID")
     with lock_path.open("a+", encoding="utf-8") as handle:
-        attempt_path = os.environ.get("WORKCTL_TEST_LOCK_ATTEMPT_FILE")
-        if attempt_path:
-            Path(attempt_path).write_text("attempting\n", encoding="utf-8")
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
             yield
@@ -2943,12 +3179,76 @@ def require_expected_revision(frontmatter: dict[str, Any], expected: int | None)
         raise WorkctlError(f"REVISION_MISMATCH: expected {expected}, found {current}")
 
 
-def bump_revision(frontmatter: dict[str, Any]) -> None:
+def append_revision_record(
+    frontmatter: dict[str, Any],
+    *,
+    revision: int,
+    kind: str,
+    rationale: str,
+    confirmation_id: str | None = None,
+    evidence_manifest: str | None = None,
+) -> None:
+    """Append one immutable schema-v4 revision provenance record."""
+    if kind not in REVISION_KINDS:
+        raise WorkctlError(f"INVALID_REVISION_KIND: {kind}")
+    history = frontmatter.setdefault("revision_history", [])
+    if not isinstance(history, list):
+        raise WorkctlError("INVALID_PLAN: revision_history must be a list")
+    if any(isinstance(item, dict) and item.get("revision") == revision for item in history):
+        raise WorkctlError(f"REVISION_RECORD_EXISTS: {revision}")
+    record: dict[str, Any] = {
+        "revision": revision,
+        "kind": kind,
+        "changed_at": utc_now(),
+        "rationale": rationale,
+    }
+    if confirmation_id is not None:
+        record["confirmation_id"] = confirmation_id
+    if evidence_manifest is not None:
+        record["evidence_manifest"] = evidence_manifest
+    history.append(record)
+
+
+def bump_revision(
+    frontmatter: dict[str, Any],
+    *,
+    kind: str = "controlled-transition",
+    rationale: str = "Apply one controller-validated state transition.",
+    confirmation_id: str | None = None,
+    evidence_manifest: str | None = None,
+) -> None:
     revision = frontmatter.get("revision")
     if not isinstance(revision, int) or revision < 1:
         raise WorkctlError("INVALID_PLAN: revision must be a positive integer")
-    frontmatter["revision"] = revision + 1
+    next_revision = revision + 1
+    frontmatter["revision"] = next_revision
     frontmatter["updated_at"] = utc_now()
+    if frontmatter.get("schema_version") == 4:
+        append_revision_record(
+            frontmatter,
+            revision=next_revision,
+            kind=kind,
+            rationale=rationale,
+            confirmation_id=confirmation_id,
+            evidence_manifest=evidence_manifest,
+        )
+
+
+def contract_state(frontmatter: dict[str, Any]) -> str:
+    """Return the schema-cutover state independently from Plan authority."""
+    schema_version = frontmatter.get("schema_version")
+    if schema_version == 4:
+        return "PLAN_CONTRACT_READY"
+    if schema_version == 3 and frontmatter.get("status") != "complete":
+        return "PLAN_CONTRACT_UPGRADE_REQUIRED"
+    return "PLAN_CONTRACT_LEGACY_READABLE"
+
+
+def require_plan_contract_ready(frontmatter: dict[str, Any]) -> None:
+    """Block ordinary writes from silently trusting an active schema-v3 contract."""
+    state = contract_state(frontmatter)
+    if state != "PLAN_CONTRACT_READY":
+        raise WorkctlError(state)
 
 
 def blocking_artifacts(frontmatter: dict[str, Any]) -> dict[str, str]:
@@ -3128,8 +3428,8 @@ def validate_frontmatter(
 ) -> list[str]:
     errors: list[str] = []
     schema_version = frontmatter.get("schema_version")
-    if schema_version not in {1, 2, 3}:
-        errors.append("schema_version must be 1, 2, or 3")
+    if schema_version not in {1, 2, 3, 4}:
+        errors.append("schema_version must be 1, 2, 3, or 4")
     plan_id = frontmatter.get("plan_id")
     if not isinstance(plan_id, str) or PLAN_ID_RE.fullmatch(plan_id) is None:
         errors.append("plan_id must match PLAN-YYYYMMDD-NNN")
@@ -3155,12 +3455,12 @@ def validate_frontmatter(
         exclude = scope.get("exclude")
         if not isinstance(exclude, list):
             errors.append("scope.exclude must be a list")
-        elif schema_version == 3:
+        elif schema_version in {3, 4}:
             exclusion_descriptions: set[str] = set()
             for exclusion_number, exclusion in enumerate(exclude):
                 prefix = f"scope.exclude[{exclusion_number}]"
                 if not isinstance(exclusion, dict):
-                    errors.append(f"{prefix} must be a mapping for schema_version 3")
+                    errors.append(f"{prefix} must be a mapping for schema_version 3 or 4")
                     continue
                 description = exclusion.get("description")
                 if not isinstance(description, str) or not description:
@@ -3224,9 +3524,9 @@ def validate_frontmatter(
                 if confirmation_status in {"accepted", "declined"}:
                     if not item.get("ref"):
                         errors.append(f"{confirmation_id} resolved confirmation requires ref")
-                    elif schema_version == 3 and not valid_reference(item.get("ref")):
+                    elif schema_version in {3, 4} and not valid_reference(item.get("ref")):
                         errors.append(f"{confirmation_id} ref must be a typed authority reference")
-                    if schema_version in {2, 3}:
+                    if schema_version in {2, 3, 4}:
                         timestamp = item.get("accepted_at") or item.get("decided_at")
                         if not isinstance(timestamp, str) or not timestamp:
                             errors.append(
@@ -3301,7 +3601,7 @@ def validate_frontmatter(
                     if artifact_id not in item_ids["artifacts"]:
                         errors.append(f"{task['id']} resolves unknown artifact {artifact_id}")
 
-    if schema_version in {2, 3}:
+    if schema_version in {2, 3, 4}:
         authority = frontmatter.get("authority")
         if not isinstance(authority, dict):
             errors.append("authority must be a mapping for schema_version 2")
@@ -3407,7 +3707,9 @@ def validate_frontmatter(
         if not isinstance(route, dict):
             errors.append("route must be a mapping for schema_version 2 or 3")
         else:
-            allowed_route_states = ROUTE_STATES if schema_version == 3 else {"active", "terminal"}
+            allowed_route_states = (
+                ROUTE_STATES if schema_version in {3, 4} else {"active", "terminal"}
+            )
             if route.get("route_status") not in allowed_route_states:
                 errors.append(
                     "route.route_status must be " + ", ".join(sorted(allowed_route_states))
@@ -3437,7 +3739,7 @@ def validate_frontmatter(
             if isinstance(route, dict) and handoff.get("route_status") != route.get("route_status"):
                 errors.append("handoff.route_status must match route.route_status")
 
-        if schema_version == 3:
+        if schema_version in {3, 4}:
             raw_scope = frontmatter.get("scope")
             structured_exclusions = (
                 raw_scope.get("exclude", []) if isinstance(raw_scope, dict) else []
@@ -3563,6 +3865,167 @@ def validate_frontmatter(
                     "none",
                 }:
                     errors.append("non-terminal handoff requires a next_step")
+
+        if schema_version == 4:
+            goal = frontmatter.get("goal")
+            if not isinstance(goal, dict):
+                errors.append("goal must be a mapping for schema_version 4")
+            else:
+                if not isinstance(goal.get("statement"), str) or not goal.get("statement"):
+                    errors.append("goal.statement must be a non-empty string")
+                success_conditions = goal.get("success_conditions")
+                if (
+                    not isinstance(success_conditions, list)
+                    or not success_conditions
+                    or not all(isinstance(item, str) and item for item in success_conditions)
+                ):
+                    errors.append("goal.success_conditions must be a non-empty list of strings")
+
+            contract = frontmatter.get("contract")
+            if not isinstance(contract, dict):
+                errors.append("contract must be a mapping for schema_version 4")
+            else:
+                contract_revision = contract.get("revision")
+                if type(contract_revision) is not int or contract_revision < 1:
+                    errors.append("contract.revision must be a positive integer")
+                contract_confirmation = contract.get("confirmation_id")
+                if contract_confirmation not in confirmation_ids:
+                    errors.append("contract.confirmation_id must name a known confirmation")
+                contract_ref = contract.get("confirmed_ref")
+                if not valid_reference(contract_ref):
+                    errors.append("contract.confirmed_ref must be a typed reference")
+                confirmation = (
+                    confirmations(frontmatter).get(contract_confirmation)
+                    if isinstance(contract_confirmation, str)
+                    else None
+                )
+                if (
+                    confirmation is None
+                    or confirmation.get("status") != "accepted"
+                    or confirmation.get("ref") != contract_ref
+                ):
+                    errors.append("contract must match its accepted confirmation")
+
+            unknown_ids: set[str] = set()
+            unknowns = frontmatter.get("unknowns")
+            if not isinstance(unknowns, list):
+                errors.append("unknowns must be a list for schema_version 4")
+            else:
+                for item in unknowns:
+                    if not isinstance(item, dict):
+                        errors.append("unknowns entries must be mappings")
+                        continue
+                    unknown_id = item.get("id")
+                    if (
+                        not isinstance(unknown_id, str)
+                        or UNKNOWN_ID_RE.fullmatch(unknown_id) is None
+                    ):
+                        errors.append("unknowns entries must have U-NNN ids")
+                        continue
+                    if unknown_id in unknown_ids:
+                        errors.append(f"duplicate unknown id {unknown_id}")
+                    unknown_ids.add(unknown_id)
+                    if not isinstance(item.get("question"), str) or not item.get("question"):
+                        errors.append(f"{unknown_id} requires a question")
+                    if item.get("status") not in UNKNOWN_STATES:
+                        errors.append(f"{unknown_id} has an unsupported status")
+                    if item.get("status") == "resolved":
+                        if not isinstance(item.get("resolution"), str) or not item.get(
+                            "resolution"
+                        ):
+                            errors.append(f"{unknown_id} resolved unknown requires resolution")
+                        if not valid_reference(item.get("evidence_manifest")):
+                            errors.append(
+                                f"{unknown_id} resolved unknown requires evidence_manifest"
+                            )
+
+            if isinstance(raw_tasks, list):
+                for task in raw_tasks:
+                    if not isinstance(task, dict) or not isinstance(task.get("id"), str):
+                        continue
+                    linked_unknowns = task.get("unknowns")
+                    if not isinstance(linked_unknowns, list) or not all(
+                        isinstance(item, str) for item in linked_unknowns
+                    ):
+                        errors.append(f"{task['id']} unknowns must be a list of ids")
+                    else:
+                        for unknown_id in linked_unknowns:
+                            if unknown_id not in unknown_ids:
+                                errors.append(
+                                    f"{task['id']} links unknown unknown {unknown_id}"
+                                )
+                    expected_delta = task.get("expected_evidence_delta")
+                    if not isinstance(expected_delta, str) or not expected_delta:
+                        errors.append(
+                            f"{task['id']} requires expected_evidence_delta for schema_version 4"
+                        )
+
+            raw_validations = frontmatter.get("validations")
+            if isinstance(raw_validations, list):
+                for validation in raw_validations:
+                    if (
+                        not isinstance(validation, dict)
+                        or not isinstance(validation.get("id"), str)
+                    ):
+                        continue
+                    provenance = validation.get("provenance")
+                    if not isinstance(provenance, dict):
+                        errors.append(f"{validation['id']} requires validation provenance")
+                        continue
+                    if provenance.get("kind") not in VALIDATION_PROVENANCE_KINDS:
+                        errors.append(f"{validation['id']} provenance.kind is unsupported")
+                    if not valid_reference(provenance.get("source_ref")):
+                        errors.append(
+                            f"{validation['id']} provenance.source_ref must be typed"
+                        )
+
+            history = frontmatter.get("revision_history")
+            history_revisions: list[int] = []
+            if not isinstance(history, list) or not history:
+                errors.append("revision_history must be a non-empty list for schema_version 4")
+            else:
+                for record in history:
+                    if not isinstance(record, dict):
+                        errors.append("revision_history entries must be mappings")
+                        continue
+                    record_revision = record.get("revision")
+                    if type(record_revision) is not int or record_revision < 1:
+                        errors.append("revision_history revision must be positive")
+                        continue
+                    history_revisions.append(record_revision)
+                    if record.get("kind") not in REVISION_KINDS:
+                        errors.append(
+                            f"revision_history {record_revision} has unsupported kind"
+                        )
+                    if not isinstance(record.get("changed_at"), str) or not record.get(
+                        "changed_at"
+                    ):
+                        errors.append(
+                            f"revision_history {record_revision} requires changed_at"
+                        )
+                    if not isinstance(record.get("rationale"), str) or not record.get(
+                        "rationale"
+                    ):
+                        errors.append(
+                            f"revision_history {record_revision} requires rationale"
+                        )
+                    record_confirmation = record.get("confirmation_id")
+                    if (
+                        record_confirmation is not None
+                        and record_confirmation not in confirmation_ids
+                    ):
+                        errors.append(
+                            f"revision_history {record_revision} names unknown confirmation"
+                        )
+                    evidence_manifest = record.get("evidence_manifest")
+                    if evidence_manifest is not None and not valid_reference(evidence_manifest):
+                        errors.append(
+                            f"revision_history {record_revision} evidence_manifest must be typed"
+                        )
+                if history_revisions != sorted(set(history_revisions)):
+                    errors.append("revision_history revisions must be unique and increasing")
+                elif history_revisions and history_revisions[-1] != revision:
+                    errors.append("revision_history must end at the current revision")
     return errors
 
 
@@ -3809,6 +4272,54 @@ def cmd_layout_validate(_args: argparse.Namespace) -> None:
     print("LAYOUT_VALID")
 
 
+def cmd_intake_status(args: argparse.Namespace) -> None:
+    """Validate the exact session receipt before classifying Plan intake."""
+    root = project_root()
+    receipt = validate_current_ready_receipt(
+        root,
+        args.receipt_sha256,
+        require_current_controller=True,
+    )
+    layout = inspect_layout(root)
+    authority_state = "NOT_INSPECTED"
+    plan_contract_state = "NO_ACTIVE_PLAN"
+    plan_id: object = None
+    if layout.state == "LAYOUT_READY":
+        authority = inspect_authority(root)
+        authority_state = authority.state
+        if authority.state == "GOVERNED_ACTIVE":
+            doc = load_plan(active_plan_path(root))
+            plan_contract_state = contract_state(doc.frontmatter)
+            plan_id = doc.frontmatter.get("plan_id")
+    intake_state = (
+        "INTAKE_READY"
+        if layout.state == "LAYOUT_READY"
+        and authority_state in {"UNMANAGED_EMPTY", "GOVERNED_ACTIVE"}
+        and plan_contract_state
+        in {"NO_ACTIVE_PLAN", "PLAN_CONTRACT_READY", "PLAN_CONTRACT_LEGACY_READABLE"}
+        else plan_contract_state
+        if plan_contract_state == "PLAN_CONTRACT_UPGRADE_REQUIRED"
+        else "INTAKE_BLOCKED"
+    )
+    print(
+        json.dumps(
+            {
+                "intake_state": intake_state,
+                "layout_state": layout.state,
+                "authority_state": authority_state,
+                "contract_state": plan_contract_state,
+                "plan_id": plan_id,
+                "receipt_schema_version": receipt["schema_version"],
+                "session_id": receipt["session_id"],
+                "controller_ref": receipt["controller_ref"],
+                "controller_sha256": receipt["controller_sha256"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
 @contextlib.contextmanager
 def legacy_layout_lock(root: Path) -> Iterator[None]:
     """Acquire the old controller lock after the stable layout-1 lock."""
@@ -3819,9 +4330,6 @@ def legacy_layout_lock(root: Path) -> Iterator[None]:
     if path.is_symlink():
         raise WorkctlError("LEGACY_LOCK_SYMLINK")
     with path.open("w", encoding="utf-8") as handle:
-        attempt_path = os.environ.get("WORKCTL_TEST_LEGACY_LOCK_ATTEMPT_FILE")
-        if attempt_path:
-            Path(attempt_path).write_text("attempting\n", encoding="utf-8")
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
             yield
@@ -6111,86 +6619,551 @@ def require_valid_candidate(doc: PlanDocument) -> None:
         raise WorkctlError(f"INVALID_PLAN: {'; '.join(errors)}")
 
 
-def cmd_plan_init(args: argparse.Namespace) -> None:
+def admission_transaction_dir(root: Path, transaction_id: str) -> Path:
+    """Return one ignored, durable Plan-admission transaction directory."""
+    return governance_root(root) / "runtime" / "plan-admissions" / transaction_id
+
+
+def write_transaction_journal(path: Path, payload: Mapping[str, Any]) -> None:
+    """Write one durable JSON transaction journal."""
+    write_atomic(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def load_admission_manifest(path: Path) -> dict[str, Any]:
+    """Validate the closed public Plan-admission manifest."""
+    manifest = load_yaml_file(path)
+    if set(manifest) != {
+        "schema_version",
+        "kind",
+        "transaction_id",
+        "prepared_plan",
+        "plan_id",
+        "plan_sha256",
+        "confirmation_id",
+        "confirmation_ref",
+    }:
+        raise WorkctlError("INVALID_PLAN_ADMISSION_MANIFEST_FIELDS")
+    if manifest.get("schema_version") != 1 or manifest.get("kind") != "plan-admission":
+        raise WorkctlError("INVALID_PLAN_ADMISSION_MANIFEST_SCHEMA")
+    transaction_id = manifest.get("transaction_id")
+    plan_id = manifest.get("plan_id")
+    if not isinstance(transaction_id, str) or ADMISSION_ID_RE.fullmatch(transaction_id) is None:
+        raise WorkctlError("INVALID_PLAN_ADMISSION_TRANSACTION_ID")
+    if not isinstance(plan_id, str) or PLAN_ID_RE.fullmatch(plan_id) is None:
+        raise WorkctlError("INVALID_PLAN_ADMISSION_PLAN_ID")
+    if (
+        not isinstance(manifest.get("plan_sha256"), str)
+        or SHA256_RE.fullmatch(str(manifest["plan_sha256"])) is None
+    ):
+        raise WorkctlError("INVALID_PLAN_ADMISSION_SHA256")
+    if not isinstance(manifest.get("confirmation_id"), str) or not str(
+        manifest["confirmation_id"]
+    ).startswith("C-"):
+        raise WorkctlError("INVALID_PLAN_ADMISSION_CONFIRMATION")
+    if not valid_reference(manifest.get("confirmation_ref")):
+        raise WorkctlError("INVALID_PLAN_ADMISSION_CONFIRMATION_REF")
+    prepared_plan = manifest.get("prepared_plan")
+    if (
+        not isinstance(prepared_plan, str)
+        or not prepared_plan
+        or Path(prepared_plan).is_absolute()
+        or ".." in Path(prepared_plan).parts
+    ):
+        raise WorkctlError("INVALID_PLAN_ADMISSION_PREPARED_PATH")
+    return manifest
+
+
+def resume_plan_admission(root: Path, journal_path: Path) -> None:
+    """Deterministically roll one staged Plan admission forward, index last."""
+    reject_symlink_components(root, journal_path)
+    if journal_path.is_symlink() or not journal_path.is_file():
+        raise WorkctlError("INVALID_PLAN_ADMISSION_JOURNAL")
+    journal = load_yaml_file(journal_path)
+    expected_keys = {
+        "schema_version",
+        "kind",
+        "transaction_id",
+        "status",
+        "created_at",
+        "updated_at",
+        "plan_id",
+        "plan_sha256",
+        "manifest_sha256",
+        "staged_path",
+        "target_path",
+    }
+    transaction_id = journal.get("transaction_id")
+    plan_id = journal.get("plan_id")
+    if (
+        set(journal) != expected_keys
+        or journal.get("kind") != "plan-admission"
+        or journal.get("schema_version") != 1
+        or journal.get("status") not in {"prepared", "plan-installed", "committed"}
+        or not isinstance(transaction_id, str)
+        or ADMISSION_ID_RE.fullmatch(transaction_id) is None
+        or not isinstance(plan_id, str)
+        or PLAN_ID_RE.fullmatch(plan_id) is None
+        or journal_path != admission_transaction_dir(root, transaction_id) / "journal.json"
+    ):
+        raise WorkctlError("INVALID_PLAN_ADMISSION_JOURNAL")
+    if journal.get("status") == "committed":
+        print(f"PLAN_ADMISSION_ALREADY_COMMITTED {transaction_id}")
+        return
+    target = checked_project_path(root, str(journal.get("target_path")))
+    staged = checked_project_path(root, str(journal.get("staged_path")))
+    expected_transaction = admission_transaction_dir(root, transaction_id)
+    expected_target = plan_dir(root) / f"{plan_id}.md"
+    expected_staged = expected_transaction / "staging" / f"{plan_id}.md"
+    expected_sha256 = str(journal.get("plan_sha256"))
+    if (
+        target != expected_target
+        or staged != expected_staged
+        or SHA256_RE.fullmatch(expected_sha256) is None
+        or SHA256_RE.fullmatch(str(journal.get("manifest_sha256"))) is None
+        or staged.is_symlink()
+        or not staged.is_file()
+        or sha256_file(staged) != expected_sha256
+    ):
+        raise WorkctlError("INVALID_PLAN_ADMISSION_JOURNAL")
+    reject_symlink_components(root, target)
+    staged_doc = load_plan(staged)
+    require_valid_candidate(staged_doc)
+    if (
+        staged_doc.frontmatter.get("schema_version") != 4
+        or staged_doc.frontmatter.get("plan_id") != plan_id
+    ):
+        raise WorkctlError("PLAN_ADMISSION_PLAN_ID_MISMATCH")
+    if target.exists():
+        if target.is_symlink() or not target.is_file() or sha256_file(target) != expected_sha256:
+            raise WorkctlError("PLAN_ADMISSION_TARGET_CONFLICT")
+    else:
+        write_atomic_bytes(target, staged.read_bytes())
+    journal["status"] = "plan-installed"
+    journal["updated_at"] = utc_now()
+    write_transaction_journal(journal_path, journal)
+    if os.environ.get("WORKCTL_TEST_ADMISSION_INTERRUPT_AFTER") == "plan-installed":
+        raise WorkctlError("PLAN_ADMISSION_TEST_INTERRUPTED: plan-installed")
+    index = {
+        "schema_version": 1,
+        "active_plan_id": plan_id,
+        "plans": [
+            {
+                "id": plan_id,
+                "path": target.name,
+                "title": staged_doc.frontmatter["title"],
+                "created_at": staged_doc.frontmatter["created_at"],
+            }
+        ],
+    }
+    write_atomic(index_path(root), yaml.safe_dump(index, sort_keys=False))
+    report = inspect_authority(root)
+    if report.state != "GOVERNED_ACTIVE":
+        raise WorkctlError(
+            f"PLAN_ADMISSION_ACTIVATED_BUT_INVALID: {report.state}; "
+            f"{'; '.join(report.blockers)}"
+        )
+    errors = validate_plan(root)
+    if errors:
+        raise WorkctlError(f"PLAN_ADMISSION_ACTIVATED_BUT_INVALID: {'; '.join(errors)}")
+    journal["status"] = "committed"
+    journal["updated_at"] = utc_now()
+    write_transaction_journal(journal_path, journal)
+    print(f"PLAN_ADMISSION_COMMITTED {journal['transaction_id']} plan={plan_id}")
+
+
+def cmd_plan_admit_apply(args: argparse.Namespace) -> None:
+    """Stage, validate, journal and activate one exact confirmed Plan."""
     root = project_root()
-    plan_id = args.plan_id
-    if PLAN_ID_RE.fullmatch(plan_id) is None:
-        raise WorkctlError("INVALID_PLAN_ID")
+    manifest_path = Path(args.manifest).resolve()
+    manifest = load_admission_manifest(manifest_path)
     with lock(root):
-        if index_path(root).exists():
-            index = load_yaml_file(index_path(root))
-            if index.get("active_plan_id"):
-                raise WorkctlError("ACTIVE_PLAN_EXISTS")
         report = inspect_authority(root)
         if report.state != "UNMANAGED_EMPTY":
-            raise WorkctlError(f"AUTHORITY_BLOCKED: {report.state}")
-        now = utc_now()
-        plan_dir(root).mkdir(parents=True, exist_ok=True)
-        index = {
+            raise WorkctlError(f"PLAN_ADMISSION_BLOCKED: {report.state}")
+        transaction_id = str(manifest["transaction_id"])
+        transaction = admission_transaction_dir(root, transaction_id)
+        journal_path = transaction / "journal.json"
+        if journal_path.exists():
+            resume_plan_admission(root, journal_path)
+            return
+        if transaction.exists():
+            raise WorkctlError("PLAN_ADMISSION_TRANSACTION_CONFLICT")
+        prepared = manifest_input_path(manifest_path, str(manifest["prepared_plan"]))
+        if prepared.is_symlink() or not prepared.is_file():
+            raise WorkctlError("PLAN_ADMISSION_PREPARED_PLAN_MISSING")
+        if sha256_file(prepared) != manifest["plan_sha256"]:
+            raise WorkctlError("PLAN_ADMISSION_INPUT_DRIFT")
+        candidate = load_plan(prepared)
+        require_valid_candidate(candidate)
+        plan_id = str(manifest["plan_id"])
+        if (
+            candidate.frontmatter.get("schema_version") != 4
+            or candidate.frontmatter.get("plan_id") != plan_id
+            or candidate.path.name == "index.yaml"
+        ):
+            raise WorkctlError("PLAN_ADMISSION_CANDIDATE_INVALID")
+        decision = confirmations(candidate.frontmatter).get(str(manifest["confirmation_id"]))
+        if (
+            decision is None
+            or decision.get("status") != "accepted"
+            or decision.get("ref") != manifest["confirmation_ref"]
+            or candidate.frontmatter.get("contract", {}).get("confirmation_id")
+            != manifest["confirmation_id"]
+        ):
+            raise WorkctlError("PLAN_ADMISSION_CONFIRMATION_MISMATCH")
+        staged = transaction / "staging" / f"{plan_id}.md"
+        durable_copy_file(prepared, staged)
+        journal = {
             "schema_version": 1,
-            "active_plan_id": plan_id,
-            "plans": [
-                {
-                    "id": plan_id,
-                    "path": f"{plan_id}.md",
-                    "title": args.title,
-                    "created_at": now,
-                }
-            ],
-        }
-        fm = {
-            "schema_version": 3,
+            "kind": "plan-admission",
+            "transaction_id": transaction_id,
+            "status": "prepared",
+            "created_at": utc_now(),
+            "updated_at": utc_now(),
             "plan_id": plan_id,
-            "title": args.title,
-            "status": "active",
-            "mode": args.mode,
-            "revision": 1,
-            "created_at": now,
-            "updated_at": now,
-            "scope": {"include": [], "exclude": []},
-            "confirmations": {"required": []},
-            "obligations": [],
-            "tasks": [],
-            "validations": [],
-            "artifacts": [],
-            "authority": {
-                "model": AUTHORITY_MODEL,
-                "state": AUTHORITY_STATE,
-                "canonical_plan_id": plan_id,
-                "sources": [],
-                "confirmations": {},
-            },
-            "delivery": {
-                "status": "pending",
-                "boundary": "undetermined",
-                "evidence_ref": "project:not-yet-delivered",
-            },
-            "activation": {
-                "status": "deferred",
-                "current_ref": "undetermined",
-                "target_ref": "undetermined",
-            },
-            "route": {
-                "route_status": "active",
-                "slice_status": "initialized",
-                "next_phase": "Define the demand contract.",
-                "validation_standard": "Every obligation has direct fresh evidence.",
-                "confirmation_gate": "none",
-            },
-            "handoff": {
-                "route_status": "active",
-                "next_step": "Define the demand contract.",
-            },
+            "plan_sha256": manifest["plan_sha256"],
+            "manifest_sha256": sha256_file(manifest_path),
+            "staged_path": relative_project_path(root, staged),
+            "target_path": plan_relative_path(f"{plan_id}.md"),
         }
-        doc = PlanDocument(
-            plan_dir(root) / f"{plan_id}.md",
-            fm,
-            "# Decision Summary\n\nInitialized.\n",
+        write_transaction_journal(journal_path, journal)
+        resume_plan_admission(root, journal_path)
+
+
+def cmd_plan_admit_recover(args: argparse.Namespace) -> None:
+    """Recover the sole or named incomplete Plan-admission transaction."""
+    root = project_root()
+    with lock(root):
+        base = governance_root(root) / "runtime" / "plan-admissions"
+        if args.transaction_id:
+            journal = admission_transaction_dir(root, args.transaction_id) / "journal.json"
+            if not journal.is_file():
+                raise WorkctlError("PLAN_ADMISSION_JOURNAL_NOT_FOUND")
+        else:
+            journals = sorted(base.glob("*/journal.json")) if base.is_dir() else []
+            incomplete = [
+                path for path in journals if load_yaml_file(path).get("status") != "committed"
+            ]
+            if len(incomplete) != 1:
+                raise WorkctlError(
+                    "PLAN_ADMISSION_RECOVERY_AMBIGUOUS"
+                    if incomplete
+                    else "PLAN_ADMISSION_RECOVERY_NOT_REQUIRED"
+                )
+            journal = incomplete[0]
+        resume_plan_admission(root, journal)
+
+
+def contract_upgrade_transaction_dir(root: Path, transaction_id: str) -> Path:
+    """Return one ignored contract-upgrade transaction directory."""
+    return governance_root(root) / "runtime" / "contract-upgrades" / transaction_id
+
+
+def load_contract_upgrade_manifest(path: Path) -> dict[str, Any]:
+    """Validate one schema-v3-to-v4 upgrade manifest."""
+    manifest = load_yaml_file(path)
+    if set(manifest) != {
+        "schema_version",
+        "kind",
+        "transaction_id",
+        "plan_id",
+        "expected_revision",
+        "plan_sha256",
+        "confirmation_id",
+        "confirmation_ref",
+        "evidence_manifest",
+        "goal",
+        "unknowns",
+        "task_metadata",
+        "validation_provenance",
+    }:
+        raise WorkctlError("INVALID_CONTRACT_UPGRADE_MANIFEST_FIELDS")
+    if manifest.get("schema_version") != 1 or manifest.get("kind") != "plan-contract-upgrade":
+        raise WorkctlError("INVALID_CONTRACT_UPGRADE_MANIFEST_SCHEMA")
+    transaction_id = manifest.get("transaction_id")
+    if (
+        not isinstance(transaction_id, str)
+        or CONTRACT_UPGRADE_ID_RE.fullmatch(transaction_id) is None
+        or not isinstance(manifest.get("plan_id"), str)
+        or PLAN_ID_RE.fullmatch(str(manifest["plan_id"])) is None
+        or type(manifest.get("expected_revision")) is not int
+        or not isinstance(manifest.get("plan_sha256"), str)
+        or SHA256_RE.fullmatch(str(manifest["plan_sha256"])) is None
+        or not isinstance(manifest.get("confirmation_id"), str)
+        or not str(manifest["confirmation_id"]).startswith("C-")
+        or not valid_reference(manifest.get("confirmation_ref"))
+        or not isinstance(manifest.get("evidence_manifest"), str)
+        or not isinstance(manifest.get("goal"), dict)
+        or not isinstance(manifest.get("unknowns"), list)
+        or not isinstance(manifest.get("task_metadata"), dict)
+        or not isinstance(manifest.get("validation_provenance"), dict)
+    ):
+        raise WorkctlError("INVALID_CONTRACT_UPGRADE_MANIFEST")
+    return manifest
+
+
+def resume_contract_upgrade(root: Path, journal_path: Path) -> None:
+    """Roll one staged active-Plan contract upgrade forward."""
+    reject_symlink_components(root, journal_path)
+    if journal_path.is_symlink() or not journal_path.is_file():
+        raise WorkctlError("INVALID_CONTRACT_UPGRADE_JOURNAL")
+    journal = load_yaml_file(journal_path)
+    expected_keys = {
+        "schema_version",
+        "kind",
+        "transaction_id",
+        "status",
+        "created_at",
+        "updated_at",
+        "plan_id",
+        "source_sha256",
+        "target_sha256",
+        "manifest_sha256",
+        "staged_path",
+        "target_path",
+    }
+    transaction_id = journal.get("transaction_id")
+    plan_id = journal.get("plan_id")
+    if (
+        set(journal) != expected_keys
+        or journal.get("kind") != "plan-contract-upgrade"
+        or journal.get("schema_version") != 1
+        or journal.get("status") not in {"prepared", "plan-replaced", "committed"}
+        or not isinstance(transaction_id, str)
+        or CONTRACT_UPGRADE_ID_RE.fullmatch(transaction_id) is None
+        or not isinstance(plan_id, str)
+        or PLAN_ID_RE.fullmatch(plan_id) is None
+        or journal_path
+        != contract_upgrade_transaction_dir(root, transaction_id) / "journal.json"
+    ):
+        raise WorkctlError("INVALID_CONTRACT_UPGRADE_JOURNAL")
+    if journal.get("status") == "committed":
+        print(f"PLAN_CONTRACT_UPGRADE_ALREADY_COMMITTED {transaction_id}")
+        return
+    target = checked_project_path(root, str(journal.get("target_path")))
+    staged = checked_project_path(root, str(journal.get("staged_path")))
+    expected_transaction = contract_upgrade_transaction_dir(root, transaction_id)
+    expected_target = plan_dir(root) / f"{plan_id}.md"
+    expected_staged = expected_transaction / "staging" / f"{plan_id}.md"
+    source_sha256 = str(journal.get("source_sha256"))
+    target_sha256 = str(journal.get("target_sha256"))
+    if (
+        target != expected_target
+        or staged != expected_staged
+        or target.is_symlink()
+        or not target.is_file()
+        or staged.is_symlink()
+        or not staged.is_file()
+        or SHA256_RE.fullmatch(source_sha256) is None
+        or SHA256_RE.fullmatch(target_sha256) is None
+        or SHA256_RE.fullmatch(str(journal.get("manifest_sha256"))) is None
+        or sha256_file(staged) != target_sha256
+    ):
+        raise WorkctlError("INVALID_CONTRACT_UPGRADE_JOURNAL")
+    reject_symlink_components(root, target)
+    staged_doc = load_plan(staged)
+    require_valid_candidate(staged_doc)
+    if (
+        staged_doc.frontmatter.get("schema_version") != 4
+        or staged_doc.frontmatter.get("plan_id") != plan_id
+    ):
+        raise WorkctlError("INVALID_CONTRACT_UPGRADE_JOURNAL")
+    index = load_yaml_file(index_path(root))
+    if index.get("active_plan_id") != plan_id:
+        raise WorkctlError("CONTRACT_UPGRADE_ACTIVE_PLAN_DRIFT")
+    current_sha256 = sha256_file(target)
+    if current_sha256 == source_sha256:
+        write_atomic_bytes(target, staged.read_bytes())
+    elif current_sha256 != target_sha256:
+        raise WorkctlError("CONTRACT_UPGRADE_TARGET_DRIFT")
+    journal["status"] = "plan-replaced"
+    journal["updated_at"] = utc_now()
+    write_transaction_journal(journal_path, journal)
+    if os.environ.get("WORKCTL_TEST_UPGRADE_INTERRUPT_AFTER") == "plan-replaced":
+        raise WorkctlError("PLAN_CONTRACT_UPGRADE_TEST_INTERRUPTED: plan-replaced")
+    doc = load_plan(target)
+    require_valid_candidate(doc)
+    errors = validate_plan(root)
+    if errors:
+        raise WorkctlError(f"PLAN_CONTRACT_UPGRADE_INVALID: {'; '.join(errors)}")
+    journal["status"] = "committed"
+    journal["updated_at"] = utc_now()
+    write_transaction_journal(journal_path, journal)
+    print(
+        f"PLAN_CONTRACT_UPGRADE_COMMITTED {journal['transaction_id']} "
+        f"plan={journal['plan_id']}"
+    )
+
+
+def cmd_plan_contract_upgrade_status(_args: argparse.Namespace) -> None:
+    """Report the independent Plan-contract cutover state."""
+    root = project_root()
+    report = inspect_authority(root)
+    payload: dict[str, Any] = {
+        "authority_state": report.state,
+        "contract_state": "NO_ACTIVE_PLAN",
+        "plan_id": None,
+        "schema_version": None,
+    }
+    if report.state == "GOVERNED_ACTIVE":
+        doc = load_plan(active_plan_path(root))
+        payload.update(
+            {
+                "contract_state": contract_state(doc.frontmatter),
+                "plan_id": doc.frontmatter.get("plan_id"),
+                "schema_version": doc.frontmatter.get("schema_version"),
+            }
         )
-        require_valid_candidate(doc)
-        write_atomic(index_path(root), yaml.safe_dump(index, sort_keys=False))
-        write_atomic(doc.path, dump_plan(doc))
-        print(f"PLAN_INITIALIZED {plan_id} revision=1")
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_plan_contract_upgrade_apply(args: argparse.Namespace) -> None:
+    """Stage and activate one exact active schema-v3-to-v4 contract upgrade."""
+    root = project_root()
+    manifest_path = Path(args.manifest).resolve()
+    manifest = load_contract_upgrade_manifest(manifest_path)
+    with lock(root):
+        require_governed_authority(root)
+        source = load_plan(active_plan_path(root))
+        if contract_state(source.frontmatter) != "PLAN_CONTRACT_UPGRADE_REQUIRED":
+            raise WorkctlError("PLAN_CONTRACT_UPGRADE_NOT_REQUIRED")
+        if (
+            source.frontmatter.get("plan_id") != manifest["plan_id"]
+            or source.frontmatter.get("revision") != manifest["expected_revision"]
+            or sha256_file(source.path) != manifest["plan_sha256"]
+        ):
+            raise WorkctlError("PLAN_CONTRACT_UPGRADE_INPUT_DRIFT")
+        confirmation_id = str(manifest["confirmation_id"])
+        decision = confirmations(source.frontmatter).get(confirmation_id)
+        if (
+            decision is None
+            or decision.get("status") != "accepted"
+            or decision.get("ref") != manifest["confirmation_ref"]
+        ):
+            raise WorkctlError("PLAN_CONTRACT_UPGRADE_CONFIRMATION_MISMATCH")
+        evidence_ref, _ = verify_evidence_manifest(
+            root,
+            str(manifest["evidence_manifest"]),
+            plan_id=str(source.frontmatter["plan_id"]),
+            subject="contract-upgrade",
+        )
+        upgraded = PlanDocument(
+            path=source.path,
+            frontmatter=copy.deepcopy(source.frontmatter),
+            body=source.body,
+        )
+        upgraded.frontmatter["schema_version"] = 4
+        upgraded.frontmatter["goal"] = manifest["goal"]
+        upgraded.frontmatter["contract"] = {
+            "revision": 1,
+            "confirmation_id": confirmation_id,
+            "confirmed_ref": decision["ref"],
+        }
+        upgraded.frontmatter["unknowns"] = manifest["unknowns"]
+        task_metadata = cast(dict[str, Any], manifest["task_metadata"])
+        for task in upgraded.frontmatter.get("tasks", []):
+            if not isinstance(task, dict) or not isinstance(task.get("id"), str):
+                continue
+            metadata = task_metadata.get(task["id"])
+            if not isinstance(metadata, dict) or set(metadata) != {
+                "unknowns",
+                "expected_evidence_delta",
+            }:
+                raise WorkctlError(f"CONTRACT_UPGRADE_TASK_METADATA_MISSING: {task['id']}")
+            task.update(metadata)
+        if set(task_metadata) != {
+            str(task["id"])
+            for task in upgraded.frontmatter.get("tasks", [])
+            if isinstance(task, dict) and isinstance(task.get("id"), str)
+        }:
+            raise WorkctlError("CONTRACT_UPGRADE_TASK_METADATA_UNKNOWN")
+        validation_provenance = cast(dict[str, Any], manifest["validation_provenance"])
+        for validation in upgraded.frontmatter.get("validations", []):
+            if not isinstance(validation, dict) or not isinstance(validation.get("id"), str):
+                continue
+            provenance = validation_provenance.get(validation["id"])
+            if not isinstance(provenance, dict):
+                raise WorkctlError(
+                    f"CONTRACT_UPGRADE_VALIDATION_PROVENANCE_MISSING: {validation['id']}"
+                )
+            validation["provenance"] = provenance
+        if set(validation_provenance) != {
+            str(validation["id"])
+            for validation in upgraded.frontmatter.get("validations", [])
+            if isinstance(validation, dict) and isinstance(validation.get("id"), str)
+        }:
+            raise WorkctlError("CONTRACT_UPGRADE_VALIDATION_PROVENANCE_UNKNOWN")
+        next_revision = int(upgraded.frontmatter["revision"]) + 1
+        upgraded.frontmatter["revision"] = next_revision
+        upgraded.frontmatter["updated_at"] = utc_now()
+        upgraded.frontmatter["revision_history"] = [
+            {
+                "revision": next_revision,
+                "kind": "contract-upgrade",
+                "changed_at": utc_now(),
+                "rationale": "Upgrade the active legacy contract without trusting log hashes.",
+                "confirmation_id": confirmation_id,
+                "evidence_manifest": evidence_ref,
+            }
+        ]
+        require_valid_candidate(upgraded)
+        transaction_id = str(manifest["transaction_id"])
+        transaction = contract_upgrade_transaction_dir(root, transaction_id)
+        journal_path = transaction / "journal.json"
+        if journal_path.exists():
+            resume_contract_upgrade(root, journal_path)
+            return
+        if transaction.exists():
+            raise WorkctlError("CONTRACT_UPGRADE_TRANSACTION_CONFLICT")
+        staged = transaction / "staging" / source.path.name
+        write_atomic(staged, dump_plan(upgraded))
+        journal = {
+            "schema_version": 1,
+            "kind": "plan-contract-upgrade",
+            "transaction_id": transaction_id,
+            "status": "prepared",
+            "created_at": utc_now(),
+            "updated_at": utc_now(),
+            "plan_id": source.frontmatter["plan_id"],
+            "source_sha256": manifest["plan_sha256"],
+            "target_sha256": sha256_file(staged),
+            "manifest_sha256": sha256_file(manifest_path),
+            "staged_path": relative_project_path(root, staged),
+            "target_path": relative_project_path(root, source.path),
+        }
+        write_transaction_journal(journal_path, journal)
+        resume_contract_upgrade(root, journal_path)
+
+
+def cmd_plan_contract_upgrade_recover(args: argparse.Namespace) -> None:
+    """Recover the sole or named incomplete contract upgrade."""
+    root = project_root()
+    with lock(root):
+        base = governance_root(root) / "runtime" / "contract-upgrades"
+        if args.transaction_id:
+            journal = contract_upgrade_transaction_dir(
+                root, args.transaction_id
+            ) / "journal.json"
+            if not journal.is_file():
+                raise WorkctlError("CONTRACT_UPGRADE_JOURNAL_NOT_FOUND")
+        else:
+            journals = sorted(base.glob("*/journal.json")) if base.is_dir() else []
+            incomplete = [
+                path for path in journals if load_yaml_file(path).get("status") != "committed"
+            ]
+            if len(incomplete) != 1:
+                raise WorkctlError(
+                    "CONTRACT_UPGRADE_RECOVERY_AMBIGUOUS"
+                    if incomplete
+                    else "CONTRACT_UPGRADE_RECOVERY_NOT_REQUIRED"
+                )
+            journal = incomplete[0]
+        resume_contract_upgrade(root, journal)
+
+
+def cmd_plan_init(args: argparse.Namespace) -> None:
+    del args
+    raise WorkctlError("PLAN_ADMISSION_REQUIRED: use plan admit apply --manifest")
 
 
 def cmd_plan_status(_args: argparse.Namespace) -> None:
@@ -6218,6 +7191,11 @@ def cmd_plan_status(_args: argparse.Namespace) -> None:
         "status": doc.frontmatter.get("status"),
         "mode": doc.frontmatter.get("mode"),
         "revision": doc.frontmatter.get("revision"),
+        "contract_state": contract_state(doc.frontmatter),
+        "goal": doc.frontmatter.get("goal", {}),
+        "contract": doc.frontmatter.get("contract", {}),
+        "unknowns": doc.frontmatter.get("unknowns", []),
+        "revision_history": doc.frontmatter.get("revision_history", []),
         "obligations": doc.frontmatter.get("obligations", []),
         "tasks": doc.frontmatter.get("tasks", []),
         "validations": doc.frontmatter.get("validations", []),
@@ -6234,12 +7212,21 @@ def cmd_plan_status(_args: argparse.Namespace) -> None:
     print(json.dumps(summary, indent=2, sort_keys=True))
 
 
-def cmd_plan_validate(_args: argparse.Namespace) -> None:
-    errors = validate_plan(project_root())
+def cmd_plan_validate(args: argparse.Namespace) -> None:
+    root = project_root()
+    errors = validate_plan(root)
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
         raise SystemExit(1)
+    if args.evidence_manifest:
+        doc = load_plan(active_plan_path(root))
+        verify_evidence_manifest(
+            root,
+            args.evidence_manifest,
+            plan_id=str(doc.frontmatter["plan_id"]),
+            subject="plan-validation",
+        )
     print("PLAN_VALID")
 
 
@@ -6526,6 +7513,8 @@ def cmd_plan_revise(args: argparse.Namespace) -> None:
         require_governed_authority(root)
         doc = load_plan(active_plan_path(root))
         require_expected_revision(doc.frontmatter, args.expected_revision)
+        if doc.frontmatter.get("schema_version") == 4:
+            raise WorkctlError("PLAN_ADAPT_REQUIRED: use plan adapt --manifest")
         before_frontmatter = copy.deepcopy(doc.frontmatter)
         if args.status == "complete":
             raise WorkctlError("PLAN_COMPLETE_REQUIRES_CLOSEOUT_COMMAND")
@@ -6610,6 +7599,50 @@ def cmd_plan_revise(args: argparse.Namespace) -> None:
         print(f"PLAN_REVISED revision={doc.frontmatter['revision']}")
 
 
+def cmd_plan_confirmation_add(args: argparse.Namespace) -> None:
+    """Create one explicit pending or already-authorized confirmation."""
+    root = project_root()
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        require_expected_revision(doc.frontmatter, args.expected_revision)
+        if not args.confirmation_id.startswith("C-"):
+            raise WorkctlError("INVALID_CONFIRMATION_ID")
+        if not args.description:
+            raise WorkctlError("INVALID_CONFIRMATION_DESCRIPTION")
+        raw = doc.frontmatter.setdefault("confirmations", {})
+        required = raw.setdefault("required", [])
+        if not isinstance(required, list):
+            raise WorkctlError("INVALID_PLAN: confirmations.required must be a list")
+        if args.confirmation_id in confirmations(doc.frontmatter):
+            raise WorkctlError(f"CONFIRMATION_EXISTS: {args.confirmation_id}")
+        item: dict[str, Any] = {
+            "id": args.confirmation_id,
+            "description": args.description,
+            "status": args.status,
+        }
+        if args.status == "accepted":
+            if not isinstance(args.ref, str) or not valid_reference(args.ref):
+                raise WorkctlError("CONFIRMATION_REF_REQUIRED")
+            item["ref"] = args.ref
+            item["accepted_at"] = utc_now()
+        elif args.ref is not None:
+            raise WorkctlError("PENDING_CONFIRMATION_CANNOT_HAVE_REF")
+        required.append(item)
+        bump_revision(
+            doc.frontmatter,
+            kind="confirmation-added",
+            rationale=f"Create explicit confirmation {args.confirmation_id}.",
+            confirmation_id=args.confirmation_id if args.status == "accepted" else None,
+        )
+        require_valid_candidate(doc)
+        write_atomic(doc.path, dump_plan(doc))
+        print(
+            f"CONFIRMATION_ADDED {args.confirmation_id} {args.status} "
+            f"revision={doc.frontmatter['revision']}"
+        )
+
+
 def cmd_plan_confirm(args: argparse.Namespace) -> None:
     root = project_root()
     with lock(root):
@@ -6630,7 +7663,7 @@ def cmd_plan_confirm(args: argparse.Namespace) -> None:
                 f"INVALID_CONFIRMATION_TRANSITION: {args.confirmation_id} "
                 f"{target.get('status')} -> {args.decision}"
             )
-        if doc.frontmatter.get("schema_version") == 3 and not valid_reference(args.ref):
+        if doc.frontmatter.get("schema_version") in {3, 4} and not valid_reference(args.ref):
             raise WorkctlError("INVALID_CONFIRMATION_REF")
         target["status"] = args.decision
         target["ref"] = args.ref
@@ -6642,11 +7675,256 @@ def cmd_plan_confirm(args: argparse.Namespace) -> None:
             if SHA256_RE.fullmatch(args.evidence_sha256) is None:
                 raise WorkctlError("INVALID_CONFIRMATION_EVIDENCE_SHA256")
             target["evidence_sha256"] = args.evidence_sha256
-        bump_revision(doc.frontmatter)
+        bump_revision(
+            doc.frontmatter,
+            kind="confirmation-decided",
+            rationale=f"Record the explicit decision for {args.confirmation_id}.",
+            confirmation_id=args.confirmation_id,
+        )
         require_valid_candidate(doc)
         write_atomic(doc.path, dump_plan(doc))
         print(
             f"CONFIRMATION_DECIDED {args.confirmation_id} {args.decision} "
+            f"revision={doc.frontmatter['revision']}"
+        )
+
+
+def load_plan_change_manifest(
+    path: Path,
+    *,
+    kind: str,
+    allowed_change_fields: set[str],
+) -> dict[str, Any]:
+    """Validate the common closed envelope for evidence-backed Plan changes."""
+    manifest = load_yaml_file(path)
+    if set(manifest) != {
+        "schema_version",
+        "kind",
+        "plan_id",
+        "expected_revision",
+        "confirmation_id",
+        "rationale",
+        "evidence_manifest",
+        "changes",
+    }:
+        raise WorkctlError("INVALID_PLAN_CHANGE_MANIFEST_FIELDS")
+    if manifest.get("schema_version") != 1 or manifest.get("kind") != kind:
+        raise WorkctlError("INVALID_PLAN_CHANGE_MANIFEST_SCHEMA")
+    if (
+        not isinstance(manifest.get("plan_id"), str)
+        or PLAN_ID_RE.fullmatch(str(manifest["plan_id"])) is None
+        or type(manifest.get("expected_revision")) is not int
+        or not isinstance(manifest.get("confirmation_id"), str)
+        or not str(manifest["confirmation_id"]).startswith("C-")
+        or not isinstance(manifest.get("rationale"), str)
+        or not manifest.get("rationale")
+        or not isinstance(manifest.get("evidence_manifest"), str)
+    ):
+        raise WorkctlError("INVALID_PLAN_CHANGE_MANIFEST")
+    changes = manifest.get("changes")
+    if (
+        not isinstance(changes, dict)
+        or not changes
+        or not set(changes).issubset(allowed_change_fields)
+    ):
+        raise WorkctlError("INVALID_PLAN_CHANGE_FIELDS")
+    return manifest
+
+
+def cmd_plan_adapt(args: argparse.Namespace) -> None:
+    """Adapt only the execution path while preserving the confirmed contract."""
+    root = project_root()
+    manifest_path = Path(args.manifest).resolve()
+    manifest = load_plan_change_manifest(
+        manifest_path,
+        kind="plan-adaptation",
+        allowed_change_fields={"tasks", "validations", "route", "handoff"},
+    )
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        require_plan_contract_ready(doc.frontmatter)
+        if manifest["plan_id"] != doc.frontmatter.get("plan_id"):
+            raise WorkctlError("PLAN_ADAPTATION_PLAN_MISMATCH")
+        require_expected_revision(doc.frontmatter, int(manifest["expected_revision"]))
+        confirmation_id = str(manifest["confirmation_id"])
+        require_matching_decision(
+            doc.frontmatter,
+            confirmation_id,
+            confirmation_id,
+            {"accepted"},
+        )
+        next_revision = int(doc.frontmatter["revision"]) + 1
+        evidence_ref, _ = verify_evidence_manifest(
+            root,
+            str(manifest["evidence_manifest"]),
+            plan_id=str(doc.frontmatter["plan_id"]),
+            subject=f"adaptation:{next_revision}",
+        )
+        before = copy.deepcopy(doc.frontmatter)
+        changes = cast(dict[str, Any], manifest["changes"])
+        for field, value in changes.items():
+            doc.frontmatter[field] = value
+        validate_authorized_plan_patch(
+            before,
+            doc.frontmatter,
+            changes,
+            confirmation_id,
+        )
+        if before.get("goal") != doc.frontmatter.get("goal") or before.get(
+            "contract"
+        ) != doc.frontmatter.get("contract"):
+            raise WorkctlError("PLAN_ADAPTATION_CONTRACT_IMMUTABLE")
+        bump_revision(
+            doc.frontmatter,
+            kind="adaptation",
+            rationale=str(manifest["rationale"]),
+            confirmation_id=confirmation_id,
+            evidence_manifest=evidence_ref,
+        )
+        require_valid_candidate(doc)
+        write_atomic(doc.path, dump_plan(doc))
+        print(f"PLAN_ADAPTED revision={doc.frontmatter['revision']}")
+
+
+def cmd_plan_contract_revise(args: argparse.Namespace) -> None:
+    """Revise goal/contract only through an accepted, evidence-bound decision."""
+    root = project_root()
+    manifest_path = Path(args.manifest).resolve()
+    manifest = load_plan_change_manifest(
+        manifest_path,
+        kind="plan-contract-revision",
+        allowed_change_fields={"goal", "scope", "obligations"},
+    )
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        require_plan_contract_ready(doc.frontmatter)
+        if manifest["plan_id"] != doc.frontmatter.get("plan_id"):
+            raise WorkctlError("PLAN_CONTRACT_REVISION_PLAN_MISMATCH")
+        require_expected_revision(doc.frontmatter, int(manifest["expected_revision"]))
+        confirmation_id = str(manifest["confirmation_id"])
+        decision = require_matching_decision(
+            doc.frontmatter,
+            confirmation_id,
+            confirmation_id,
+            {"accepted"},
+        )
+        contract = doc.frontmatter.get("contract")
+        if not isinstance(contract, dict) or type(contract.get("revision")) is not int:
+            raise WorkctlError("INVALID_PLAN_CONTRACT")
+        next_contract_revision = int(contract["revision"]) + 1
+        evidence_ref, _ = verify_evidence_manifest(
+            root,
+            str(manifest["evidence_manifest"]),
+            plan_id=str(doc.frontmatter["plan_id"]),
+            subject=f"contract-revision:{next_contract_revision}",
+        )
+        before = copy.deepcopy(doc.frontmatter)
+        changes = cast(dict[str, Any], manifest["changes"])
+        for field, value in changes.items():
+            doc.frontmatter[field] = value
+        contract["revision"] = next_contract_revision
+        contract["confirmation_id"] = confirmation_id
+        contract["confirmed_ref"] = decision["ref"]
+        validate_authorized_plan_patch(
+            before,
+            doc.frontmatter,
+            changes,
+            confirmation_id,
+        )
+        bump_revision(
+            doc.frontmatter,
+            kind="contract-revision",
+            rationale=str(manifest["rationale"]),
+            confirmation_id=confirmation_id,
+            evidence_manifest=evidence_ref,
+        )
+        require_valid_candidate(doc)
+        write_atomic(doc.path, dump_plan(doc))
+        print(
+            f"PLAN_CONTRACT_REVISED contract_revision={next_contract_revision} "
+            f"revision={doc.frontmatter['revision']}"
+        )
+
+
+def cmd_plan_unknown_add(args: argparse.Namespace) -> None:
+    """Add one explicit unknown without changing the confirmed goal."""
+    root = project_root()
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        require_plan_contract_ready(doc.frontmatter)
+        require_expected_revision(doc.frontmatter, args.expected_revision)
+        if UNKNOWN_ID_RE.fullmatch(args.unknown_id) is None:
+            raise WorkctlError("INVALID_UNKNOWN_ID")
+        unknowns = doc.frontmatter.setdefault("unknowns", [])
+        if not isinstance(unknowns, list):
+            raise WorkctlError("INVALID_PLAN: unknowns must be a list")
+        if any(
+            isinstance(item, dict) and item.get("id") == args.unknown_id
+            for item in unknowns
+        ):
+            raise WorkctlError(f"UNKNOWN_EXISTS: {args.unknown_id}")
+        unknowns.append(
+            {
+                "id": args.unknown_id,
+                "question": args.question,
+                "status": "open",
+                "expected_evidence": args.expected_evidence,
+            }
+        )
+        bump_revision(
+            doc.frontmatter,
+            kind="unknown-added",
+            rationale=f"Track explicit unknown {args.unknown_id}.",
+        )
+        require_valid_candidate(doc)
+        write_atomic(doc.path, dump_plan(doc))
+        print(f"PLAN_UNKNOWN_ADDED {args.unknown_id} revision={doc.frontmatter['revision']}")
+
+
+def cmd_plan_unknown_resolve(args: argparse.Namespace) -> None:
+    """Resolve one unknown only with immutable evidence."""
+    root = project_root()
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        require_plan_contract_ready(doc.frontmatter)
+        require_expected_revision(doc.frontmatter, args.expected_revision)
+        unknowns = doc.frontmatter.get("unknowns")
+        target = next(
+            (
+                item
+                for item in unknowns
+                if isinstance(item, dict) and item.get("id") == args.unknown_id
+            ),
+            None,
+        ) if isinstance(unknowns, list) else None
+        if target is None:
+            raise WorkctlError(f"UNKNOWN_UNKNOWN: {args.unknown_id}")
+        if target.get("status") != "open":
+            raise WorkctlError(f"INVALID_UNKNOWN_TRANSITION: {args.unknown_id}")
+        evidence_ref, _ = verify_evidence_manifest(
+            root,
+            args.evidence_manifest,
+            plan_id=str(doc.frontmatter["plan_id"]),
+            subject=f"unknown:{args.unknown_id}",
+        )
+        target["status"] = "resolved"
+        target["resolution"] = args.resolution
+        target["evidence_manifest"] = evidence_ref
+        target["resolved_at"] = utc_now()
+        bump_revision(
+            doc.frontmatter,
+            kind="unknown-resolved",
+            rationale=f"Resolve explicit unknown {args.unknown_id}.",
+            evidence_manifest=evidence_ref,
+        )
+        require_valid_candidate(doc)
+        write_atomic(doc.path, dump_plan(doc))
+        print(
+            f"PLAN_UNKNOWN_RESOLVED {args.unknown_id} "
             f"revision={doc.frontmatter['revision']}"
         )
 
@@ -6657,6 +7935,169 @@ def require_evidence_args(evidence_ref: str, evidence_sha256: str) -> None:
         raise WorkctlError("INVALID_EVIDENCE_REF")
     if SHA256_RE.fullmatch(evidence_sha256) is None:
         raise WorkctlError("INVALID_EVIDENCE_SHA256")
+
+
+def canonical_evidence_bytes(payload: Mapping[str, Any]) -> bytes:
+    """Return the only accepted immutable evidence record encoding."""
+    return (
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
+    ).encode()
+
+
+def validate_evidence_payload(
+    payload: Mapping[str, Any],
+    *,
+    expected_plan_id: str,
+    expected_subject: str | None = None,
+) -> None:
+    """Validate bounded evidence metadata without accepting process output blobs."""
+    if set(payload) != {
+        "schema_version",
+        "kind",
+        "plan_id",
+        "subject",
+        "created_at",
+        "producer_ref",
+        "items",
+    }:
+        raise WorkctlError("INVALID_EVIDENCE_MANIFEST_FIELDS")
+    if payload.get("schema_version") != 1 or payload.get("kind") != "work-governance-evidence":
+        raise WorkctlError("INVALID_EVIDENCE_MANIFEST_SCHEMA")
+    if payload.get("plan_id") != expected_plan_id:
+        raise WorkctlError("EVIDENCE_MANIFEST_PLAN_MISMATCH")
+    subject = payload.get("subject")
+    if (
+        not isinstance(subject, str)
+        or re.fullmatch(
+            r"(?:[a-z][a-z0-9-]*:[A-Za-z0-9._-]+|closeout|delivery|"
+            r"plan-validation|contract-upgrade)",
+            subject,
+        )
+        is None
+    ):
+        raise WorkctlError("INVALID_EVIDENCE_MANIFEST_SUBJECT")
+    if expected_subject is not None and subject != expected_subject:
+        raise WorkctlError(
+            f"EVIDENCE_MANIFEST_SUBJECT_MISMATCH: expected {expected_subject}, found {subject}"
+        )
+    if not isinstance(payload.get("created_at"), str) or not payload.get("created_at"):
+        raise WorkctlError("INVALID_EVIDENCE_MANIFEST_CREATED_AT")
+    if not valid_reference(payload.get("producer_ref")):
+        raise WorkctlError("INVALID_EVIDENCE_MANIFEST_PRODUCER")
+    items = payload.get("items")
+    if (
+        not isinstance(items, list)
+        or not items
+        or len(items) > EVIDENCE_MANIFEST_MAX_ITEMS
+    ):
+        raise WorkctlError("INVALID_EVIDENCE_MANIFEST_ITEMS")
+    for item in items:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"ref", "sha256"}
+            or not valid_reference(item.get("ref"))
+            or not isinstance(item.get("sha256"), str)
+            or SHA256_RE.fullmatch(item["sha256"]) is None
+        ):
+            raise WorkctlError("INVALID_EVIDENCE_MANIFEST_ITEM")
+
+
+def evidence_relative_path(plan_id: str, digest: str) -> str:
+    """Return the canonical versioned evidence path for one Plan."""
+    return plan_relative_path(f".evidence/{plan_id}/{digest}.json")
+
+
+def verify_evidence_manifest(
+    root: Path,
+    raw_path: str,
+    *,
+    plan_id: str,
+    subject: str,
+) -> tuple[str, str]:
+    """Verify canonical path, digest, payload and subject for one evidence record."""
+    relative = Path(raw_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise WorkctlError("EVIDENCE_MANIFEST_PATH_INVALID")
+    candidate = checked_project_path(root, relative.as_posix())
+    reject_legacy_plan_authority_path(root, relative.as_posix(), candidate)
+    expected_parent = plan_dir(root) / ".evidence" / plan_id
+    if candidate.parent != expected_parent or candidate.suffix != ".json":
+        raise WorkctlError("EVIDENCE_MANIFEST_PATH_INVALID")
+    if candidate.is_symlink() or not candidate.is_file():
+        raise WorkctlError("EVIDENCE_MANIFEST_MISSING")
+    content = candidate.read_bytes()
+    if len(content) > EVIDENCE_MANIFEST_MAX_BYTES:
+        raise WorkctlError("EVIDENCE_MANIFEST_TOO_LARGE")
+    digest = sha256_bytes(content)
+    if candidate.stem != digest:
+        raise WorkctlError("EVIDENCE_MANIFEST_HASH_MISMATCH")
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise WorkctlError("EVIDENCE_MANIFEST_INVALID_JSON") from exc
+    if not isinstance(payload, dict):
+        raise WorkctlError("EVIDENCE_MANIFEST_INVALID_JSON")
+    validate_evidence_payload(payload, expected_plan_id=plan_id, expected_subject=subject)
+    if canonical_evidence_bytes(payload) != content:
+        raise WorkctlError("EVIDENCE_MANIFEST_NON_CANONICAL")
+    return f"evidence:{relative.as_posix()}", digest
+
+
+def transition_evidence(
+    root: Path,
+    doc: PlanDocument,
+    *,
+    evidence_manifest: str | None,
+    evidence_ref: str | None,
+    evidence_sha256: str | None,
+    subject: str,
+) -> tuple[str, str]:
+    """Use immutable schema-v4 evidence and retain schema-v3 compatibility."""
+    if doc.frontmatter.get("schema_version") == 4:
+        if not isinstance(evidence_manifest, str):
+            raise WorkctlError("EVIDENCE_MANIFEST_REQUIRED")
+        return verify_evidence_manifest(
+            root,
+            evidence_manifest,
+            plan_id=str(doc.frontmatter["plan_id"]),
+            subject=subject,
+        )
+    if not isinstance(evidence_ref, str) or not isinstance(evidence_sha256, str):
+        raise WorkctlError("EVIDENCE_REFERENCE_REQUIRED")
+    require_evidence_args(evidence_ref, evidence_sha256)
+    return evidence_ref, evidence_sha256
+
+
+def cmd_plan_evidence_record(args: argparse.Namespace) -> None:
+    """Install one canonical, content-addressed, versionable evidence record."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    input_path = Path(args.manifest)
+    if input_path.is_symlink() or not input_path.is_file():
+        raise WorkctlError("EVIDENCE_INPUT_MISSING")
+    content = input_path.read_bytes()
+    if len(content) > EVIDENCE_MANIFEST_MAX_BYTES:
+        raise WorkctlError("EVIDENCE_MANIFEST_TOO_LARGE")
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        payload = yaml.safe_load(content)
+    if not isinstance(payload, dict):
+        raise WorkctlError("EVIDENCE_MANIFEST_INVALID")
+    plan_id = str(doc.frontmatter["plan_id"])
+    validate_evidence_payload(payload, expected_plan_id=plan_id)
+    canonical = canonical_evidence_bytes(payload)
+    digest = sha256_bytes(canonical)
+    relative = evidence_relative_path(plan_id, digest)
+    target = checked_project_path(root, relative)
+    with lock(root):
+        if target.exists():
+            if target.is_symlink() or target.read_bytes() != canonical:
+                raise WorkctlError("EVIDENCE_MANIFEST_CONFLICT")
+        else:
+            write_atomic_bytes(target, canonical)
+    print(json.dumps({"path": relative, "sha256": digest}, sort_keys=True))
 
 
 def cmd_plan_verify_entry(args: argparse.Namespace) -> None:
@@ -6671,21 +8112,33 @@ def cmd_plan_verify_entry(args: argparse.Namespace) -> None:
             args.confirmation,
             {"accepted"},
         )
-        require_evidence_args(args.evidence_ref, args.evidence_sha256)
         entries = entries_by_id(doc.frontmatter, args.field)
         entry = entries.get(args.entry_id)
         if entry is None:
             raise WorkctlError(f"UNKNOWN_{args.field.upper()}_ENTRY: {args.entry_id}")
+        singular = "obligation" if args.field == "obligations" else "validation"
+        evidence_ref, evidence_sha256 = transition_evidence(
+            root,
+            doc,
+            evidence_manifest=args.evidence_manifest,
+            evidence_ref=args.evidence_ref,
+            evidence_sha256=args.evidence_sha256,
+            subject=f"{singular}:{args.entry_id}",
+        )
         if entry.get("status") in VERIFIED_TASK_STATES:
             raise WorkctlError(
                 f"INVALID_{args.field.upper()}_TRANSITION: "
                 f"{args.entry_id} {entry.get('status')} -> verified"
             )
         entry["status"] = "verified"
-        entry["evidence_ref"] = args.evidence_ref
-        entry["evidence_sha256"] = args.evidence_sha256
+        entry["evidence_ref"] = evidence_ref
+        entry["evidence_sha256"] = evidence_sha256
         entry["verified_at"] = utc_now()
-        bump_revision(doc.frontmatter)
+        bump_revision(
+            doc.frontmatter,
+            confirmation_id=args.confirmation,
+            evidence_manifest=evidence_ref if doc.frontmatter.get("schema_version") == 4 else None,
+        )
         require_valid_candidate(doc)
         write_atomic(doc.path, dump_plan(doc))
         print(
@@ -6706,10 +8159,17 @@ def cmd_plan_finalize_artifact(args: argparse.Namespace) -> None:
             args.confirmation,
             {"accepted"},
         )
-        require_evidence_args(args.evidence_ref, args.evidence_sha256)
         artifact = entries_by_id(doc.frontmatter, "artifacts").get(args.artifact_id)
         if artifact is None:
             raise WorkctlError(f"UNKNOWN_ARTIFACT: {args.artifact_id}")
+        evidence_ref, evidence_sha256 = transition_evidence(
+            root,
+            doc,
+            evidence_manifest=args.evidence_manifest,
+            evidence_ref=args.evidence_ref,
+            evidence_sha256=args.evidence_sha256,
+            subject=f"artifact:{args.artifact_id}",
+        )
         task = task_for(doc.frontmatter, args.task_id)
         if task.get("status") != "in_progress":
             raise WorkctlError(f"ARTIFACT_TASK_NOT_IN_PROGRESS: {args.task_id}")
@@ -6734,11 +8194,15 @@ def cmd_plan_finalize_artifact(args: argparse.Namespace) -> None:
                 {"accepted"},
             )
         artifact["status"] = "final"
-        artifact["evidence_ref"] = args.evidence_ref
-        artifact["evidence_sha256"] = args.evidence_sha256
+        artifact["evidence_ref"] = evidence_ref
+        artifact["evidence_sha256"] = evidence_sha256
         artifact["finalized_at"] = utc_now()
         artifact.pop("state_confirmation_id", None)
-        bump_revision(doc.frontmatter)
+        bump_revision(
+            doc.frontmatter,
+            confirmation_id=args.confirmation,
+            evidence_manifest=evidence_ref if doc.frontmatter.get("schema_version") == 4 else None,
+        )
         require_valid_candidate(doc)
         write_atomic(doc.path, dump_plan(doc))
         print(f"ARTIFACT_FINALIZED {args.artifact_id} revision={doc.frontmatter['revision']}")
@@ -6751,10 +8215,17 @@ def cmd_plan_artifact_state(args: argparse.Namespace) -> None:
         require_governed_authority(root)
         doc = load_plan(active_plan_path(root))
         require_expected_revision(doc.frontmatter, args.expected_revision)
-        require_evidence_args(args.evidence_ref, args.evidence_sha256)
         artifact = entries_by_id(doc.frontmatter, "artifacts").get(args.artifact_id)
         if artifact is None:
             raise WorkctlError(f"UNKNOWN_ARTIFACT: {args.artifact_id}")
+        evidence_ref, evidence_sha256 = transition_evidence(
+            root,
+            doc,
+            evidence_manifest=args.evidence_manifest,
+            evidence_ref=args.evidence_ref,
+            evidence_sha256=args.evidence_sha256,
+            subject=f"artifact-state:{args.artifact_id}",
+        )
         current_status = artifact.get("status")
         target_status = args.state
         if current_status == target_status:
@@ -6786,10 +8257,14 @@ def cmd_plan_artifact_state(args: argparse.Namespace) -> None:
                 f"{current_status} -> {target_status}"
             )
         artifact["status"] = target_status
-        artifact["state_evidence_ref"] = args.evidence_ref
-        artifact["state_evidence_sha256"] = args.evidence_sha256
+        artifact["state_evidence_ref"] = evidence_ref
+        artifact["state_evidence_sha256"] = evidence_sha256
         artifact["state_changed_at"] = utc_now()
-        bump_revision(doc.frontmatter)
+        bump_revision(
+            doc.frontmatter,
+            confirmation_id=args.confirmation,
+            evidence_manifest=evidence_ref if doc.frontmatter.get("schema_version") == 4 else None,
+        )
         require_valid_candidate(doc)
         write_atomic(doc.path, dump_plan(doc))
         print(
@@ -6810,19 +8285,30 @@ def cmd_plan_delivery_complete(args: argparse.Namespace) -> None:
             args.confirmation,
             {"accepted"},
         )
-        require_evidence_args(args.evidence_ref, args.evidence_sha256)
         delivery = doc.frontmatter.get("delivery")
         if not isinstance(delivery, dict):
             raise WorkctlError("INVALID_DELIVERY")
+        evidence_ref, evidence_sha256 = transition_evidence(
+            root,
+            doc,
+            evidence_manifest=args.evidence_manifest,
+            evidence_ref=args.evidence_ref,
+            evidence_sha256=args.evidence_sha256,
+            subject="delivery",
+        )
         if delivery.get("status") == "complete":
             raise WorkctlError("INVALID_DELIVERY_TRANSITION: complete -> complete")
         if delivery.get("boundary") in {None, "", "undetermined"}:
             raise WorkctlError("DELIVERY_BOUNDARY_REQUIRED")
         delivery["status"] = "complete"
-        delivery["evidence_ref"] = args.evidence_ref
-        delivery["evidence_sha256"] = args.evidence_sha256
+        delivery["evidence_ref"] = evidence_ref
+        delivery["evidence_sha256"] = evidence_sha256
         delivery["completed_at"] = utc_now()
-        bump_revision(doc.frontmatter)
+        bump_revision(
+            doc.frontmatter,
+            confirmation_id=args.confirmation,
+            evidence_manifest=evidence_ref if doc.frontmatter.get("schema_version") == 4 else None,
+        )
         require_valid_candidate(doc)
         write_atomic(doc.path, dump_plan(doc))
         print(f"DELIVERY_COMPLETED revision={doc.frontmatter['revision']}")
@@ -7053,7 +8539,7 @@ def closeout_readiness(
                     artifact.get("id", "unknown") if isinstance(artifact, dict) else "invalid"
                 )
                 blockers.append(f"artifact not final: {artifact_id}")
-    if frontmatter.get("schema_version") == 3:
+    if frontmatter.get("schema_version") in {3, 4}:
         delivery = frontmatter.get("delivery", {})
         if not isinstance(delivery, dict) or delivery.get("status") != "complete":
             blockers.append("delivery is not complete")
@@ -7093,12 +8579,27 @@ def closeout_readiness(
     return {"ready": not blockers, "blockers": blockers}
 
 
-def cmd_plan_closeout_check(_args: argparse.Namespace) -> None:
+def cmd_plan_closeout_check(args: argparse.Namespace) -> None:
     """Print closeout readiness and fail when obligations remain."""
     root = project_root()
     report = inspect_authority(root)
     doc = load_plan(active_plan_path(root))
     readiness = closeout_readiness(doc.frontmatter, report, validate_plan(root))
+    if doc.frontmatter.get("schema_version") == 4:
+        if not args.evidence_manifest:
+            readiness["ready"] = False
+            readiness["blockers"].append("closeout evidence manifest required")
+        else:
+            try:
+                verify_evidence_manifest(
+                    root,
+                    args.evidence_manifest,
+                    plan_id=str(doc.frontmatter["plan_id"]),
+                    subject="closeout",
+                )
+            except WorkctlError as exc:
+                readiness["ready"] = False
+                readiness["blockers"].append(str(exc))
     print(json.dumps(readiness, indent=2, sort_keys=True))
     if not readiness["ready"]:
         raise SystemExit(1)
@@ -7111,13 +8612,34 @@ def cmd_plan_complete(args: argparse.Namespace) -> None:
         report = require_governed_authority(root)
         doc = load_plan(active_plan_path(root))
         require_expected_revision(doc.frontmatter, args.expected_revision)
+        evidence_ref: str | None = None
+        evidence_sha256: str | None = None
+        if doc.frontmatter.get("schema_version") == 4:
+            if not args.evidence_manifest:
+                raise WorkctlError("EVIDENCE_MANIFEST_REQUIRED")
+            evidence_ref, evidence_sha256 = verify_evidence_manifest(
+                root,
+                args.evidence_manifest,
+                plan_id=str(doc.frontmatter["plan_id"]),
+                subject="closeout",
+            )
         readiness = closeout_readiness(doc.frontmatter, report, validate_plan(root))
         if not readiness["ready"]:
             raise WorkctlError(
                 f"CLOSEOUT_BLOCKED: {'; '.join(str(item) for item in readiness['blockers'])}"
             )
         doc.frontmatter["status"] = "complete"
-        bump_revision(doc.frontmatter)
+        if evidence_ref is not None and evidence_sha256 is not None:
+            doc.frontmatter["completion_evidence"] = {
+                "ref": evidence_ref,
+                "sha256": evidence_sha256,
+                "completed_at": utc_now(),
+            }
+        bump_revision(
+            doc.frontmatter,
+            evidence_manifest=evidence_ref,
+            rationale="Complete the Plan after evidence-bound closeout.",
+        )
         require_valid_candidate(doc)
         write_atomic(doc.path, dump_plan(doc))
         print(f"PLAN_COMPLETED revision={doc.frontmatter['revision']}")
@@ -8196,8 +9718,8 @@ def prepare_rollover(
         raise WorkctlError("INVALID_TARGET_PLAN_ID")
     if target_plan_id == source_plan_id:
         raise WorkctlError("TARGET_PLAN_MUST_BE_NEW")
-    if prepared_doc.frontmatter.get("schema_version") != 3:
-        raise WorkctlError("ROLLOVER_TARGET_MUST_USE_SCHEMA_VERSION_3")
+    if prepared_doc.frontmatter.get("schema_version") != 4:
+        raise WorkctlError("ROLLOVER_TARGET_MUST_USE_SCHEMA_VERSION_4")
     if prepared_doc.frontmatter.get("status") != "active":
         raise WorkctlError("TARGET_PLAN_MUST_BE_ACTIVE")
     target_relative = plan_relative_path(f"{target_plan_id}.md")
@@ -8686,7 +10208,16 @@ def cmd_plan_reconcile_recover(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="workctl")
+    parser.add_argument(
+        "--receipt-sha256",
+        help="SHA256 of the exact current SessionStart READY receipt.",
+    )
     sub = parser.add_subparsers(dest="domain", required=True)
+
+    intake = sub.add_parser("intake")
+    intake_sub = intake.add_subparsers(dest="intake_action", required=True)
+    intake_status = intake_sub.add_parser("status")
+    intake_status.set_defaults(func=cmd_intake_status)
 
     layout = sub.add_parser("layout")
     layout_sub = layout.add_subparsers(dest="action", required=True)
@@ -8713,6 +10244,14 @@ def build_parser() -> argparse.ArgumentParser:
     init.set_defaults(func=cmd_plan_init)
     status = plan_sub.add_parser("status")
     status.set_defaults(func=cmd_plan_status)
+    admit = plan_sub.add_parser("admit")
+    admit_sub = admit.add_subparsers(dest="admit_action", required=True)
+    admit_apply = admit_sub.add_parser("apply")
+    admit_apply.add_argument("--manifest", required=True)
+    admit_apply.set_defaults(func=cmd_plan_admit_apply)
+    admit_recover = admit_sub.add_parser("recover")
+    admit_recover.add_argument("--transaction-id")
+    admit_recover.set_defaults(func=cmd_plan_admit_recover)
     authority = plan_sub.add_parser("authority")
     authority_sub = authority.add_subparsers(dest="authority_action", required=True)
     authority_inspect = authority_sub.add_parser("inspect")
@@ -8735,7 +10274,48 @@ def build_parser() -> argparse.ArgumentParser:
     schema_validate.add_argument("--plan")
     schema_validate.set_defaults(func=cmd_plan_schema_validate)
     validate = plan_sub.add_parser("validate")
+    validate.add_argument("--evidence-manifest")
     validate.set_defaults(func=cmd_plan_validate)
+    adapt = plan_sub.add_parser("adapt")
+    adapt.add_argument("--manifest", required=True)
+    adapt.set_defaults(func=cmd_plan_adapt)
+    contract = plan_sub.add_parser("contract")
+    contract_sub = contract.add_subparsers(dest="contract_action", required=True)
+    contract_revise = contract_sub.add_parser("revise")
+    contract_revise.add_argument("--manifest", required=True)
+    contract_revise.set_defaults(func=cmd_plan_contract_revise)
+    contract_upgrade = contract_sub.add_parser("upgrade")
+    contract_upgrade_sub = contract_upgrade.add_subparsers(
+        dest="contract_upgrade_action",
+        required=True,
+    )
+    contract_upgrade_status = contract_upgrade_sub.add_parser("status")
+    contract_upgrade_status.set_defaults(func=cmd_plan_contract_upgrade_status)
+    contract_upgrade_apply = contract_upgrade_sub.add_parser("apply")
+    contract_upgrade_apply.add_argument("--manifest", required=True)
+    contract_upgrade_apply.set_defaults(func=cmd_plan_contract_upgrade_apply)
+    contract_upgrade_recover = contract_upgrade_sub.add_parser("recover")
+    contract_upgrade_recover.add_argument("--transaction-id")
+    contract_upgrade_recover.set_defaults(func=cmd_plan_contract_upgrade_recover)
+    unknown = plan_sub.add_parser("unknown")
+    unknown_sub = unknown.add_subparsers(dest="unknown_action", required=True)
+    unknown_add = unknown_sub.add_parser("add")
+    unknown_add.add_argument("--unknown-id", required=True)
+    unknown_add.add_argument("--question", required=True)
+    unknown_add.add_argument("--expected-evidence", required=True)
+    unknown_add.add_argument("--expected-revision", type=int, required=True)
+    unknown_add.set_defaults(func=cmd_plan_unknown_add)
+    unknown_resolve = unknown_sub.add_parser("resolve")
+    unknown_resolve.add_argument("--unknown-id", required=True)
+    unknown_resolve.add_argument("--resolution", required=True)
+    unknown_resolve.add_argument("--evidence-manifest", required=True)
+    unknown_resolve.add_argument("--expected-revision", type=int, required=True)
+    unknown_resolve.set_defaults(func=cmd_plan_unknown_resolve)
+    evidence = plan_sub.add_parser("evidence")
+    evidence_sub = evidence.add_subparsers(dest="evidence_action", required=True)
+    evidence_record = evidence_sub.add_parser("record")
+    evidence_record.add_argument("--manifest", required=True)
+    evidence_record.set_defaults(func=cmd_plan_evidence_record)
     reconcile = plan_sub.add_parser("reconcile")
     reconcile_sub = reconcile.add_subparsers(dest="reconcile_action", required=True)
     reconcile_apply = reconcile_sub.add_parser("apply")
@@ -8755,9 +10335,11 @@ def build_parser() -> argparse.ArgumentParser:
     rollover_recover.add_argument("--rollover-id", required=True)
     rollover_recover.set_defaults(func=cmd_plan_rollover_recover)
     closeout_check = plan_sub.add_parser("closeout-check")
+    closeout_check.add_argument("--evidence-manifest")
     closeout_check.set_defaults(func=cmd_plan_closeout_check)
     complete = plan_sub.add_parser("complete")
     complete.add_argument("--expected-revision", type=int, required=True)
+    complete.add_argument("--evidence-manifest")
     complete.set_defaults(func=cmd_plan_complete)
     revise = plan_sub.add_parser("revise")
     revise.add_argument("--expected-revision", type=int, required=True)
@@ -8776,12 +10358,29 @@ def build_parser() -> argparse.ArgumentParser:
     confirm.add_argument("--evidence-sha256")
     confirm.add_argument("--expected-revision", type=int, required=True)
     confirm.set_defaults(func=cmd_plan_confirm)
+    confirmation = plan_sub.add_parser("confirmation")
+    confirmation_sub = confirmation.add_subparsers(
+        dest="confirmation_action",
+        required=True,
+    )
+    confirmation_add = confirmation_sub.add_parser("add")
+    confirmation_add.add_argument("--confirmation-id", required=True)
+    confirmation_add.add_argument("--description", required=True)
+    confirmation_add.add_argument(
+        "--status",
+        choices=["pending", "accepted"],
+        default="pending",
+    )
+    confirmation_add.add_argument("--ref")
+    confirmation_add.add_argument("--expected-revision", type=int, required=True)
+    confirmation_add.set_defaults(func=cmd_plan_confirmation_add)
     verify_entry = plan_sub.add_parser("verify-entry")
     verify_entry.add_argument("--field", choices=["obligations", "validations"], required=True)
     verify_entry.add_argument("--entry-id", required=True)
     verify_entry.add_argument("--confirmation", required=True)
-    verify_entry.add_argument("--evidence-ref", required=True)
-    verify_entry.add_argument("--evidence-sha256", required=True)
+    verify_entry.add_argument("--evidence-manifest")
+    verify_entry.add_argument("--evidence-ref")
+    verify_entry.add_argument("--evidence-sha256")
     verify_entry.add_argument("--expected-revision", type=int, required=True)
     verify_entry.set_defaults(func=cmd_plan_verify_entry)
     artifact_state = plan_sub.add_parser("artifact-state")
@@ -8792,22 +10391,25 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     artifact_state.add_argument("--confirmation")
-    artifact_state.add_argument("--evidence-ref", required=True)
-    artifact_state.add_argument("--evidence-sha256", required=True)
+    artifact_state.add_argument("--evidence-manifest")
+    artifact_state.add_argument("--evidence-ref")
+    artifact_state.add_argument("--evidence-sha256")
     artifact_state.add_argument("--expected-revision", type=int, required=True)
     artifact_state.set_defaults(func=cmd_plan_artifact_state)
     finalize_artifact = plan_sub.add_parser("finalize-artifact")
     finalize_artifact.add_argument("--artifact-id", required=True)
     finalize_artifact.add_argument("--task-id", required=True)
     finalize_artifact.add_argument("--confirmation", required=True)
-    finalize_artifact.add_argument("--evidence-ref", required=True)
-    finalize_artifact.add_argument("--evidence-sha256", required=True)
+    finalize_artifact.add_argument("--evidence-manifest")
+    finalize_artifact.add_argument("--evidence-ref")
+    finalize_artifact.add_argument("--evidence-sha256")
     finalize_artifact.add_argument("--expected-revision", type=int, required=True)
     finalize_artifact.set_defaults(func=cmd_plan_finalize_artifact)
     delivery_complete = plan_sub.add_parser("delivery-complete")
     delivery_complete.add_argument("--confirmation", required=True)
-    delivery_complete.add_argument("--evidence-ref", required=True)
-    delivery_complete.add_argument("--evidence-sha256", required=True)
+    delivery_complete.add_argument("--evidence-manifest")
+    delivery_complete.add_argument("--evidence-ref")
+    delivery_complete.add_argument("--evidence-sha256")
     delivery_complete.add_argument("--expected-revision", type=int, required=True)
     delivery_complete.set_defaults(func=cmd_plan_delivery_complete)
 
@@ -8835,11 +10437,68 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def command_mutates_state(args: argparse.Namespace) -> bool:
+    """Classify commands that must be bound to the newest session receipt."""
+    if args.domain == "intake":
+        return False
+    if args.domain == "layout":
+        return args.action not in {"status", "validate"}
+    if args.domain in {"task", "log"}:
+        return True
+    if args.domain != "plan":
+        return False
+    if args.action in {
+        "status",
+        "authority",
+        "schema-validate",
+        "validate",
+        "closeout-check",
+    }:
+        return False
+    if args.action == "contract" and args.contract_action == "upgrade":
+        return cast(str, args.contract_upgrade_action) != "status"
+    return True
+
+
+def enforce_active_contract_gate(args: argparse.Namespace, root: Path) -> None:
+    """Allow only upgrade preparation/recovery writes for an active schema-v3 Plan."""
+    if not command_mutates_state(args) or args.domain == "layout":
+        return
+    report = inspect_authority(root)
+    if report.state != "GOVERNED_ACTIVE":
+        return
+    doc = load_plan(active_plan_path(root))
+    if contract_state(doc.frontmatter) != "PLAN_CONTRACT_UPGRADE_REQUIRED":
+        return
+    allowed = (
+        args.domain == "plan"
+        and (
+            args.action in {"confirmation", "confirm", "evidence"}
+            or (
+                args.action == "contract"
+                and args.contract_action == "upgrade"
+                and args.contract_upgrade_action in {"apply", "recover"}
+            )
+        )
+    )
+    if not allowed:
+        raise WorkctlError("PLAN_CONTRACT_UPGRADE_REQUIRED")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        if args.domain != "layout":
-            require_layout_ready(project_root())
+        root = project_root()
+        if args.domain not in {"layout"}:
+            require_layout_ready(root)
+        if command_mutates_state(args):
+            validate_current_ready_receipt(
+                root,
+                args.receipt_sha256,
+                require_current_controller=True,
+                allow_bootstrapping=args.domain == "layout",
+            )
+        enforce_active_contract_gate(args, root)
         args.func(args)
     except WorkctlError as exc:
         print(str(exc), file=sys.stderr)

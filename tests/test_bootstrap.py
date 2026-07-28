@@ -110,6 +110,80 @@ def read_uv_commands(log_path: Path) -> list[list[str]]:
     return [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
 
 
+def write_schema3_plan_fixture(project: Path, plan_id: str, title: str) -> Path:
+    """Create historical schema-v3 authority without a production admission bypass."""
+    timestamp = "2026-07-28T00:00:00+00:00"
+    plan_root = project / ".work-governance" / "_Plan"
+    plan_root.mkdir(parents=True, exist_ok=True)
+    index = {
+        "schema_version": 1,
+        "active_plan_id": plan_id,
+        "plans": [
+            {
+                "id": plan_id,
+                "path": f"{plan_id}.md",
+                "title": title,
+                "created_at": timestamp,
+            }
+        ],
+    }
+    frontmatter = {
+        "schema_version": 3,
+        "plan_id": plan_id,
+        "title": title,
+        "status": "active",
+        "mode": "autonomous",
+        "revision": 1,
+        "created_at": timestamp,
+        "updated_at": timestamp,
+        "scope": {"include": [], "exclude": []},
+        "confirmations": {"required": []},
+        "obligations": [],
+        "tasks": [],
+        "validations": [],
+        "artifacts": [],
+        "authority": {
+            "model": "single-active",
+            "state": "governed",
+            "canonical_plan_id": plan_id,
+            "sources": [],
+            "confirmations": {},
+        },
+        "delivery": {
+            "status": "pending",
+            "boundary": "undetermined",
+            "evidence_ref": "project:not-yet-delivered",
+        },
+        "activation": {
+            "status": "deferred",
+            "current_ref": "undetermined",
+            "target_ref": "undetermined",
+        },
+        "route": {
+            "route_status": "active",
+            "slice_status": "initialized",
+            "next_phase": "Define the demand contract.",
+            "validation_standard": "Every obligation has direct fresh evidence.",
+            "confirmation_gate": "none",
+        },
+        "handoff": {
+            "route_status": "active",
+            "next_step": "Define the demand contract.",
+        },
+    }
+    (plan_root / "index.yaml").write_text(
+        yaml.safe_dump(index, sort_keys=False),
+        encoding="utf-8",
+    )
+    plan = plan_root / f"{plan_id}.md"
+    plan.write_text(
+        f"---\n{yaml.safe_dump(frontmatter, sort_keys=False)}---\n"
+        "# Decision Summary\n\nInitialized test fixture.\n",
+        encoding="utf-8",
+    )
+    return plan
+
+
 def write_active_proposal_journal(
     namespace: dict[str, Any],
     governance: Path,
@@ -370,10 +444,18 @@ def adopt_legacy(project: Path) -> dict[str, Any]:
     )
     status = json.loads(status_result.stdout)
     legacy = status["legacy"]
+    capability_path = (
+        project / ".work-governance" / "runtime" / "bootstrap-capability.json"
+    )
+    capability = json.loads(capability_path.read_text(encoding="utf-8"))
+    controller = project / capability["controller_ref"]
+    capability_sha256 = hashlib.sha256(capability_path.read_bytes()).hexdigest()
     adopt_result = subprocess.run(
         [
             sys.executable,
-            str(WORKCTL),
+            str(controller),
+            "--receipt-sha256",
+            capability_sha256,
             "layout",
             "adopt",
             "--expected-manifest-sha256",
@@ -386,8 +468,9 @@ def adopt_legacy(project: Path) -> dict[str, Any]:
         cwd=project,
         text=True,
         capture_output=True,
-        check=True,
+        check=False,
     )
+    assert adopt_result.returncode == 0, adopt_result.stderr
     payload = json.loads(adopt_result.stdout)
     assert payload["status"] == "LEGACY_ADOPTED"
     return cast(dict[str, Any], payload)
@@ -663,8 +746,8 @@ def test_action_revision_four_accepts_and_preserves_revision_two_blocked_history
     ]
 
     assert "LEGACY_CLASSIFICATION_REQUIRED" in (retried["hookSpecificOutput"]["additionalContext"])
-    assert current_receipt["action_revision"] == 4
-    assert {payload["action_revision"] for payload in evidence_payloads} == {2, 4}
+    assert current_receipt["action_revision"] == 5
+    assert {payload["action_revision"] for payload in evidence_payloads} == {2, 5}
 
 
 @pytest.mark.parametrize("forgery", ["invalid-json", "symlink-current", "missing-receipt"])
@@ -882,23 +965,11 @@ def test_action_four_sessionstart_upgrades_action_three_scope_residual(
     run_hook(project, fake_bin, uv_log)
     governance = project / ".work-governance"
     prior_command_count = len(read_uv_commands(uv_log))
-    subprocess.run(
-        [
-            sys.executable,
-            str(WORKCTL),
-            "plan",
-            "init",
-            "--plan-id",
-            "PLAN-20260728-001",
-            "--title",
-            "Action upgrade bootstrap fixture",
-        ],
-        cwd=project,
-        text=True,
-        capture_output=True,
-        check=True,
+    plan = write_schema3_plan_fixture(
+        project,
+        "PLAN-20260728-001",
+        "Action upgrade bootstrap fixture",
     )
-    plan = governance / "_Plan" / "PLAN-20260728-001.md"
     _, raw_frontmatter, body = plan.read_text(encoding="utf-8").split("---\n", 2)
     frontmatter = yaml.safe_load(raw_frontmatter)
     frontmatter["scope"]["include"].extend(["_Plan/", "_Plan/business-output"])
@@ -944,7 +1015,7 @@ def test_action_four_sessionstart_upgrades_action_three_scope_residual(
     assert resumed_commands[0][-1] == "--help"
     assert all("--offline" in command for command in resumed_commands)
     assert current_receipt["status"] == "READY"
-    assert current_receipt["action_revision"] == 4
+    assert current_receipt["action_revision"] == 5
     assert current_version["legacy_migration_action_revision"] == 4
     assert corrected["revision"] == revision_before + 1
     assert ".work-governance/_Plan/" in corrected["scope"]["include"]
@@ -1632,9 +1703,10 @@ def test_isolated_plugin_copy_bootstraps_without_source_repository_paths(
     assert "WORK_GOVERNANCE_BOOTSTRAP READY" in (output["hookSpecificOutput"]["additionalContext"])
     assert receipt["plugin_build"] == installed_manifest["version"]
     assert receipt["plugin_build"] not in version_text
-    assert all(
-        str(installed / "scripts" / "workctl.py") in command for command in read_uv_commands(uv_log)
-    )
+    bundled_controller = str(project / receipt["controller_ref"])
+    commands = read_uv_commands(uv_log)
+    assert all(bundled_controller in command for command in commands)
+    assert all(str(installed / "scripts" / "workctl.py") not in command for command in commands)
 
 
 @pytest.mark.skipif(
@@ -1694,3 +1766,94 @@ def test_real_uv_bootstrap_then_network_denied_offline_resume(
     assert receipt["status"] == "READY"
     assert len(evidence_payload["commands"]) == 2
     assert all("--offline" in command["command"] for command in evidence_payload["commands"])
+
+
+def test_runtime_bundle_survives_plugin_cache_loss_and_blocks_superseded_receipt(
+    tmp_path: Path,
+) -> None:
+    """The exact session bundle survives cache loss; an old session cannot write."""
+    installed = tmp_path / "plugin-cache" / "work-governance"
+    installed.parent.mkdir()
+    shutil.copytree(PLUGIN_ROOT, installed)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv_log = tmp_path / "uv.jsonl"
+    install_fake_uv(fake_bin, uv_log)
+    project = tmp_path / "project"
+    project.mkdir()
+
+    run_hook(
+        project,
+        fake_bin,
+        uv_log,
+        plugin_root=installed,
+        payload={
+            "session_id": "observed-session-old",
+            "cwd": str(project),
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+        },
+    )
+    receipt_path = project / ".work-governance" / "bootstrap-state.json"
+    old_receipt_sha256 = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+    run_hook(
+        project,
+        fake_bin,
+        uv_log,
+        plugin_root=installed,
+        payload={
+            "session_id": "observed-session-current",
+            "cwd": str(project),
+            "hook_event_name": "SessionStart",
+            "source": "resume",
+        },
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    current_receipt_sha256 = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+    controller = project / receipt["controller_ref"]
+    lifecycle = project / receipt["lifecycle_ref"]
+    bundle_manifest = project / receipt["runtime_bundle_ref"] / "manifest.json"
+
+    assert receipt["schema_version"] == 2
+    assert receipt["session_id"] == "observed-session-current"
+    assert hashlib.sha256(controller.read_bytes()).hexdigest() == receipt["controller_sha256"]
+    assert hashlib.sha256(lifecycle.read_bytes()).hexdigest() == receipt["lifecycle_sha256"]
+    assert (
+        hashlib.sha256(bundle_manifest.read_bytes()).hexdigest()
+        == receipt["runtime_manifest_sha256"]
+    )
+    superseded = subprocess.run(
+        [
+            sys.executable,
+            str(controller),
+            "--receipt-sha256",
+            old_receipt_sha256,
+            "layout",
+            "migrate",
+        ],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    shutil.rmtree(installed)
+    intake = subprocess.run(
+        [
+            sys.executable,
+            str(controller),
+            "--receipt-sha256",
+            current_receipt_sha256,
+            "intake",
+            "status",
+        ],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert superseded.returncode == 2
+    assert "BOOTSTRAP_RECEIPT_SUPERSEDED" in superseded.stderr
+    assert intake.returncode == 0
+    assert json.loads(intake.stdout)["intake_state"] == "INTAKE_READY"

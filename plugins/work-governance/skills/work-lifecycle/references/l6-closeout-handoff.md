@@ -56,12 +56,12 @@ verified or skipped, every artifact is final, every required confirmation is
 consistently resolved, and both route and handoff have no remaining next phase,
 next step, or confirmation gate. A declined decision is resolved only when its
 bound tasks are skipped, exclusion disposition is resolved, and activation is
-`declined` where applicable. Schema-v3 terminal closeout additionally requires
+`declined` where applicable. Schema-v4 terminal closeout additionally requires
 complete delivery, no unresolved exclusion disposition, and resolved
 activation with typed decision or runtime evidence.
 
 Do not reopen or structurally revise a completed terminal Plan to admit later
-work. When a distinct route is required, prepare a new schema-v3 Plan contract
+work. When a distinct route is required, prepare a new schema-v4 Plan contract
 and use the digest-bound `plan rollover apply` flow. The completed predecessor
 remains unchanged; the successor becomes authority only after index-last
 activation.
