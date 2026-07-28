@@ -1819,6 +1819,14 @@ def classify_legacy_layout(
         or authority.get("canonical_plan_id") != active_plan_id
     ):
         blockers.append("legacy active Plan authority model is unsupported")
+    if schema in {1, 2, 3}:
+        blockers.extend(
+            f"legacy active Plan validation failed: {error}"
+            for error in validate_frontmatter(
+                active_doc.frontmatter,
+                reject_blocking_artifacts=True,
+            )
+        )
     indexed_ids = {
         str(item["id"])
         for item in plans
@@ -3154,11 +3162,12 @@ def validate_frontmatter(
                         errors.append(f"{confirmation_id} resolved confirmation requires ref")
                     elif schema_version == 3 and not valid_reference(item.get("ref")):
                         errors.append(f"{confirmation_id} ref must be a typed authority reference")
-                    timestamp = item.get("accepted_at") or item.get("decided_at")
-                    if not isinstance(timestamp, str) or not timestamp:
-                        errors.append(
-                            f"{confirmation_id} resolved confirmation requires a timestamp"
-                        )
+                    if schema_version in {2, 3}:
+                        timestamp = item.get("accepted_at") or item.get("decided_at")
+                        if not isinstance(timestamp, str) or not timestamp:
+                            errors.append(
+                                f"{confirmation_id} resolved confirmation requires a timestamp"
+                            )
 
     item_ids: dict[str, set[str]] = {}
     for field, pattern in ENTRY_ID_PATTERNS.items():
@@ -3498,8 +3507,9 @@ def validate_plan(
     *,
     ignore_journal: Path | None = None,
     reject_blocking_artifacts: bool = True,
+    require_governed: bool = True,
 ) -> list[str]:
-    """Validate the active Plan, index, authority, and complete lineage."""
+    """Validate Plan structure and optionally require governed authority."""
     try:
         index = load_yaml_file(index_path(root))
         doc = load_plan(active_plan_path(root))
@@ -3534,10 +3544,11 @@ def validate_plan(
             errors.append("index path must match active Plan file")
         if {"status", "updated_at"} & set(index_item):
             errors.append("index must not duplicate mutable Plan fields")
-    report = inspect_authority(root, ignore_journal=ignore_journal)
-    if report.state != "GOVERNED_ACTIVE":
-        errors.append(f"authority state is {report.state}")
-        errors.extend(report.blockers)
+    if require_governed:
+        report = inspect_authority(root, ignore_journal=ignore_journal)
+        if report.state != "GOVERNED_ACTIVE":
+            errors.append(f"authority state is {report.state}")
+            errors.extend(report.blockers)
     return errors
 
 
@@ -3713,7 +3724,7 @@ def cmd_layout_status(_args: argparse.Namespace) -> None:
 
 
 def cmd_layout_validate(_args: argparse.Namespace) -> None:
-    """Validate committed layout and, when present, its active Plan authority."""
+    """Validate committed layout and, when present, its active Plan structure."""
     root = project_root()
     report = inspect_layout(root)
     if report.state != "LAYOUT_READY":
@@ -3722,7 +3733,13 @@ def cmd_layout_validate(_args: argparse.Namespace) -> None:
         raise WorkctlError(f"LAYOUT_INVALID: {report.state}{suffix}")
     errors = layout_version_errors(root)
     if index_path(root).exists():
-        errors.extend(validate_plan(root, reject_blocking_artifacts=False))
+        errors.extend(
+            validate_plan(
+                root,
+                reject_blocking_artifacts=False,
+                require_governed=False,
+            )
+        )
     if errors:
         raise WorkctlError("LAYOUT_INVALID: " + "; ".join(errors))
     print("LAYOUT_VALID")
@@ -5010,7 +5027,7 @@ def resume_layout_transaction(root: Path, journal_path: Path, journal: dict[str,
             or guard.read_text(encoding="utf-8") != "WORK_GOVERNANCE_LAYOUT_ACTIVATION_GUARD\n"
         ):
             raise WorkctlError("LAYOUT_ACTIVATION_GUARD_DRIFT")
-        validation_errors = validate_plan(root)
+        validation_errors = validate_plan(root, require_governed=False)
         if validation_errors:
             raise WorkctlError("LAYOUT_ACTIVATED_BUT_INVALID: " + "; ".join(validation_errors))
         if guard.exists():
