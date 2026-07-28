@@ -18,6 +18,151 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "plugins" / "work-governance" / "scripts" / "workctl.py"
+LIFECYCLE_SKILL = (
+    REPO_ROOT
+    / "plugins"
+    / "work-governance"
+    / "skills"
+    / "work-lifecycle"
+    / "SKILL.md"
+)
+
+
+def nearest_layout_root(cwd: Path) -> Path | None:
+    """Return the nearest initialized project root used by a test subprocess."""
+    current = cwd.resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / ".work-governance" / "version.yaml").is_file():
+            return candidate
+    return None
+
+
+def ensure_test_ready_receipt(
+    cwd: Path,
+    *,
+    allow_legacy_contract: bool,
+    bootstrapping: bool = False,
+) -> tuple[Path, str] | None:
+    """Create a real receipt-bound controller copy; patch legacy behavior only in tests."""
+    root = cwd.resolve() if bootstrapping else nearest_layout_root(cwd)
+    if root is None:
+        return None
+    plugin_manifest_sha256 = ("1" if allow_legacy_contract else "2") * 64
+    bundle = (
+        root
+        / ".work-governance"
+        / "runtime"
+        / "plugin-builds"
+        / plugin_manifest_sha256
+    )
+    bundle.mkdir(parents=True, exist_ok=True)
+    controller_source = SCRIPT.read_text(encoding="utf-8")
+    if allow_legacy_contract:
+        marker = (
+            "def enforce_active_contract_gate(args: argparse.Namespace, root: Path) -> None:\n"
+            '    """Allow only upgrade preparation/recovery writes for an active '
+            'schema-v3 Plan."""\n'
+        )
+        if marker not in controller_source:
+            raise AssertionError("test controller patch marker drifted")
+        controller_source = controller_source.replace(marker, marker + "    return\n", 1)
+    lock_marker = '    with lock_path.open("a+", encoding="utf-8") as handle:\n'
+    lock_instrumentation = (
+        lock_marker
+        + '        attempt_path = os.environ.get("WORKCTL_TEST_LOCK_ATTEMPT_FILE")\n'
+        + "        if attempt_path:\n"
+        + '            Path(attempt_path).write_text("attempting\\n", encoding="utf-8")\n'
+    )
+    if controller_source.count(lock_marker) != 1:
+        raise AssertionError("stable-lock test patch marker drifted")
+    controller_source = controller_source.replace(
+        lock_marker,
+        lock_instrumentation,
+        1,
+    )
+    legacy_lock_marker = '    with path.open("w", encoding="utf-8") as handle:\n'
+    legacy_lock_instrumentation = (
+        legacy_lock_marker
+        + '        attempt_path = os.environ.get("WORKCTL_TEST_LEGACY_LOCK_ATTEMPT_FILE")\n'
+        + "        if attempt_path:\n"
+        + '            Path(attempt_path).write_text("attempting\\n", encoding="utf-8")\n'
+    )
+    if controller_source.count(legacy_lock_marker) != 1:
+        raise AssertionError("legacy-lock test patch marker drifted")
+    controller_source = controller_source.replace(
+        legacy_lock_marker,
+        legacy_lock_instrumentation,
+        1,
+    )
+    controller = bundle / "workctl.py"
+    lifecycle = bundle / "work-lifecycle.SKILL.md"
+    controller.write_text(controller_source, encoding="utf-8")
+    lifecycle.write_bytes(LIFECYCLE_SKILL.read_bytes())
+    controller_sha256 = hashlib.sha256(controller.read_bytes()).hexdigest()
+    lifecycle_sha256 = hashlib.sha256(lifecycle.read_bytes()).hexdigest()
+    controller_ref = controller.relative_to(root).as_posix()
+    lifecycle_ref = lifecycle.relative_to(root).as_posix()
+    runtime_manifest = {
+        "schema_version": 1,
+        "kind": "work-governance-runtime-bundle",
+        "plugin_build": "pytest",
+        "plugin_manifest_sha256": plugin_manifest_sha256,
+        "controller_ref": controller_ref,
+        "controller_sha256": controller_sha256,
+        "lifecycle_ref": lifecycle_ref,
+        "lifecycle_sha256": lifecycle_sha256,
+    }
+    manifest = bundle / "manifest.json"
+    manifest.write_text(
+        json.dumps(runtime_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    receipt = {
+        "schema_version": 2,
+        "bootstrap_contract_version": 1,
+        "action_revision": 5,
+        "updated_at": "2026-07-28T00:00:00+00:00",
+        "status": "BOOTSTRAPPING" if bootstrapping else "READY",
+        "plugin_build": "pytest",
+        "plugin_manifest_sha256": plugin_manifest_sha256,
+        "project_input_sha256": "2" * 64,
+        "project_output_sha256": "3" * 64,
+        "layout_state": "BOOTSTRAPPING" if bootstrapping else "LAYOUT_READY",
+        "evidence_ref": "evidence:.work-governance/evidence/bootstrap/pytest.json",
+        "session_id": "pytest-session",
+        "runtime_bundle_ref": bundle.relative_to(root).as_posix(),
+        "runtime_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        "controller_ref": controller_ref,
+        "controller_sha256": controller_sha256,
+        "lifecycle_ref": lifecycle_ref,
+        "lifecycle_sha256": lifecycle_sha256,
+    }
+    receipt_path = (
+        root / ".work-governance" / "runtime" / "bootstrap-capability.json"
+        if bootstrapping
+        else root / ".work-governance" / "bootstrap-state.json"
+    )
+    receipt_path.write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    if bootstrapping:
+        claim = {
+            "schema_version": 1,
+            "kind": "work-governance-bootstrap-claim",
+            "bootstrap_contract_version": 1,
+            "action_revision": 4,
+            "project_root": root.as_posix(),
+            "created_at": "2026-07-28T00:00:00+00:00",
+            "creator": "workctl",
+            "controller_sha256": controller_sha256,
+            "project_input_sha256": "4" * 64,
+        }
+        (root / ".work-governance" / "runtime" / "bootstrap-claim.json").write_text(
+            json.dumps(claim, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    return controller, hashlib.sha256(receipt_path.read_bytes()).hexdigest()
 
 
 def run_workctl(
@@ -26,13 +171,33 @@ def run_workctl(
     check: bool = True,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    supplied_environment = env or {}
+    receipt = None
+    layout_mutation = (
+        len(args) >= 2
+        and args[0] == "layout"
+        and args[1] not in {"status", "validate"}
+    )
+    if args and (args[0] != "layout" or layout_mutation):
+        receipt = ensure_test_ready_receipt(
+            cwd,
+            allow_legacy_contract=(
+                supplied_environment.get("TEST_WORKCTL_ALLOW_LEGACY_CONTRACT", "1") == "1"
+            ),
+            bootstrapping=layout_mutation,
+        )
+    executable = SCRIPT if receipt is None else receipt[0]
+    command = [sys.executable, str(executable)]
+    if receipt is not None:
+        command.extend(["--receipt-sha256", receipt[1]])
+    command.extend(args)
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), *args],
+        command,
         cwd=cwd,
         text=True,
         capture_output=True,
         check=False,
-        env={**os.environ, **(env or {})},
+        env={**os.environ, **supplied_environment},
     )
     if check and result.returncode != 0:
         raise AssertionError(
@@ -45,7 +210,84 @@ def run_workctl(
 
 def init_plan(cwd: Path) -> None:
     run_workctl(cwd, "layout", "migrate")
-    run_workctl(cwd, "plan", "init", "--plan-id", "PLAN-20260723-001", "--title", "Test")
+    write_legacy_plan_fixture(cwd)
+
+
+def write_legacy_plan_fixture(
+    cwd: Path,
+    *,
+    plan_id: str = "PLAN-20260723-001",
+    title: str = "Test",
+) -> None:
+    """Write a schema-v3 authority fixture without reopening production admission."""
+    timestamp = "2026-07-23T00:00:00+00:00"
+    plan_root = cwd / ".work-governance" / "_Plan"
+    plan_root.mkdir(parents=True, exist_ok=True)
+    index = {
+        "schema_version": 1,
+        "active_plan_id": plan_id,
+        "plans": [
+            {
+                "id": plan_id,
+                "path": f"{plan_id}.md",
+                "title": title,
+                "created_at": timestamp,
+            }
+        ],
+    }
+    frontmatter = {
+        "schema_version": 3,
+        "plan_id": plan_id,
+        "title": title,
+        "status": "active",
+        "mode": "autonomous",
+        "revision": 1,
+        "created_at": timestamp,
+        "updated_at": timestamp,
+        "scope": {"include": [], "exclude": []},
+        "confirmations": {"required": []},
+        "obligations": [],
+        "tasks": [],
+        "validations": [],
+        "artifacts": [],
+        "authority": {
+            "model": "single-active",
+            "state": "governed",
+            "canonical_plan_id": plan_id,
+            "sources": [],
+            "confirmations": {},
+        },
+        "delivery": {
+            "status": "pending",
+            "boundary": "undetermined",
+            "evidence_ref": "project:not-yet-delivered",
+        },
+        "activation": {
+            "status": "deferred",
+            "current_ref": "undetermined",
+            "target_ref": "undetermined",
+        },
+        "route": {
+            "route_status": "active",
+            "slice_status": "initialized",
+            "next_phase": "Define the demand contract.",
+            "validation_standard": "Every obligation has direct fresh evidence.",
+            "confirmation_gate": "none",
+        },
+        "handoff": {
+            "route_status": "active",
+            "next_step": "Define the demand contract.",
+        },
+    }
+    (plan_root / "index.yaml").write_text(
+        yaml.safe_dump(index, sort_keys=False),
+        encoding="utf-8",
+    )
+    write_markdown_plan(
+        plan_root / f"{plan_id}.md",
+        frontmatter,
+        "# Decision Summary\n\nInitialized test fixture.\n",
+    )
 
 
 def plan_path(cwd: Path) -> Path:
@@ -54,6 +296,16 @@ def plan_path(cwd: Path) -> Path:
 
 def read_plan(cwd: Path) -> tuple[dict[str, Any], str]:
     text = plan_path(cwd).read_text(encoding="utf-8")
+    _, raw, body = text.split("---\n", 2)
+    payload = yaml.safe_load(raw)
+    assert isinstance(payload, dict)
+    return payload, body
+
+
+def read_plan_by_id(cwd: Path, plan_id: str) -> tuple[dict[str, Any], str]:
+    text = (
+        cwd / ".work-governance" / "_Plan" / f"{plan_id}.md"
+    ).read_text(encoding="utf-8")
     _, raw, body = text.split("---\n", 2)
     payload = yaml.safe_load(raw)
     assert isinstance(payload, dict)
@@ -441,53 +693,54 @@ def make_terminal_rollover_source(cwd: Path) -> Path:
 
 
 def rollover_target_frontmatter(plan_id: str) -> dict[str, Any]:
-    """Build an active schema-v3 successor contract."""
-    return {
-        "schema_version": 3,
-        "plan_id": plan_id,
-        "title": "Successor Plan",
-        "status": "active",
-        "mode": "autonomous",
-        "revision": 1,
-        "created_at": "2026-07-27T00:00:00+00:00",
-        "updated_at": "2026-07-27T00:00:00+00:00",
-        "scope": {"include": ["Execute the successor route."], "exclude": []},
-        "confirmations": {"required": []},
-        "obligations": [
-            {"id": "O-001", "description": "Deliver the successor.", "status": "pending"}
-        ],
-        "tasks": [{"id": "T-001", "description": "Execute safely.", "status": "pending"}],
-        "validations": [
-            {"id": "V-001", "description": "Validate the successor.", "status": "pending"}
-        ],
-        "artifacts": [{"id": "A-001", "path": "successor.txt", "status": "pending"}],
-        "authority": {
-            "model": "single-active",
-            "state": "governed",
-            "canonical_plan_id": plan_id,
-            "sources": [],
-            "confirmations": {},
-        },
-        "delivery": {
-            "status": "pending",
-            "boundary": "successor-delivery",
-            "evidence_ref": "project:successor-not-yet-delivered",
-        },
-        "activation": {
-            "status": "not_required",
-            "current_ref": "not-applicable",
-            "target_ref": "not-applicable",
-            "decision_ref": "user:source-only",
-        },
-        "route": {
-            "route_status": "active",
-            "slice_status": "initialized",
-            "next_phase": "Execute T-001.",
-            "validation_standard": "Fresh evidence covers O-001 and V-001.",
-            "confirmation_gate": "none",
-        },
-        "handoff": {"route_status": "active", "next_step": "Execute T-001."},
+    """Build an active schema-v4 successor contract."""
+    frontmatter = schema_v4_admission_plan(plan_id)
+    frontmatter["title"] = "Successor Plan"
+    frontmatter["goal"] = {
+        "statement": "Deliver the successor route.",
+        "success_conditions": ["The successor obligation and validation are verified."],
     }
+    frontmatter["scope"] = {"include": ["Execute the successor route."], "exclude": []}
+    frontmatter["obligations"] = [
+        {"id": "O-001", "description": "Deliver the successor.", "status": "pending"}
+    ]
+    frontmatter["tasks"] = [
+        {
+            "id": "T-001",
+            "description": "Execute safely.",
+            "status": "pending",
+            "unknowns": [],
+            "expected_evidence_delta": "The successor output becomes reviewable.",
+        }
+    ]
+    frontmatter["validations"] = [
+        {
+            "id": "V-001",
+            "description": "Validate the successor.",
+            "status": "pending",
+            "provenance": {
+                "kind": "confirmed-obligation",
+                "source_ref": "project:O-001",
+            },
+        }
+    ]
+    frontmatter["artifacts"] = [
+        {"id": "A-001", "path": "successor.txt", "status": "pending"}
+    ]
+    frontmatter["delivery"] = {
+        "status": "pending",
+        "boundary": "successor-delivery",
+        "evidence_ref": "project:successor-not-yet-delivered",
+    }
+    frontmatter["route"] = {
+        "route_status": "active",
+        "slice_status": "initialized",
+        "next_phase": "Execute T-001.",
+        "validation_standard": "Fresh evidence covers O-001 and V-001.",
+        "confirmation_gate": "none",
+    }
+    frontmatter["handoff"] = {"route_status": "active", "next_step": "Execute T-001."}
+    return frontmatter
 
 
 def write_rollover_fixture(cwd: Path) -> Path:
@@ -896,24 +1149,16 @@ def test_controller_resolves_only_the_nearest_linked_worktree_plan(tmp_path: Pat
         check=True,
     )
     run_workctl(repository, "layout", "migrate")
-    run_workctl(
+    write_legacy_plan_fixture(
         repository,
-        "plan",
-        "init",
-        "--plan-id",
-        "PLAN-20260727-101",
-        "--title",
-        "Main Plan",
+        plan_id="PLAN-20260727-101",
+        title="Main Plan",
     )
     run_workctl(linked, "layout", "migrate")
-    run_workctl(
+    write_legacy_plan_fixture(
         linked,
-        "plan",
-        "init",
-        "--plan-id",
-        "PLAN-20260727-202",
-        "--title",
-        "Feature Plan",
+        plan_id="PLAN-20260727-202",
+        title="Feature Plan",
     )
     main_nested = repository / "src" / "deep"
     linked_nested = linked / "src" / "deep"
@@ -1012,27 +1257,26 @@ def test_layout_never_claims_a_preexisting_unversioned_governance_root(
         assert (governance / ".gitignore").read_text(encoding="utf-8") == ignore_bytes
 
 
-def test_layout_recovers_a_durable_bootstrap_claim_before_root_activation(
+def test_unauthenticated_controller_cannot_create_a_governance_claim(
     tmp_path: Path,
 ) -> None:
-    """A crash after claim fsync resumes by no-replace activation of the sibling."""
-    interrupted = run_workctl(
-        tmp_path,
-        "layout",
-        "migrate",
+    """A test interruption variable cannot bypass the receipt gate on a fresh root."""
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "layout", "migrate"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
         check=False,
-        env={"WORKCTL_TEST_BOOTSTRAP_INTERRUPT_AFTER_CLAIM": "1"},
+        env={
+            **os.environ,
+            "WORKCTL_TEST_BOOTSTRAP_INTERRUPT_AFTER_CLAIM": "1",
+        },
     )
 
-    assert interrupted.returncode == 2
-    assert "BOOTSTRAP_TEST_INTERRUPTED_AFTER_CLAIM" in interrupted.stderr
+    assert result.returncode == 2
+    assert "BOOTSTRAP_RECEIPT_REQUIRED" in result.stderr
     assert not (tmp_path / ".work-governance").exists()
-    assert (tmp_path / ".work-governance.bootstrap" / "runtime" / "bootstrap-claim.json").is_file()
-
-    resumed = run_workctl(tmp_path, "layout", "migrate")
-    assert resumed.stdout.strip() == "LAYOUT_COMMITTED not_applicable"
     assert not (tmp_path / ".work-governance.bootstrap").exists()
-    assert run_workctl(tmp_path, "layout", "validate").stdout.strip() == "LAYOUT_VALID"
 
 
 def test_durable_replace_fsyncs_both_directory_entries(
@@ -2518,8 +2762,22 @@ with lock_path.open("w", encoding="utf-8") as handle:
         while not holder_ready.exists() and time.monotonic() < deadline:
             time.sleep(0.01)
         assert holder_ready.exists()
+        receipt = ensure_test_ready_receipt(
+            tmp_path,
+            allow_legacy_contract=True,
+            bootstrapping=True,
+        )
+        assert receipt is not None
+        migration_command = [
+            sys.executable,
+            str(receipt[0]),
+            "--receipt-sha256",
+            receipt[1],
+            "layout",
+            "migrate",
+        ]
         first = subprocess.Popen(
-            [sys.executable, str(SCRIPT), "layout", "migrate"],
+            migration_command,
             cwd=tmp_path,
             text=True,
             stdout=subprocess.PIPE,
@@ -2537,7 +2795,7 @@ with lock_path.open("w", encoding="utf-8") as handle:
         assert first_legacy_attempt.exists()
         assert first.poll() is None
         second = subprocess.Popen(
-            [sys.executable, str(SCRIPT), "layout", "migrate"],
+            migration_command,
             cwd=tmp_path,
             text=True,
             stdout=subprocess.PIPE,
@@ -3023,7 +3281,7 @@ def test_plan_init_status_and_active_conflict(tmp_path: Path) -> None:
         check=False,
     )
     assert duplicate.returncode == 2
-    assert "ACTIVE_PLAN_EXISTS" in duplicate.stderr
+    assert "PLAN_ADMISSION_REQUIRED" in duplicate.stderr
 
 
 def test_expected_revision_gate(tmp_path: Path) -> None:
@@ -3491,9 +3749,13 @@ with lock_path.open("w", encoding="utf-8") as handle:
         time.sleep(0.01)
     assert holder_ready_path.exists()
 
+    receipt = ensure_test_ready_receipt(tmp_path, allow_legacy_contract=True)
+    assert receipt is not None
     command = [
         sys.executable,
-        str(SCRIPT),
+        str(receipt[0]),
+        "--receipt-sha256",
+        receipt[1],
         "plan",
         "revise",
         "--status",
@@ -3509,7 +3771,10 @@ with lock_path.open("w", encoding="utf-8") as handle:
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env={**os.environ, "WORKCTL_TEST_LOCK_ATTEMPT_FILE": str(writer_attempt_path)},
+        env={
+            **os.environ,
+            "WORKCTL_TEST_LOCK_ATTEMPT_FILE": str(writer_attempt_path),
+        },
     )
     deadline = time.monotonic() + 2
     while not writer_attempt_path.exists() and time.monotonic() < deadline:
@@ -4879,6 +5144,43 @@ def test_rollover_requires_complete_terminal_closeout_ready_source(
     assert "ROLLOVER_SOURCE_NOT_COMPLETE" in non_complete.stderr
     assert closeout_blocked.returncode == 2
     assert "ROLLOVER_SOURCE_NOT_CLOSEOUT_READY" in closeout_blocked.stderr
+
+
+def test_rollover_requires_schema_v4_successor(tmp_path: Path) -> None:
+    """A new route cannot reactivate the legacy mutable contract."""
+    manifest_path = write_rollover_fixture(tmp_path)
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    prepared = tmp_path / manifest["target_plan"]["prepared_file"]
+    _, raw, body = prepared.read_text(encoding="utf-8").split("---\n", 2)
+    frontmatter = yaml.safe_load(raw)
+    assert isinstance(frontmatter, dict)
+    frontmatter["schema_version"] = 3
+    frontmatter.pop("goal")
+    frontmatter.pop("contract")
+    frontmatter.pop("unknowns")
+    frontmatter.pop("revision_history")
+    for task in frontmatter["tasks"]:
+        task.pop("unknowns")
+        task.pop("expected_evidence_delta")
+    for validation in frontmatter["validations"]:
+        validation.pop("provenance")
+    write_markdown_plan(prepared, frontmatter, body)
+    manifest["target_plan"]["sha256"] = sha256_path(prepared)
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "ROLLOVER_TARGET_MUST_USE_SCHEMA_VERSION_4" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -6703,3 +7005,1002 @@ def test_closeout_includes_full_plan_validation(tmp_path: Path) -> None:
     assert any(
         "index must not duplicate mutable Plan fields" in item for item in payload["blockers"]
     )
+
+
+def schema_v4_admission_plan(plan_id: str) -> dict[str, Any]:
+    """Build the smallest confirmed schema-v4 authority used by observed probes."""
+    created_at = "2026-07-28T10:00:00+00:00"
+    return {
+        "schema_version": 4,
+        "plan_id": plan_id,
+        "title": "Observed failure admission",
+        "status": "active",
+        "mode": "autonomous",
+        "revision": 1,
+        "created_at": created_at,
+        "updated_at": created_at,
+        "goal": {
+            "statement": "Remove the observed initial confirmation deadlock.",
+            "success_conditions": ["A public transaction admits one confirmed Plan."],
+        },
+        "contract": {
+            "revision": 1,
+            "confirmation_id": "C-ADMISSION",
+            "confirmed_ref": "user:observed-admission",
+        },
+        "scope": {"include": ["Exercise public Plan admission."], "exclude": []},
+        "confirmations": {
+            "required": [
+                {
+                    "id": "C-ADMISSION",
+                    "description": "Admit this exact Plan contract.",
+                    "status": "accepted",
+                    "ref": "user:observed-admission",
+                    "accepted_at": created_at,
+                }
+            ]
+        },
+        "unknowns": [],
+        "obligations": [],
+        "tasks": [
+            {
+                "id": "T-001",
+                "description": "Exercise public confirmation creation.",
+                "status": "pending",
+                "unknowns": [],
+                "expected_evidence_delta": "A confirmation can be created and decided.",
+            }
+        ],
+        "validations": [
+            {
+                "id": "V-001",
+                "description": "Public admission removes the deadlock.",
+                "status": "pending",
+                "provenance": {
+                    "kind": "observed-failure",
+                    "source_ref": "runtime:session-019fa658-initial-confirmation",
+                },
+            }
+        ],
+        "artifacts": [],
+        "authority": {
+            "model": "single-active",
+            "state": "governed",
+            "canonical_plan_id": plan_id,
+            "sources": [],
+            "confirmations": {},
+        },
+        "delivery": {
+            "status": "pending",
+            "boundary": "local-candidate",
+            "evidence_ref": "project:not-yet-delivered",
+        },
+        "activation": {
+            "status": "not_required",
+            "current_ref": "not-applicable",
+            "target_ref": "not-applicable",
+            "decision_ref": "user:source-only",
+        },
+        "route": {
+            "route_status": "active",
+            "slice_status": "admitted",
+            "next_phase": "Exercise T-001.",
+            "validation_standard": "Observed-failure evidence proves the public path.",
+            "confirmation_gate": "none",
+        },
+        "handoff": {"route_status": "active", "next_step": "Exercise T-001."},
+        "revision_history": [
+            {
+                "revision": 1,
+                "kind": "admission",
+                "changed_at": created_at,
+                "rationale": "Admit the user-confirmed contract.",
+                "confirmation_id": "C-ADMISSION",
+            }
+        ],
+    }
+
+
+def test_transactional_admission_removes_initial_confirmation_deadlock(
+    tmp_path: Path,
+) -> None:
+    """A No-Plan project admits and extends authority through public commands only."""
+    run_workctl(tmp_path, "layout", "migrate")
+    plan_id = "PLAN-20260728-001"
+    prepared = tmp_path / "candidate.md"
+    write_markdown_plan(prepared, schema_v4_admission_plan(plan_id), "# Admitted Plan\n")
+    manifest = {
+        "schema_version": 1,
+        "kind": "plan-admission",
+        "transaction_id": "ADM-20260728-001",
+        "prepared_plan": prepared.name,
+        "plan_id": plan_id,
+        "plan_sha256": sha256_path(prepared),
+        "confirmation_id": "C-ADMISSION",
+        "confirmation_ref": "user:observed-admission",
+    }
+    manifest_path = tmp_path / "admission.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    applied = run_workctl(tmp_path, "plan", "admit", "apply", "--manifest", str(manifest_path))
+    added = run_workctl(
+        tmp_path,
+        "plan",
+        "confirmation",
+        "add",
+        "--confirmation-id",
+        "C-EXECUTE",
+        "--description",
+        "Authorize observed execution.",
+        "--expected-revision",
+        "1",
+    )
+    decided = run_workctl(
+        tmp_path,
+        "plan",
+        "confirm",
+        "--confirmation-id",
+        "C-EXECUTE",
+        "--ref",
+        "user:execute",
+        "--expected-revision",
+        "2",
+    )
+    frontmatter, _ = read_plan_by_id(tmp_path, plan_id)
+
+    assert "PLAN_ADMISSION_COMMITTED" in applied.stdout
+    assert "CONFIRMATION_ADDED" in added.stdout
+    assert "CONFIRMATION_DECIDED C-EXECUTE accepted" in decided.stdout
+    assert frontmatter["schema_version"] == 4
+    assert frontmatter["revision"] == 3
+    assert frontmatter["confirmations"]["required"][-1]["status"] == "accepted"
+
+
+def test_immutable_evidence_survives_process_log_append(tmp_path: Path) -> None:
+    """Terminal evidence is a versioned record, never a mutable process-log hash."""
+    run_workctl(tmp_path, "layout", "migrate")
+    plan_id = "PLAN-20260728-001"
+    frontmatter = schema_v4_admission_plan(plan_id)
+    frontmatter["obligations"] = [
+        {"id": "O-001", "description": "Keep evidence immutable.", "status": "pending"}
+    ]
+    prepared = tmp_path / "candidate.md"
+    write_markdown_plan(prepared, frontmatter, "# Evidence Plan\n")
+    admission = {
+        "schema_version": 1,
+        "kind": "plan-admission",
+        "transaction_id": "ADM-20260728-002",
+        "prepared_plan": prepared.name,
+        "plan_id": plan_id,
+        "plan_sha256": sha256_path(prepared),
+        "confirmation_id": "C-ADMISSION",
+        "confirmation_ref": "user:observed-admission",
+    }
+    admission_path = tmp_path / "admission.yaml"
+    admission_path.write_text(yaml.safe_dump(admission, sort_keys=False), encoding="utf-8")
+    run_workctl(tmp_path, "plan", "admit", "apply", "--manifest", str(admission_path))
+    evidence_input = {
+        "schema_version": 1,
+        "kind": "work-governance-evidence",
+        "plan_id": plan_id,
+        "subject": "obligation:O-001",
+        "created_at": "2026-07-28T10:01:00+00:00",
+        "producer_ref": "runtime:observed-evidence-probe",
+        "items": [{"ref": "project:result.txt", "sha256": "a" * 64}],
+    }
+    evidence_input_path = tmp_path / "evidence.json"
+    evidence_input_path.write_text(json.dumps(evidence_input), encoding="utf-8")
+    recorded = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "evidence",
+            "record",
+            "--manifest",
+            str(evidence_input_path),
+        ).stdout
+    )
+
+    run_workctl(
+        tmp_path,
+        "log",
+        "append",
+        "--kind",
+        "probe",
+        "--message",
+        "mutable process detail",
+        "--expected-revision",
+        "1",
+    )
+    run_workctl(
+        tmp_path,
+        "plan",
+        "verify-entry",
+        "--field",
+        "obligations",
+        "--entry-id",
+        "O-001",
+        "--confirmation",
+        "C-ADMISSION",
+        "--evidence-manifest",
+        recorded["path"],
+        "--expected-revision",
+        "1",
+    )
+    revised, _ = read_plan_by_id(tmp_path, plan_id)
+
+    assert revised["obligations"][0]["evidence_ref"] == f"evidence:{recorded['path']}"
+    assert revised["obligations"][0]["evidence_sha256"] == recorded["sha256"]
+    assert (tmp_path / recorded["path"]).is_file()
+
+
+def test_normal_plan_init_requires_transactional_admission(tmp_path: Path) -> None:
+    """The public empty-first path is closed instead of recreating the deadlock."""
+    run_workctl(tmp_path, "layout", "migrate")
+
+    blocked = run_workctl(
+        tmp_path,
+        "plan",
+        "init",
+        "--plan-id",
+        "PLAN-20260728-001",
+        "--title",
+        "Blocked empty Plan",
+        check=False,
+    )
+
+    assert blocked.returncode == 2
+    assert "PLAN_ADMISSION_REQUIRED" in blocked.stderr
+    assert not (tmp_path / ".work-governance" / "_Plan" / "index.yaml").exists()
+
+
+@pytest.mark.parametrize("receipt_state", ["missing", "malformed"])
+def test_mutation_requires_valid_receipt_even_with_forged_sessionstart_environment(
+    tmp_path: Path,
+    receipt_state: str,
+) -> None:
+    """Missing or damaged local state cannot turn the receipt-v2 gate off."""
+    run_workctl(tmp_path, "layout", "migrate")
+    receipt = ensure_test_ready_receipt(tmp_path, allow_legacy_contract=False)
+    assert receipt is not None
+    receipt_path = tmp_path / ".work-governance" / "bootstrap-state.json"
+    supplied_sha256 = receipt[1]
+    if receipt_state == "missing":
+        receipt_path.unlink()
+    else:
+        receipt_path.write_text("{}\n", encoding="utf-8")
+        supplied_sha256 = sha256_path(receipt_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(receipt[0]),
+            "--receipt-sha256",
+            supplied_sha256,
+            "plan",
+            "init",
+            "--plan-id",
+            "PLAN-20260728-099",
+            "--title",
+            "Must remain blocked",
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={**os.environ, "WORK_GOVERNANCE_SESSIONSTART": "1"},
+    )
+
+    assert result.returncode == 2
+    assert "BOOTSTRAP_RECEIPT_INVALID" in result.stderr
+    assert not (tmp_path / ".work-governance" / "_Plan" / "index.yaml").exists()
+
+
+def test_ready_receipt_requires_current_bootstrap_action_revision(
+    tmp_path: Path,
+) -> None:
+    """A hash-matching READY receipt cannot authorize an older action contract."""
+    run_workctl(tmp_path, "layout", "migrate")
+    receipt = ensure_test_ready_receipt(tmp_path, allow_legacy_contract=False)
+    assert receipt is not None
+    receipt_path = tmp_path / ".work-governance" / "bootstrap-state.json"
+    payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    payload["action_revision"] = 4
+    receipt_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(receipt[0]),
+            "--receipt-sha256",
+            sha256_path(receipt_path),
+            "plan",
+            "init",
+            "--plan-id",
+            "PLAN-20260728-098",
+            "--title",
+            "Older action must remain blocked",
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "BOOTSTRAP_RECEIPT_INVALID" in result.stderr
+    assert not (tmp_path / ".work-governance" / "_Plan" / "index.yaml").exists()
+
+
+def test_bootstrap_capability_requires_current_action_revision(
+    tmp_path: Path,
+) -> None:
+    """A hash-matching capability cannot mutate layout under an older action."""
+    receipt = ensure_test_ready_receipt(
+        tmp_path,
+        allow_legacy_contract=False,
+        bootstrapping=True,
+    )
+    assert receipt is not None
+    capability_path = (
+        tmp_path / ".work-governance" / "runtime" / "bootstrap-capability.json"
+    )
+    payload = json.loads(capability_path.read_text(encoding="utf-8"))
+    payload["action_revision"] = 4
+    capability_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(receipt[0]),
+            "--receipt-sha256",
+            sha256_path(capability_path),
+            "layout",
+            "migrate",
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "BOOTSTRAP_RECEIPT_INVALID" in result.stderr
+    assert not (tmp_path / ".work-governance" / "version.yaml").exists()
+
+
+def test_interrupted_plan_admission_recovers_forward_with_index_last(
+    tmp_path: Path,
+) -> None:
+    """A crash after Plan installation cannot leave authority guessed or overwritten."""
+    run_workctl(tmp_path, "layout", "migrate")
+    plan_id = "PLAN-20260728-001"
+    prepared = tmp_path / "candidate.md"
+    write_markdown_plan(prepared, schema_v4_admission_plan(plan_id), "# Recovery Plan\n")
+    manifest = {
+        "schema_version": 1,
+        "kind": "plan-admission",
+        "transaction_id": "ADM-20260728-003",
+        "prepared_plan": prepared.name,
+        "plan_id": plan_id,
+        "plan_sha256": sha256_path(prepared),
+        "confirmation_id": "C-ADMISSION",
+        "confirmation_ref": "user:observed-admission",
+    }
+    manifest_path = tmp_path / "admission.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "admit",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={"WORKCTL_TEST_ADMISSION_INTERRUPT_AFTER": "plan-installed"},
+    )
+    target = tmp_path / ".work-governance" / "_Plan" / f"{plan_id}.md"
+    index = tmp_path / ".work-governance" / "_Plan" / "index.yaml"
+
+    assert interrupted.returncode == 2
+    assert "PLAN_ADMISSION_TEST_INTERRUPTED: plan-installed" in interrupted.stderr
+    assert target.is_file()
+    assert not index.exists()
+
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "admit",
+        "recover",
+        "--transaction-id",
+        "ADM-20260728-003",
+    )
+
+    assert "PLAN_ADMISSION_COMMITTED" in recovered.stdout
+    assert yaml.safe_load(index.read_text(encoding="utf-8"))["active_plan_id"] == plan_id
+    assert run_workctl(tmp_path, "plan", "validate").stdout.strip() == "PLAN_VALID"
+
+
+def test_plan_admission_recovery_rejects_noncanonical_target_before_write(
+    tmp_path: Path,
+) -> None:
+    """A forged ignored journal cannot recreate the project-root legacy authority."""
+    run_workctl(tmp_path, "layout", "migrate")
+    plan_id = "PLAN-20260728-008"
+    transaction_id = "ADM-20260728-008"
+    transaction = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "plan-admissions"
+        / transaction_id
+    )
+    staged = transaction / "staging" / f"{plan_id}.md"
+    write_markdown_plan(staged, schema_v4_admission_plan(plan_id), "# Forged Recovery\n")
+    journal = {
+        "schema_version": 1,
+        "kind": "plan-admission",
+        "transaction_id": transaction_id,
+        "status": "prepared",
+        "created_at": "2026-07-28T10:08:00+00:00",
+        "updated_at": "2026-07-28T10:08:00+00:00",
+        "plan_id": plan_id,
+        "plan_sha256": sha256_path(staged),
+        "manifest_sha256": "a" * 64,
+        "staged_path": staged.relative_to(tmp_path).as_posix(),
+        "target_path": "_Plan/recovery-write.md",
+    }
+    journal_path = transaction / "journal.json"
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+    journal_path.write_text(json.dumps(journal), encoding="utf-8")
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "admit",
+        "recover",
+        "--transaction-id",
+        transaction_id,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "INVALID_PLAN_ADMISSION_JOURNAL" in result.stderr
+    assert not (tmp_path / "_Plan").exists()
+
+
+def test_active_schema_v3_requires_recoverable_contract_upgrade(tmp_path: Path) -> None:
+    """A live v3 contract is explicit debt, then upgrades without trusting logs."""
+    init_plan(tmp_path)
+    required = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "contract",
+            "upgrade",
+            "status",
+            env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
+        ).stdout
+    )
+    blocked = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-revision",
+        "1",
+        check=False,
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
+    )
+    assert required["contract_state"] == "PLAN_CONTRACT_UPGRADE_REQUIRED"
+    assert "PLAN_CONTRACT_UPGRADE_REQUIRED" in blocked.stderr
+
+    run_workctl(
+        tmp_path,
+        "plan",
+        "confirmation",
+        "add",
+        "--confirmation-id",
+        "C-CONTRACT-UPGRADE",
+        "--description",
+        "Upgrade the active Plan contract.",
+        "--status",
+        "accepted",
+        "--ref",
+        "user:contract-upgrade",
+        "--expected-revision",
+        "1",
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
+    )
+    plan_id = "PLAN-20260723-001"
+    upgrade_evidence = {
+        "schema_version": 1,
+        "kind": "work-governance-evidence",
+        "plan_id": plan_id,
+        "subject": "contract-upgrade",
+        "created_at": "2026-07-28T10:02:00+00:00",
+        "producer_ref": "user:contract-upgrade",
+        "items": [{"ref": "project:confirmed-contract", "sha256": "b" * 64}],
+    }
+    evidence_path = tmp_path / "upgrade-evidence.json"
+    evidence_path.write_text(json.dumps(upgrade_evidence), encoding="utf-8")
+    recorded = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "evidence",
+            "record",
+            "--manifest",
+            str(evidence_path),
+            env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
+        ).stdout
+    )
+    current_plan = plan_path(tmp_path)
+    manifest = {
+        "schema_version": 1,
+        "kind": "plan-contract-upgrade",
+        "transaction_id": "UPG-20260728-001",
+        "plan_id": plan_id,
+        "expected_revision": 2,
+        "plan_sha256": sha256_path(current_plan),
+        "confirmation_id": "C-CONTRACT-UPGRADE",
+        "confirmation_ref": "user:contract-upgrade",
+        "evidence_manifest": recorded["path"],
+        "goal": {
+            "statement": "Preserve the confirmed work while resolving unknowns.",
+            "success_conditions": ["The active Plan is schema v4."],
+        },
+        "unknowns": [],
+        "task_metadata": {},
+        "validation_provenance": {},
+    }
+    manifest_path = tmp_path / "upgrade.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "contract",
+        "upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={
+            "TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0",
+            "WORKCTL_TEST_UPGRADE_INTERRUPT_AFTER": "plan-replaced",
+        },
+    )
+    assert "PLAN_CONTRACT_UPGRADE_TEST_INTERRUPTED: plan-replaced" in interrupted.stderr
+
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "contract",
+        "upgrade",
+        "recover",
+        "--transaction-id",
+        "UPG-20260728-001",
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
+    )
+    upgraded, _ = read_plan(tmp_path)
+
+    assert "PLAN_CONTRACT_UPGRADE_COMMITTED" in recovered.stdout
+    assert upgraded["schema_version"] == 4
+    assert upgraded["revision_history"][-1]["kind"] == "contract-upgrade"
+    assert run_workctl(tmp_path, "plan", "validate").stdout.strip() == "PLAN_VALID"
+
+
+def test_contract_upgrade_recovery_rejects_noncanonical_target_before_write(
+    tmp_path: Path,
+) -> None:
+    """A forged upgrade journal cannot write outside the indexed Plan path."""
+    init_plan(tmp_path)
+    plan_id = "PLAN-20260723-001"
+    transaction_id = "UPG-20260728-009"
+    transaction = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "contract-upgrades"
+        / transaction_id
+    )
+    staged = transaction / "staging" / f"{plan_id}.md"
+    write_markdown_plan(staged, schema_v4_admission_plan(plan_id), "# Forged Upgrade\n")
+    journal = {
+        "schema_version": 1,
+        "kind": "plan-contract-upgrade",
+        "transaction_id": transaction_id,
+        "status": "prepared",
+        "created_at": "2026-07-28T10:09:00+00:00",
+        "updated_at": "2026-07-28T10:09:00+00:00",
+        "plan_id": plan_id,
+        "source_sha256": sha256_path(plan_path(tmp_path)),
+        "target_sha256": sha256_path(staged),
+        "manifest_sha256": "b" * 64,
+        "staged_path": staged.relative_to(tmp_path).as_posix(),
+        "target_path": "_Plan/recovery-write.md",
+    }
+    journal_path = transaction / "journal.json"
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+    journal_path.write_text(json.dumps(journal), encoding="utf-8")
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "contract",
+        "upgrade",
+        "recover",
+        "--transaction-id",
+        transaction_id,
+        check=False,
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
+    )
+
+    assert result.returncode == 2
+    assert "INVALID_CONTRACT_UPGRADE_JOURNAL" in result.stderr
+    assert not (tmp_path / "_Plan").exists()
+
+
+def test_evidence_subject_and_hash_are_verified_before_terminal_transition(
+    tmp_path: Path,
+) -> None:
+    """A stored path is insufficient when its subject or immutable bytes disagree."""
+    run_workctl(tmp_path, "layout", "migrate")
+    plan_id = "PLAN-20260728-001"
+    frontmatter = schema_v4_admission_plan(plan_id)
+    frontmatter["obligations"] = [
+        {"id": "O-001", "description": "Verify exact evidence.", "status": "pending"}
+    ]
+    prepared = tmp_path / "candidate.md"
+    write_markdown_plan(prepared, frontmatter, "# Exact Evidence\n")
+    admission = {
+        "schema_version": 1,
+        "kind": "plan-admission",
+        "transaction_id": "ADM-20260728-004",
+        "prepared_plan": prepared.name,
+        "plan_id": plan_id,
+        "plan_sha256": sha256_path(prepared),
+        "confirmation_id": "C-ADMISSION",
+        "confirmation_ref": "user:observed-admission",
+    }
+    admission_path = tmp_path / "admission.yaml"
+    admission_path.write_text(yaml.safe_dump(admission, sort_keys=False), encoding="utf-8")
+    run_workctl(tmp_path, "plan", "admit", "apply", "--manifest", str(admission_path))
+    wrong_subject = {
+        "schema_version": 1,
+        "kind": "work-governance-evidence",
+        "plan_id": plan_id,
+        "subject": "validation:V-001",
+        "created_at": "2026-07-28T10:03:00+00:00",
+        "producer_ref": "runtime:wrong-subject-probe",
+        "items": [{"ref": "project:result.txt", "sha256": "c" * 64}],
+    }
+    evidence_input = tmp_path / "evidence.json"
+    evidence_input.write_text(json.dumps(wrong_subject), encoding="utf-8")
+    recorded = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "evidence",
+            "record",
+            "--manifest",
+            str(evidence_input),
+        ).stdout
+    )
+    subject_blocked = run_workctl(
+        tmp_path,
+        "plan",
+        "verify-entry",
+        "--field",
+        "obligations",
+        "--entry-id",
+        "O-001",
+        "--confirmation",
+        "C-ADMISSION",
+        "--evidence-manifest",
+        recorded["path"],
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+    assert "EVIDENCE_MANIFEST_SUBJECT_MISMATCH" in subject_blocked.stderr
+
+    stored = tmp_path / recorded["path"]
+    stored.write_bytes(stored.read_bytes() + b" ")
+    hash_blocked = run_workctl(
+        tmp_path,
+        "plan",
+        "validate",
+        "--evidence-manifest",
+        recorded["path"],
+        check=False,
+    )
+    assert "EVIDENCE_MANIFEST_HASH_MISMATCH" in hash_blocked.stderr
+
+
+def test_unknown_resolution_and_plan_adaptation_preserve_confirmed_goal(
+    tmp_path: Path,
+) -> None:
+    """Evidence can change the execution path without silently changing the goal."""
+    run_workctl(tmp_path, "layout", "migrate")
+    plan_id = "PLAN-20260728-001"
+    prepared = tmp_path / "candidate.md"
+    write_markdown_plan(prepared, schema_v4_admission_plan(plan_id), "# Adaptable Plan\n")
+    admission = {
+        "schema_version": 1,
+        "kind": "plan-admission",
+        "transaction_id": "ADM-20260728-005",
+        "prepared_plan": prepared.name,
+        "plan_id": plan_id,
+        "plan_sha256": sha256_path(prepared),
+        "confirmation_id": "C-ADMISSION",
+        "confirmation_ref": "user:observed-admission",
+    }
+    admission_path = tmp_path / "admission.yaml"
+    admission_path.write_text(yaml.safe_dump(admission, sort_keys=False), encoding="utf-8")
+    run_workctl(tmp_path, "plan", "admit", "apply", "--manifest", str(admission_path))
+    original, _ = read_plan_by_id(tmp_path, plan_id)
+
+    run_workctl(
+        tmp_path,
+        "plan",
+        "unknown",
+        "add",
+        "--unknown-id",
+        "U-001",
+        "--question",
+        "Which runtime path is authoritative?",
+        "--expected-evidence",
+        "A receipt-bound controller path.",
+        "--expected-revision",
+        "1",
+    )
+    unknown_evidence = {
+        "schema_version": 1,
+        "kind": "work-governance-evidence",
+        "plan_id": plan_id,
+        "subject": "unknown:U-001",
+        "created_at": "2026-07-28T10:04:00+00:00",
+        "producer_ref": "runtime:receipt-path-probe",
+        "items": [{"ref": "runtime:bootstrap-state", "sha256": "d" * 64}],
+    }
+    unknown_input = tmp_path / "unknown-evidence.json"
+    unknown_input.write_text(json.dumps(unknown_evidence), encoding="utf-8")
+    unknown_record = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "evidence",
+            "record",
+            "--manifest",
+            str(unknown_input),
+        ).stdout
+    )
+    run_workctl(
+        tmp_path,
+        "plan",
+        "unknown",
+        "resolve",
+        "--unknown-id",
+        "U-001",
+        "--resolution",
+        "Use the receipt-bound runtime bundle.",
+        "--evidence-manifest",
+        unknown_record["path"],
+        "--expected-revision",
+        "2",
+    )
+    adaptation_evidence = {
+        "schema_version": 1,
+        "kind": "work-governance-evidence",
+        "plan_id": plan_id,
+        "subject": "adaptation:4",
+        "created_at": "2026-07-28T10:05:00+00:00",
+        "producer_ref": "runtime:adaptation-probe",
+        "items": [{"ref": "runtime:bootstrap-state", "sha256": "e" * 64}],
+    }
+    adaptation_input = tmp_path / "adaptation-evidence.json"
+    adaptation_input.write_text(json.dumps(adaptation_evidence), encoding="utf-8")
+    adaptation_record = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "evidence",
+            "record",
+            "--manifest",
+            str(adaptation_input),
+        ).stdout
+    )
+    adaptation = {
+        "schema_version": 1,
+        "kind": "plan-adaptation",
+        "plan_id": plan_id,
+        "expected_revision": 3,
+        "confirmation_id": "C-ADMISSION",
+        "rationale": "The runtime receipt resolved U-001 and changes the next probe.",
+        "evidence_manifest": adaptation_record["path"],
+        "changes": {
+            "route": {
+                "route_status": "active",
+                "slice_status": "unknown-resolved",
+                "next_phase": "Exercise the receipt-bound controller.",
+                "validation_standard": "The exact receipt hash authorizes the command.",
+                "confirmation_gate": "none",
+            },
+            "handoff": {
+                "route_status": "active",
+                "next_step": "Exercise the receipt-bound controller.",
+            },
+        },
+    }
+    adaptation_path = tmp_path / "adaptation.yaml"
+    adaptation_path.write_text(yaml.safe_dump(adaptation, sort_keys=False), encoding="utf-8")
+
+    run_workctl(tmp_path, "plan", "adapt", "--manifest", str(adaptation_path))
+    revised, _ = read_plan_by_id(tmp_path, plan_id)
+
+    assert revised["goal"] == original["goal"]
+    assert revised["contract"] == original["contract"]
+    assert revised["unknowns"][0]["status"] == "resolved"
+    assert revised["revision_history"][-1]["kind"] == "adaptation"
+
+
+def test_schema_v4_contract_revision_is_confirmation_and_evidence_bound(
+    tmp_path: Path,
+) -> None:
+    """A goal change records a distinct contract revision and immutable evidence."""
+    run_workctl(tmp_path, "layout", "migrate")
+    plan_id = "PLAN-20260728-006"
+    prepared = tmp_path / "candidate.md"
+    write_markdown_plan(prepared, schema_v4_admission_plan(plan_id), "# Revisable Plan\n")
+    admission = {
+        "schema_version": 1,
+        "kind": "plan-admission",
+        "transaction_id": "ADM-20260728-006",
+        "prepared_plan": prepared.name,
+        "plan_id": plan_id,
+        "plan_sha256": sha256_path(prepared),
+        "confirmation_id": "C-ADMISSION",
+        "confirmation_ref": "user:observed-admission",
+    }
+    admission_path = tmp_path / "admission.yaml"
+    admission_path.write_text(yaml.safe_dump(admission, sort_keys=False), encoding="utf-8")
+    run_workctl(tmp_path, "plan", "admit", "apply", "--manifest", str(admission_path))
+    run_workctl(
+        tmp_path,
+        "plan",
+        "confirmation",
+        "add",
+        "--confirmation-id",
+        "C-CONTRACT",
+        "--description",
+        "Approve the revised goal.",
+        "--status",
+        "accepted",
+        "--ref",
+        "user:revised-goal",
+        "--expected-revision",
+        "1",
+    )
+    evidence_input = tmp_path / "contract-evidence.json"
+    evidence_input.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "work-governance-evidence",
+                "plan_id": plan_id,
+                "subject": "contract-revision:2",
+                "created_at": "2026-07-28T10:06:00+00:00",
+                "producer_ref": "user:revised-goal",
+                "items": [{"ref": "project:confirmed-goal", "sha256": "f" * 64}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    recorded = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "evidence",
+            "record",
+            "--manifest",
+            str(evidence_input),
+        ).stdout
+    )
+    revision_manifest = {
+        "schema_version": 1,
+        "kind": "plan-contract-revision",
+        "plan_id": plan_id,
+        "expected_revision": 2,
+        "confirmation_id": "C-CONTRACT",
+        "rationale": "Align the contract with the confirmed user-visible result.",
+        "evidence_manifest": recorded["path"],
+        "changes": {
+            "goal": {
+                "statement": "Deliver the confirmed revised result.",
+                "success_conditions": ["The revised result is directly verified."],
+            }
+        },
+    }
+    revision_path = tmp_path / "contract-revision.yaml"
+    revision_path.write_text(
+        yaml.safe_dump(revision_manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    run_workctl(
+        tmp_path,
+        "plan",
+        "contract",
+        "revise",
+        "--manifest",
+        str(revision_path),
+    )
+    revised, _ = read_plan_by_id(tmp_path, plan_id)
+
+    assert revised["revision"] == 3
+    assert revised["contract"] == {
+        "revision": 2,
+        "confirmation_id": "C-CONTRACT",
+        "confirmed_ref": "user:revised-goal",
+    }
+    assert revised["goal"]["statement"] == "Deliver the confirmed revised result."
+    assert revised["revision_history"][-1]["kind"] == "contract-revision"
+
+
+def test_schema_v4_closeout_keeps_delivery_and_exclusion_gates(
+    tmp_path: Path,
+) -> None:
+    """The new contract must retain the route gates inherited from schema v3."""
+    run_workctl(tmp_path, "layout", "migrate")
+    plan_id = "PLAN-20260728-007"
+    frontmatter = schema_v4_admission_plan(plan_id)
+    prepared = tmp_path / "candidate.md"
+    write_markdown_plan(prepared, frontmatter, "# Gated Closeout\n")
+    admission = {
+        "schema_version": 1,
+        "kind": "plan-admission",
+        "transaction_id": "ADM-20260728-007",
+        "prepared_plan": prepared.name,
+        "plan_id": plan_id,
+        "plan_sha256": sha256_path(prepared),
+        "confirmation_id": "C-ADMISSION",
+        "confirmation_ref": "user:observed-admission",
+    }
+    admission_path = tmp_path / "admission.yaml"
+    admission_path.write_text(yaml.safe_dump(admission, sort_keys=False), encoding="utf-8")
+    run_workctl(tmp_path, "plan", "admit", "apply", "--manifest", str(admission_path))
+    active, body = read_plan_by_id(tmp_path, plan_id)
+    active["tasks"][0]["status"] = "verified"
+    active["validations"][0]["status"] = "verified"
+    active["scope"]["exclude"] = [
+        {"description": "Await a required future route.", "disposition": "deferred"}
+    ]
+    active["route"] = {
+        "route_status": "terminal",
+        "slice_status": "complete",
+        "next_phase": "none",
+        "validation_standard": "Current evidence is complete.",
+        "confirmation_gate": "none",
+    }
+    active["handoff"] = {"route_status": "terminal", "next_step": "none"}
+    write_markdown_plan(
+        tmp_path / ".work-governance" / "_Plan" / f"{plan_id}.md",
+        active,
+        body,
+    )
+
+    result = run_workctl(tmp_path, "plan", "closeout-check", check=False)
+    blockers = json.loads(result.stdout)["blockers"]
+
+    assert result.returncode == 1
+    assert "delivery is not complete" in blockers
+    assert any("scope exclusion is unresolved" in blocker for blocker in blockers)
