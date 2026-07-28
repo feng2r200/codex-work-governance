@@ -149,6 +149,19 @@ def test_lifecycle_requires_current_bootstrap_and_canonical_layout() -> None:
     assert "controller commands require `LAYOUT_READY`" in skill
 
 
+def test_lifecycle_uses_receipt_bound_runtime_controller() -> None:
+    """The exact SessionStart bundle, not a repository-relative path, drives intake."""
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+
+    assert "--script plugins/work-governance/scripts/workctl.py" not in skill
+    assert "runtime_bundle_ref" in skill
+    assert "controller_ref" in skill
+    assert "controller_sha256" in skill
+    assert "receipt_sha256" in skill
+    assert "intake status" in skill
+    assert "--no-project" in skill
+
+
 def test_goal_anchor_reality_probe_and_test_provenance_are_required() -> None:
     """Keep validation effort tied to the user result and observed boundaries."""
     skill = SKILL_PATH.read_text(encoding="utf-8")

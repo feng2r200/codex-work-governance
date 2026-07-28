@@ -36,7 +36,7 @@ The controller validates existence, SHA256, Plan revision, Git baseline,
 confirmation references, archived bytes, pointer state, lineage, and migration
 journals. Its states are:
 
-- `UNMANAGED_EMPTY`: no authority; `plan init` is allowed.
+- `UNMANAGED_EMPTY`: no authority; transactional `plan admit apply` is allowed.
 - `MIGRATION_REQUIRED`: only a confirmed historical authority exists.
 - `AUTHORITY_REGISTRATION_REQUIRED`: an indexed legacy Plan lacks authority
   metadata.
@@ -59,7 +59,10 @@ Plan files:
 - `.work-governance/_Plan/.migrations/<migration-id>.yaml`: recoverable transaction journal.
 - `.work-governance/_Plan/.rollovers/<rollover-id>.yaml`: recoverable terminal-Plan rollover
   journal.
-- `.work-governance/logs/`: append-only local process evidence.
+- `.work-governance/_Plan/.evidence/<plan-id>/<sha256>.json`: versionable,
+  immutable canonical evidence metadata.
+- `.work-governance/logs/`: append-only local process detail, never completion
+  evidence.
 
 The project-root `_Plan/` is not an authority candidate after layout 1.0. Only
 the bootstrap legacy classifier may inspect it. Layout state is independent
@@ -75,19 +78,28 @@ from Plan authority:
   path is invalid.
 
 Only `layout status|validate|migrate|recover` are available until
-`LAYOUT_READY`. No-Plan bootstrap does not create a Plan or index.
+`LAYOUT_READY`. During SessionStart, these layout mutations may use only the
+exact controller and digest bound by the current ignored
+`runtime/bootstrap-capability.json`; that capability never authorizes Plan
+writes. No-Plan bootstrap does not create a Plan or index.
 
-Schema-v3 Plans also carry:
+Schema-v4 Plans carry:
 
+- a goal statement and measurable success conditions;
+- a revisioned, confirmation-bound demand contract;
+- first-class unknowns and task-level expected evidence deltas;
+- validation provenance;
 - structured `scope.exclude` dispositions;
 - `delivery.status`, boundary, and evidence;
 - `activation.status`, current and target references, and its decision or
   confirmation reference;
 - route state `active`, `awaiting_confirmation`, or `terminal`.
 
-Schema version is immutable through ordinary Plan revision. Legacy schema
-upgrade is performed only by reconciliation; schema-v3 cannot be downgraded to
-disable delivery, activation, or exclusion gates.
+Schema version is immutable through ordinary Plan revision. An active
+schema-v3 Plan is readable but ordinary writes fail closed with
+`PLAN_CONTRACT_UPGRADE_REQUIRED`; use the recoverable
+`plan contract upgrade apply|recover` transaction. A completed inactive
+schema-v3 Plan remains readable historical evidence.
 
 `deferred`, `pending_confirmation`, and `in_progress` activation block terminal
 closeout. A terminal route requires complete delivery and either verified
@@ -107,13 +119,20 @@ Controller gates:
   rollback-pending states never use this exception;
 - task state changes follow the controller transition graph; a pending task
   cannot be declared verified without first entering execution;
-- logs are append-only and must not overwrite existing entries.
+- logs are append-only and must not overwrite existing entries, but log hashes
+  cannot certify terminal state.
 
 Allowed structural changes:
 
 - `plan authority inspect|check`: inspect candidates or return the current
   authority state.
-- `plan init`: initialize a governed Plan only from `UNMANAGED_EMPTY`.
+- `plan admit apply --manifest ...`: validate the exact prepared schema-v4 Plan
+  and accepted admission reference, stage a durable transaction, install the
+  Plan, and activate the index last.
+- `plan admit recover`: deterministically roll an interrupted admission
+  forward. `plan init` is not a normal public admission path.
+- `plan confirmation add`: create a pending or explicitly accepted gate before
+  a later decision depends on it.
 - `plan schema-validate`: validate one candidate document without granting it
   authority.
 - `plan validate`: validate schema, index, unique authority, lineage, archives,
@@ -129,7 +148,7 @@ Allowed structural changes:
   forward. Recovery never resumes the old queue automatically.
 - `plan rollover apply --manifest ... --dry-run`: require the indexed source
   Plan to be complete, terminal, and closeout-ready; verify its ID, revision,
-  SHA256 and exact index baseline; validate a new schema-v3 successor; and
+  SHA256 and exact index baseline; validate a new schema-v4 successor; and
   print the stable proposal digest for `C-PLAN-ROLLOVER`.
 - `plan rollover apply --manifest ...`: after the digest-bound confirmation,
   preserve the predecessor bytes, record predecessor lineage in the successor,
@@ -147,6 +166,15 @@ Allowed structural changes:
   gate, and resolved exclusion decisions cannot be silently removed or
   rewritten. Existing artifact records are immutable to generic revision so
   their state confirmation and evidence cannot be rebound.
+- `plan adapt --manifest ...`: preserve the confirmed goal while changing the
+  evidence-backed execution method and recording an immutable revision-history
+  entry.
+- `plan contract revise --manifest ...`: revise goal or demand-contract
+  authority only through its explicit confirmation binding.
+- `plan unknown add|resolve`: make an unresolved question explicit, then close
+  it only with a subject-matching immutable evidence manifest.
+- `plan evidence record --manifest ...`: canonicalize bounded typed evidence
+  metadata under the active Plan and return its exact path and SHA256.
 - `plan confirm`: resolve a pending gate as `accepted` or `declined` with a
   typed authority reference. Generic Plan patches cannot edit confirmations.
 - `plan closeout-check|complete`: compute full route readiness and set Plan
@@ -163,7 +191,8 @@ Allowed structural changes:
 - `plan delivery-complete`: complete delivery only after its boundary is known
   and evidence reference/digest are recorded under an accepted slice gate.
 - `task start|block|verify|skip`: update task state.
-- `log append`: preserve process evidence.
+- `log append`: preserve local process detail without granting it completion
+  authority.
 
 The reconciliation manifest must identify a new target Plan; every confirmed
 or likely source with its Agent-confirmed classification, path, role, SHA256,
@@ -179,7 +208,7 @@ becomes `committed` only after post-activation authority validation succeeds.
 
 A rollover manifest must name a new target Plan and a `ROL-YYYYMMDD-NNN` ID;
 record the current Plan path, ID, revision and SHA256; record the index active
-ID and SHA256; hash the prepared schema-v3 target contract; and bind an accepted
+ID and SHA256; hash the prepared schema-v4 target contract; and bind an accepted
 `C-PLAN-ROLLOVER` record to the dry-run proposal digest. The completed
 predecessor remains unchanged and becomes non-authoritative by classification;
 the successor becomes the sole indexed authority and recursively preserves the

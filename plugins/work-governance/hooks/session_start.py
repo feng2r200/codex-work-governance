@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -23,8 +24,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, cast
 
-ACTION_REVISION = 4
-SUPPORTED_ACTION_REVISIONS = {2, 3, ACTION_REVISION}
+BOOTSTRAP_ACTION_REVISION = 5
+SUPPORTED_BOOTSTRAP_ACTION_REVISIONS = {2, 3, 4, BOOTSTRAP_ACTION_REVISION}
+LEGACY_MIGRATION_ACTION_REVISION = 4
+SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS = {2, 3, LEGACY_MIGRATION_ACTION_REVISION}
 BOOTSTRAP_CONTRACT_VERSION = 1
 GOVERNANCE_DIR = ".work-governance"
 LOCAL_DIRECTORIES = (
@@ -37,6 +40,7 @@ LOCAL_DIRECTORIES = (
 )
 RECEIPT_NAME = "bootstrap-state.json"
 CLAIM_NAME = "bootstrap-claim.json"
+CAPABILITY_NAME = "bootstrap-capability.json"
 LEGACY_ADOPTION_NAME = "legacy-adoption.json"
 FAILURE_JOURNAL_NAME = "bootstrap-failure-journal.json"
 BOOTSTRAP_STAGING_NAME = ".work-governance.bootstrap"
@@ -328,7 +332,7 @@ def validate_active_adoption(
         not isinstance(payload, dict)
         or set(payload) != LEGACY_ADOPTION_KEYS
         or any(payload.get(field) != value for field, value in expected.items())
-        or payload.get("action_revision") not in SUPPORTED_ACTION_REVISIONS
+        or payload.get("action_revision") not in SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS
         or re.fullmatch(r"[0-9a-f]{64}", str(payload.get("controller_sha256"))) is None
         or not isinstance(payload.get("confirmation_ref"), str)
         or REFERENCE_RE.fullmatch(str(payload.get("confirmation_ref"))) is None
@@ -463,7 +467,7 @@ def validate_bootstrap_claim(project_root: Path, claim: Path) -> None:
         payload.get("schema_version") != 1
         or payload.get("kind") != "work-governance-bootstrap-claim"
         or payload.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
-        or payload.get("action_revision") not in SUPPORTED_ACTION_REVISIONS
+        or payload.get("action_revision") not in SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS
         or payload.get("project_root") != project_root.resolve().as_posix()
         or payload.get("creator") not in {"workctl", "session-start"}
         or not isinstance(payload.get("created_at"), str)
@@ -516,7 +520,7 @@ def create_bootstrap_claim(
         "schema_version": 1,
         "kind": "work-governance-bootstrap-claim",
         "bootstrap_contract_version": BOOTSTRAP_CONTRACT_VERSION,
-        "action_revision": ACTION_REVISION,
+        "action_revision": LEGACY_MIGRATION_ACTION_REVISION,
         "project_root": project_root.resolve().as_posix(),
         "created_at": utc_now(),
         "creator": "session-start",
@@ -598,7 +602,7 @@ def validate_layout_version(project_root: Path, governance: Path) -> None:
         or parsed.get("bootstrap_contract_version") != "1"
         or parsed.get("plugin_compatibility") != ">=1.0.0,<2.0.0"
         or parsed.get("legacy_migration_action_revision")
-        not in {str(value) for value in SUPPORTED_ACTION_REVISIONS}
+        not in {str(value) for value in SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS}
         or parsed.get("status") not in {"migrated", "not_applicable"}
         or re.fullmatch(r"[0-9a-f]{64}", parsed.get("legacy_manifest_sha256", "")) is None
         or re.fullmatch(r"[0-9a-f]{64}", parsed.get("new_layout_baseline_sha256", "")) is None
@@ -710,7 +714,7 @@ def validate_blocked_record(governance: Path) -> set[Path]:
         or set(receipt) != BLOCKED_RECEIPT_KEYS
         or receipt.get("schema_version") != 1
         or receipt.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
-        or receipt.get("action_revision") not in SUPPORTED_ACTION_REVISIONS
+        or receipt.get("action_revision") not in SUPPORTED_BOOTSTRAP_ACTION_REVISIONS
         or receipt.get("status") != "ENVIRONMENT_BLOCKED"
         or not isinstance(receipt.get("updated_at"), str)
         or not isinstance(receipt.get("reason"), str)
@@ -752,7 +756,7 @@ def validate_blocked_record(governance: Path) -> set[Path]:
         not isinstance(evidence, dict)
         or evidence_keys not in (legacy_evidence_keys, current_evidence_keys)
         or (
-            receipt.get("action_revision") == ACTION_REVISION
+            receipt.get("action_revision") == BOOTSTRAP_ACTION_REVISION
             and evidence_keys != current_evidence_keys
         )
         or (
@@ -816,7 +820,8 @@ def validate_blocked_evidence_history(
             not isinstance(evidence, dict)
             or evidence_keys not in (legacy_keys, current_keys)
             or (
-                evidence.get("action_revision") == ACTION_REVISION and evidence_keys != current_keys
+                evidence.get("action_revision") == BOOTSTRAP_ACTION_REVISION
+                and evidence_keys != current_keys
             )
             or (
                 evidence_keys == current_keys
@@ -830,7 +835,7 @@ def validate_blocked_evidence_history(
             )
             or evidence.get("schema_version") != 1
             or evidence.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
-            or evidence.get("action_revision") not in SUPPORTED_ACTION_REVISIONS
+            or evidence.get("action_revision") not in SUPPORTED_BOOTSTRAP_ACTION_REVISIONS
             or evidence.get("status") != "ENVIRONMENT_BLOCKED"
             or evidence.get("claim_sha256") != claim_sha256
             or re.fullmatch(r"[0-9a-f]{64}", str(evidence.get("project_input_sha256"))) is None
@@ -1118,6 +1123,34 @@ def audit_uncommitted_root(governance: Path) -> None:
     for child in runtime.iterdir():
         if child.name in {CLAIM_NAME, LEGACY_ADOPTION_NAME}:
             continue
+        if child.name == CAPABILITY_NAME:
+            validate_bootstrap_capability(governance, child)
+            continue
+        if child.name == "plugin-builds":
+            if child.is_symlink() or not child.is_dir():
+                raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+            bundles = list(child.iterdir())
+            if len(bundles) > 16:
+                raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+            for bundle in bundles:
+                if (
+                    bundle.is_symlink()
+                    or not bundle.is_dir()
+                    or re.fullmatch(r"[0-9a-f]{64}", bundle.name) is None
+                ):
+                    raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+                manifest = bundle / "manifest.json"
+                try:
+                    payload = json.loads(manifest.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError) as exc:
+                    raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID") from exc
+                if (
+                    not isinstance(payload, dict)
+                    or payload.get("plugin_manifest_sha256") != bundle.name
+                ):
+                    raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+                validate_runtime_bundle(governance.parent, bundle, payload)
+            continue
         if LAYOUT_TRANSACTION_RE.fullmatch(child.name) is None:
             raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
         transactions.append(child)
@@ -1162,6 +1195,74 @@ def audit_uncommitted_root(governance: Path) -> None:
         and not transactions
         and not (governance.parent / "_Plan").exists()
     ):
+        raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+
+
+def validate_bootstrap_capability(governance: Path, capability: Path) -> None:
+    """Validate the exact ignored SessionStart capability used by layout writes."""
+    project_root = governance.parent
+    reject_symlink_components(project_root, capability)
+    if capability.is_symlink() or not capability.is_file():
+        raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+    try:
+        payload = json.loads(capability.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID") from exc
+    required = {
+        "schema_version",
+        "bootstrap_contract_version",
+        "action_revision",
+        "updated_at",
+        "status",
+        "plugin_build",
+        "plugin_manifest_sha256",
+        "project_input_sha256",
+        "project_output_sha256",
+        "layout_state",
+        "evidence_ref",
+        "session_id",
+        "runtime_bundle_ref",
+        "runtime_manifest_sha256",
+        "controller_ref",
+        "controller_sha256",
+        "lifecycle_ref",
+        "lifecycle_sha256",
+    }
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != required
+        or payload.get("schema_version") != 2
+        or payload.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
+        or payload.get("action_revision") != BOOTSTRAP_ACTION_REVISION
+        or payload.get("status") != "BOOTSTRAPPING"
+        or payload.get("layout_state") != "BOOTSTRAPPING"
+        or not isinstance(payload.get("updated_at"), str)
+        or not isinstance(payload.get("plugin_build"), str)
+        or not isinstance(payload.get("session_id"), str)
+        or SESSION_ID_RE.fullmatch(str(payload.get("session_id"))) is None
+    ):
+        raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+    for field in (
+        "plugin_manifest_sha256",
+        "project_input_sha256",
+        "project_output_sha256",
+        "runtime_manifest_sha256",
+        "controller_sha256",
+        "lifecycle_sha256",
+    ):
+        if re.fullmatch(r"[0-9a-f]{64}", str(payload.get(field))) is None:
+            raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+    bundle = project_root / str(payload["runtime_bundle_ref"])
+    reject_symlink_components(project_root, bundle)
+    if bundle.parent != governance / "runtime" / "plugin-builds":
+        raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+    manifest = bundle / "manifest.json"
+    try:
+        manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID") from exc
+    runtime = validate_runtime_bundle(project_root, bundle, manifest_payload)
+    if any(payload.get(key) != value for key, value in runtime.items()):
         raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
 
 
@@ -1314,6 +1415,143 @@ def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def runtime_bundle_payload(
+    project_root: Path,
+    bundle: Path,
+    *,
+    build: str,
+    manifest_digest: str,
+    controller_sha256: str,
+    lifecycle_sha256: str,
+) -> Dict[str, Any]:
+    """Build the exact hash-bound runtime bundle manifest."""
+    return {
+        "schema_version": 1,
+        "kind": "work-governance-runtime-bundle",
+        "plugin_build": build,
+        "plugin_manifest_sha256": manifest_digest,
+        "controller_ref": (bundle / "workctl.py").relative_to(project_root).as_posix(),
+        "controller_sha256": controller_sha256,
+        "lifecycle_ref": (bundle / "work-lifecycle.SKILL.md")
+        .relative_to(project_root)
+        .as_posix(),
+        "lifecycle_sha256": lifecycle_sha256,
+    }
+
+
+def validate_runtime_bundle(
+    project_root: Path,
+    bundle: Path,
+    expected: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Validate an existing bundle without consulting the Plugin cache."""
+    reject_symlink_components(project_root, bundle)
+    controller = bundle / "workctl.py"
+    lifecycle = bundle / "work-lifecycle.SKILL.md"
+    manifest = bundle / "manifest.json"
+    if (
+        bundle.is_symlink()
+        or not bundle.is_dir()
+        or controller.is_symlink()
+        or lifecycle.is_symlink()
+        or manifest.is_symlink()
+        or not controller.is_file()
+        or not lifecycle.is_file()
+        or not manifest.is_file()
+        or sha256_file(controller) != expected["controller_sha256"]
+        or sha256_file(lifecycle) != expected["lifecycle_sha256"]
+    ):
+        raise BootstrapError("RUNTIME_BUNDLE_INVALID")
+    try:
+        actual = json.loads(manifest.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise BootstrapError("RUNTIME_BUNDLE_INVALID") from exc
+    if actual != dict(expected):
+        raise BootstrapError("RUNTIME_BUNDLE_INVALID")
+    return {
+        "runtime_bundle_ref": bundle.relative_to(project_root).as_posix(),
+        "runtime_manifest_sha256": sha256_file(manifest),
+        "controller_ref": expected["controller_ref"],
+        "controller_sha256": expected["controller_sha256"],
+        "lifecycle_ref": expected["lifecycle_ref"],
+        "lifecycle_sha256": expected["lifecycle_sha256"],
+    }
+
+
+def install_runtime_bundle(
+    project_root: Path,
+    installed_plugin: Path,
+    *,
+    build: str,
+    manifest_digest: str,
+) -> Dict[str, Any]:
+    """Durably snapshot the exact controller and lifecycle before issuing READY."""
+    source_controller = installed_plugin / "scripts" / "workctl.py"
+    source_lifecycle = installed_plugin / "skills" / "work-lifecycle" / "SKILL.md"
+    if (
+        source_controller.is_symlink()
+        or source_lifecycle.is_symlink()
+        or not source_controller.is_file()
+        or not source_lifecycle.is_file()
+    ):
+        raise BootstrapError("RUNTIME_BUNDLE_SOURCE_INVALID")
+    bundles = project_root / GOVERNANCE_DIR / "runtime" / "plugin-builds"
+    reject_symlink_components(project_root, bundles)
+    bundles.mkdir(parents=True, exist_ok=True)
+    bundle = bundles / manifest_digest
+    expected = runtime_bundle_payload(
+        project_root,
+        bundle,
+        build=build,
+        manifest_digest=manifest_digest,
+        controller_sha256=sha256_file(source_controller),
+        lifecycle_sha256=sha256_file(source_lifecycle),
+    )
+    if bundle.exists() or bundle.is_symlink():
+        return validate_runtime_bundle(project_root, bundle, expected)
+    staging = bundles / f".{manifest_digest}.{os.getpid()}.staging"
+    if staging.exists() or staging.is_symlink():
+        raise BootstrapError("RUNTIME_BUNDLE_STAGING_CONFLICT")
+    staging.mkdir()
+    try:
+        files = (
+            ("workctl.py", source_controller.read_bytes()),
+            ("work-lifecycle.SKILL.md", source_lifecycle.read_bytes()),
+            (
+                "manifest.json",
+                (
+                    json.dumps(expected, indent=2, sort_keys=True, ensure_ascii=True)
+                    + "\n"
+                ).encode(),
+            ),
+        )
+        for name, content in files:
+            path = staging / name
+            with path.open("xb") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+        directory_descriptor = os.open(str(staging), os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+        try:
+            os.rename(staging, bundle)
+        except OSError as exc:
+            if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
+                raise
+        directory_descriptor = os.open(str(bundles), os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+    return validate_runtime_bundle(project_root, bundle, expected)
 
 
 def invalidate_bootstrap_receipt(project_root: Path, path: Path) -> None:
@@ -1546,6 +1784,7 @@ def uv_controller_command(
     command = [
         uv_path,
         "run",
+        "--no-project",
         "--cache-dir",
         str(cache),
         "--no-python-downloads",
@@ -1570,17 +1809,18 @@ def command_record(
 
 def run_bootstrap(
     project_root: Path,
-    installed_plugin: Path,
+    controller: Path,
     receipt: Optional[Dict[str, Any]],
     manifest_digest: str,
     build: str,
     input_digest: str,
+    runtime_bundle: Mapping[str, Any],
+    bootstrap_receipt_sha256: str,
     records: List[Dict[str, Any]],
 ) -> str:
     """Prewarm when needed, then execute all controller work offline."""
     governance = project_root / GOVERNANCE_DIR
     cache = governance / "cache" / "uv"
-    controller = installed_plugin / "scripts" / "workctl.py"
     uv_path = shutil.which("uv")
     if uv_path is None:
         raise BootstrapError("UV_NOT_AVAILABLE")
@@ -1589,13 +1829,15 @@ def run_bootstrap(
     environment["UV_PYTHON_DOWNLOADS"] = "never"
     matching_ready = bool(
         receipt
+        and receipt.get("schema_version") == 2
         and receipt.get("status") == "READY"
-        and receipt.get("action_revision") == ACTION_REVISION
+        and receipt.get("action_revision") == BOOTSTRAP_ACTION_REVISION
         and receipt.get("bootstrap_contract_version") == BOOTSTRAP_CONTRACT_VERSION
         and receipt.get("plugin_build") == build
         and receipt.get("plugin_manifest_sha256") == manifest_digest
         and receipt.get("project_input_sha256") == input_digest
         and receipt.get("project_output_sha256") == project_output_digest(project_root)
+        and all(receipt.get(key) == value for key, value in runtime_bundle.items())
     )
     if not matching_ready:
         cached_prewarm = uv_controller_command(
@@ -1631,7 +1873,12 @@ def run_bootstrap(
             uv_path,
             cache,
             controller,
-            ["layout", "migrate"],
+            [
+                "--receipt-sha256",
+                bootstrap_receipt_sha256,
+                "layout",
+                "migrate",
+            ],
             offline=True,
         )
         migrate_result = run_command(migrate, cwd=project_root, environment=environment)
@@ -1691,11 +1938,13 @@ def main() -> int:
     input_digest: Optional[str] = None
     hook_source: Optional[str] = None
     session_id: Optional[str] = None
+    controller: Optional[Path] = None
+    bootstrap_receipt_sha256: Optional[str] = None
     records: List[Dict[str, Any]] = []
     base_receipt: Dict[str, Any] = {
         "schema_version": 1,
         "bootstrap_contract_version": BOOTSTRAP_CONTRACT_VERSION,
-        "action_revision": ACTION_REVISION,
+        "action_revision": BOOTSTRAP_ACTION_REVISION,
         "updated_at": utc_now(),
     }
     try:
@@ -1713,21 +1962,47 @@ def main() -> int:
             controller_sha256=controller_sha256,
             input_digest=claim_input_digest,
         )
+        runtime_bundle = install_runtime_bundle(
+            project_root,
+            installed_plugin,
+            build=build,
+            manifest_digest=manifest_digest,
+        )
+        controller = project_root / str(runtime_bundle["controller_ref"])
         receipt_path = governance / RECEIPT_NAME
         evidence = evidence_path(governance)
         input_digest = project_input_digest(project_root)
         receipt = load_receipt(receipt_path)
+        bootstrap_receipt = {
+            **base_receipt,
+            "schema_version": 2,
+            "status": "BOOTSTRAPPING",
+            "plugin_build": build,
+            "plugin_manifest_sha256": manifest_digest,
+            "project_input_sha256": input_digest,
+            "project_output_sha256": project_output_digest(project_root),
+            "layout_state": "BOOTSTRAPPING",
+            "evidence_ref": f"evidence:{evidence.relative_to(project_root).as_posix()}",
+            "session_id": session_id or "session-unavailable",
+            **runtime_bundle,
+        }
+        capability_path = governance / "runtime" / CAPABILITY_NAME
+        atomic_write_json(capability_path, bootstrap_receipt)
+        bootstrap_receipt_sha256 = sha256_file(capability_path)
         layout_state = run_bootstrap(
             project_root,
-            installed_plugin,
+            controller,
             receipt,
             manifest_digest,
             build,
             input_digest,
+            runtime_bundle,
+            bootstrap_receipt_sha256,
             records,
         )
         ready_receipt = {
             **base_receipt,
+            "schema_version": 2,
             "status": "READY",
             "plugin_build": build,
             "plugin_manifest_sha256": manifest_digest,
@@ -1735,6 +2010,8 @@ def main() -> int:
             "project_output_sha256": project_output_digest(project_root),
             "layout_state": layout_state,
             "evidence_ref": f"evidence:{evidence.relative_to(project_root).as_posix()}",
+            "session_id": session_id or "session-unavailable",
+            **runtime_bundle,
         }
         atomic_write_json(
             evidence,
@@ -1746,9 +2023,27 @@ def main() -> int:
         )
         atomic_write_json(receipt_path, ready_receipt)
         receipt_relative = receipt_path.relative_to(project_root).as_posix()
+        receipt_sha256 = sha256_file(receipt_path)
+        uv_path = shutil.which("uv") or "uv"
+        intake_command = [
+            uv_path,
+            "run",
+            "--no-project",
+            "--offline",
+            "--cache-dir",
+            str(governance / "cache" / "uv"),
+            "--no-python-downloads",
+            "--script",
+            str(controller),
+            "--receipt-sha256",
+            receipt_sha256,
+            "intake",
+            "status",
+        ]
         emit_context(
             "WORK_GOVERNANCE_BOOTSTRAP READY; layout=LAYOUT_READY; "
-            f"build={build}; receipt={receipt_relative}. "
+            f"build={build}; receipt={receipt_relative}; receipt_sha256={receipt_sha256}; "
+            f"intake_command={shlex.join(intake_command)}. "
             "Plan-controlled work must load "
             "work-governance:work-lifecycle and confirm both layout and Plan "
             "authority before task action."
@@ -1780,10 +2075,32 @@ def main() -> int:
                 invalidate_bootstrap_receipt(governance.parent, receipt_path)
         except (BootstrapError, OSError) as record_error:
             reason = f"{reason}; BLOCKED_RECORD_FAILED: {record_error}"[:500]
+        layout_command_prefix = ""
+        if (
+            governance is not None
+            and controller is not None
+            and bootstrap_receipt_sha256 is not None
+        ):
+            uv_path = shutil.which("uv") or "uv"
+            prefix = [
+                uv_path,
+                "run",
+                "--no-project",
+                "--offline",
+                "--cache-dir",
+                str(governance / "cache" / "uv"),
+                "--no-python-downloads",
+                "--script",
+                str(controller),
+                "--receipt-sha256",
+                bootstrap_receipt_sha256,
+            ]
+            layout_command_prefix = f" layout_command_prefix={shlex.join(prefix)}."
         emit_context(
             f"WORK_GOVERNANCE_BOOTSTRAP ENVIRONMENT_BLOCKED; hook=executed; "
             f"source={hook_source or 'unknown'}; reason={reason}; detail={detail}; "
-            f"evidence={blocked_evidence_ref}. Do not perform Plan-controlled work. "
+            f"evidence={blocked_evidence_ref}.{layout_command_prefix} "
+            "Do not perform Plan-controlled work. "
             f"Next allowed recovery: {blocked_recovery_action(reason, detail)}."
         )
         return 0
