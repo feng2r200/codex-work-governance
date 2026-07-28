@@ -93,10 +93,11 @@ layout contract and local infrastructure but no Plan or index.
 The SessionStart hook is a short wakener. Its standard-library runner
 fingerprints the bootstrap action, installed Plugin payload, and relevant
 project layout inputs. It prewarms the controller's pinned PEP 723 dependency
-in `.work-governance/cache/uv`, disables Python downloads, and runs migration,
+in `.work-governance/cache/uv`, trying the existing cache offline before using
+permitted dependency access, disables Python downloads, and runs migration,
 validation, and status commands offline. Exact Plugin builds and incremental
-state live only in the ignored `bootstrap-state.json`; detailed command
-evidence stays under `.work-governance/evidence/`.
+state live only in the ignored `bootstrap-state.json`; detailed command evidence
+stays under `.work-governance/evidence/`.
 
 When a supported earlier 1.0 action revision is already committed, the next
 SessionStart treats it as `LAYOUT_MIGRATION_REQUIRED` and runs a recoverable
