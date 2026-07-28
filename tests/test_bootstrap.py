@@ -40,11 +40,23 @@ with open(os.environ["WORK_GOVERNANCE_TEST_UV_LOG"], "a", encoding="utf-8") as h
 script_index = arguments.index("--script")
 controller = arguments[script_index + 1]
 controller_arguments = arguments[script_index + 2:]
+cache = arguments[arguments.index("--cache-dir") + 1]
+prewarmed = os.path.join(cache, ".work-governance-test-prewarmed")
+if (
+    controller_arguments == ["--help"]
+    and "--offline" in arguments
+    and not os.path.isfile(prewarmed)
+):
+    raise SystemExit(18)
 if (
     os.environ.get("WORK_GOVERNANCE_TEST_FAKE_UV_FAIL_PREWARM") == "1"
     and controller_arguments == ["--help"]
 ):
     raise SystemExit(17)
+if controller_arguments == ["--help"]:
+    os.makedirs(cache, exist_ok=True)
+    with open(prewarmed, "w", encoding="utf-8") as handle:
+        handle.write("ready\\n")
 result = subprocess.run(
     [sys.executable, controller, *controller_arguments],
     env=os.environ,
@@ -468,10 +480,12 @@ def test_bootstrap_prewarms_then_runs_controller_offline(tmp_path: Path) -> None
     assert receipt["layout_state"] == "LAYOUT_READY"
     assert (governance / "version.yaml").is_file()
     assert not (governance / "_Plan").exists()
-    assert len(commands) == 4
-    assert "--offline" not in commands[0]
+    assert len(commands) == 5
+    assert "--offline" in commands[0]
     assert commands[0][-1] == "--help"
-    for command in commands[1:]:
+    assert "--offline" not in commands[1]
+    assert commands[1][-1] == "--help"
+    for command in commands[2:]:
         assert "--offline" in command
         assert "--no-python-downloads" in command
         assert str(governance / "cache" / "uv") in command
@@ -928,8 +942,7 @@ def test_action_four_sessionstart_upgrades_action_three_scope_residual(
     )
     assert len(resumed_commands) == 4
     assert resumed_commands[0][-1] == "--help"
-    assert "--offline" not in resumed_commands[0]
-    assert all("--offline" in command for command in resumed_commands[1:])
+    assert all("--offline" in command for command in resumed_commands)
     assert current_receipt["status"] == "READY"
     assert current_receipt["action_revision"] == 4
     assert current_version["legacy_migration_action_revision"] == 4
@@ -1027,8 +1040,7 @@ def test_migrated_layout_with_suspect_artifact_recovers_prior_minimal_receipt(
     assert plan_validation.returncode == 1
     assert "A-001 is suspect" in plan_validation.stderr
     assert len(resumed_commands) == 4
-    assert "--offline" not in resumed_commands[0]
-    assert all("--offline" in command for command in resumed_commands[1:])
+    assert all("--offline" in command for command in resumed_commands)
 
 
 def test_changed_layout_input_reruns_and_fails_closed(tmp_path: Path) -> None:
@@ -1466,7 +1478,7 @@ def test_first_prewarm_failure_records_and_recovers_claim_bound_evidence(
     ]
     assert len(blocked) == 1
     assert blocked[0]["reason"] == "CONTROLLER_PREWARM_FAILED"
-    assert blocked[0]["commands"][0]["returncode"] == 17
+    assert [command["returncode"] for command in blocked[0]["commands"]] == [18, 17]
     assert isinstance(blocked[0]["claim_sha256"], str)
     assert len(blocked[0]["claim_sha256"]) == 64
 

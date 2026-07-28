@@ -1598,11 +1598,35 @@ def run_bootstrap(
         and receipt.get("project_output_sha256") == project_output_digest(project_root)
     )
     if not matching_ready:
-        prewarm = uv_controller_command(uv_path, cache, controller, ["--help"], offline=False)
-        prewarm_result = run_command(prewarm, cwd=project_root, environment=environment)
-        records.append(command_record(prewarm, prewarm_result))
-        if prewarm_result.returncode != 0:
-            raise BootstrapError("CONTROLLER_PREWARM_FAILED")
+        cached_prewarm = uv_controller_command(
+            uv_path,
+            cache,
+            controller,
+            ["--help"],
+            offline=True,
+        )
+        cached_prewarm_result = run_command(
+            cached_prewarm,
+            cwd=project_root,
+            environment=environment,
+        )
+        records.append(command_record(cached_prewarm, cached_prewarm_result))
+        if cached_prewarm_result.returncode != 0:
+            network_prewarm = uv_controller_command(
+                uv_path,
+                cache,
+                controller,
+                ["--help"],
+                offline=False,
+            )
+            network_prewarm_result = run_command(
+                network_prewarm,
+                cwd=project_root,
+                environment=environment,
+            )
+            records.append(command_record(network_prewarm, network_prewarm_result))
+            if network_prewarm_result.returncode != 0:
+                raise BootstrapError("CONTROLLER_PREWARM_FAILED")
         migrate = uv_controller_command(
             uv_path,
             cache,
