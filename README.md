@@ -74,6 +74,7 @@ Work Governance 1.0 owns exactly one project-level root:
 ├── version.yaml
 ├── .gitignore
 ├── _Plan/
+│   └── .evidence/<plan-id>/<sha256>.json
 ├── logs/
 ├── worktrees/
 ├── cache/uv/
@@ -84,22 +85,38 @@ Work Governance 1.0 owns exactly one project-level root:
 └── workctl.lock
 ```
 
-`_Plan/`, `version.yaml`, `.gitignore`, and committed migration proofs are
-versionable. The exact `.work-governance/.gitignore` ignores only `logs/`,
+`_Plan/` (including immutable evidence records), `version.yaml`, `.gitignore`,
+and committed migration proofs are versionable. The exact
+`.work-governance/.gitignore` ignores only `logs/`,
 `worktrees/`, `cache/`, `proposals/`, `evidence/`, `runtime/`,
 `bootstrap-state.json`, and `workctl.lock`. A No-Plan bootstrap creates the
 layout contract and local infrastructure but no Plan or index.
 
 The SessionStart hook is a short wakener. Its standard-library runner
 fingerprints the bootstrap action, installed Plugin payload, and relevant
-project layout inputs. It prewarms the controller's pinned PEP 723 dependency
+project layout inputs. Before issuing READY it snapshots the exact controller
+and `work-lifecycle` skill into
+`.work-governance/runtime/plugin-builds/<plugin-manifest-sha256>/`, then binds
+receipt schema v2 to those paths and hashes plus the current session. It
+first writes an ignored
+`.work-governance/runtime/bootstrap-capability.json` with
+`BOOTSTRAPPING` state. That capability authorizes only the exact bundled
+controller to perform layout migration or recovery for this SessionStart; it
+cannot authorize Plan or other ordinary writes. A newer SessionStart replaces
+it, so an older capability fails closed.
+The hook then prewarms the controller's pinned PEP 723 dependency
 in `.work-governance/cache/uv`, trying the existing cache offline before using
 permitted dependency access, disables Python downloads, and runs migration,
 validation, and status commands offline. Exact Plugin builds and incremental
 state live only in the ignored `bootstrap-state.json`; detailed command evidence
-stays under `.work-governance/evidence/`.
+stays under `.work-governance/evidence/`. The runtime snapshot remains
+available if the Codex Plugin cache entry is replaced or removed after
+SessionStart.
 
-When a supported earlier 1.0 action revision is already committed, the next
+The local bootstrap action revision and the versioned legacy layout-migration
+revision are independent. Bootstrap action revision 5 introduces the runtime
+bundle and receipt v2 while layout version remains 1 and legacy migration
+action revision remains 4. When a supported earlier layout action revision is already committed, the next
 SessionStart treats it as `LAYOUT_MIGRATION_REQUIRED` and runs a recoverable
 action upgrade before issuing a new `READY` receipt. Action revision 4 corrects
 only active Plan scope entries exactly equal to `_Plan` or `_Plan/`; paths such
@@ -115,29 +132,40 @@ managed policy, or absent, a current `READY` receipt cannot be established and
 Plan-controlled work is `ENVIRONMENT_BLOCKED`. If the hook itself emits an
 `ENVIRONMENT_BLOCKED` result, that output proves the hook ran: it reports
 `hook=executed`, the startup or resume source, the observed failure, a local
-evidence reference, and the cause-specific next recovery action. Do not
+evidence reference, the exact capability-bound `layout_command_prefix` when
+layout recovery is available, and the cause-specific next recovery action. The
+prefix is valid only for layout commands and is not a READY receipt. Do not
 reinterpret such output as a hook-trust failure. Restore the reported
 precondition and obtain a current `READY` receipt in a fresh session.
 
 ## Controller
 
-`plugins/work-governance/scripts/workctl.py` is a PEP 723 script. Run it from a
-governed project with:
+Run only the exact `intake_command` emitted by the current SessionStart. It uses
+`controller_ref`, `controller_sha256`, and `receipt_sha256` from the READY
+receipt; do not derive a controller from a repository or Plugin-cache path:
 
 ```sh
-uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
-  --script /path/to/workctl.py plan status
+uv run --no-project --offline --cache-dir .work-governance/cache/uv \
+  --no-python-downloads --script <absolute-runtime-controller> \
+  --receipt-sha256 <current-receipt-sha256> intake status
 ```
+
+Use the same absolute controller and receipt digest for subsequent commands.
+Every write is bound to the newest receipt; after another SessionStart, an old
+session receives `BOOTSTRAP_RECEIPT_SUPERSEDED`. The bootstrap-only capability
+described above is a separate fail-closed channel for SessionStart layout
+mutation and never satisfies this READY requirement.
 
 The controller uses `.work-governance/_Plan/index.yaml` only to locate the
 active Plan. `.work-governance/_Plan/<plan-id>.md` frontmatter is the sole
 mutable execution authority. The
 controller enforces one active execution authority, expected revisions,
 dependency and confirmation gates, migration lineage, artifact quarantine
-states, atomic Plan writes, recoverable reconciliation and terminal Plan
-rollover, terminal closeout, and append-only logs.
+states, atomic Plan writes, recoverable Plan admission, reconciliation and
+terminal Plan rollover, terminal closeout, and immutable evidence records.
 
-Confirmation decisions are made only through `plan confirm` and may be
+Confirmations are created through `plan confirmation add`; decisions are made
+through `plan confirm` and may be
 `accepted` or `declined`. Activation, confirmation-bound exclusions, and
 terminal-route transitions are bound to their own decision ID; another
 accepted gate cannot authorize them. Activation declared `active` also
@@ -147,38 +175,53 @@ assign Plan status `complete`; existing task gates and resolved exclusion
 decisions are stable, while delivery/evidence/route mutations bind to the
 current slice gate. Completion uses the dedicated closeout command.
 
-Schema v3 cannot be downgraded through ordinary revision. Verified
+Schema v4 cannot be downgraded through ordinary revision. Verified
 obligations/validations, final artifacts, and completed delivery use dedicated
-commands that record a typed evidence reference and SHA256; generic structural
-patches cannot self-promote these states. Once an activation decision is
-resolved, target/current/evidence changes require that activation's own gate.
+commands that validate a bounded canonical evidence manifest stored under
+`.work-governance/_Plan/.evidence/<plan-id>/<sha256>.json`; mutable process logs
+cannot self-certify completion. Generic structural patches cannot self-promote
+these states. Once an activation decision is resolved,
+target/current/evidence changes require that activation's own gate.
 Artifacts can fail safe from final to suspect; quarantine/rollback-pending
 transitions retain a recovery gate and cannot jump directly to final. Suspect
 finalization also requires the in-progress task that declares recovery
 ownership. Existing artifact records cannot be rewritten by generic Plan
 patches.
 
-New Plans use schema v3 to separate:
+New Plans use schema v4 to make these concerns first-class:
 
+- a stable goal statement and measurable success conditions;
+- a revisioned demand contract bound to an accepted confirmation;
+- open or resolved unknowns and their expected evidence;
+- task-level expected evidence deltas;
+- validation provenance from a confirmed obligation, observed failure, code
+  invariant, or supported integration boundary;
 - the current execution slice;
 - local or integrated delivery state;
 - route-level activation state and current/target references;
 - structured exclusions that are not required, deferred, confirmation-bound,
   transferred, or forbidden.
 
+An active schema-v3 Plan is readable but reports
+`PLAN_CONTRACT_UPGRADE_REQUIRED`; ordinary writes remain blocked until
+`plan contract upgrade apply --manifest <upgrade.yaml>` completes or
+`plan contract upgrade recover` deterministically rolls the transaction
+forward. Completed inactive schema-v3 Plans remain readable historical
+records. Goal or contract changes use `plan contract revise`; evidence-backed
+method changes that preserve the goal use `plan adapt`. Unknowns are managed
+through `plan unknown add` and `plan unknown resolve`.
+
 Missing authority for a live action creates a pending confirmation and keeps
 the project route open. It cannot be converted into an absolute no-next claim
 by placing the action in `scope.exclude`.
 
-Start Plan-controlled work with:
+Start Plan-controlled work with the exact receipt-bound controller prefix from
+the current `intake_command`:
 
 ```sh
-uv run --offline --cache-dir .work-governance/cache/uv \
-  --no-python-downloads --script /path/to/workctl.py layout status
-uv run --offline --cache-dir .work-governance/cache/uv \
-  --no-python-downloads --script /path/to/workctl.py plan authority inspect
-uv run --offline --cache-dir .work-governance/cache/uv \
-  --no-python-downloads --script /path/to/workctl.py plan authority check
+<receipt-bound-workctl> layout status
+<receipt-bound-workctl> plan authority inspect
+<receipt-bound-workctl> plan authority check
 ```
 
 Only `LAYOUT_READY` plus `GOVERNED_ACTIVE` permits ordinary Plan writes or task
@@ -191,8 +234,7 @@ A strictly recognized old Work Governance layout first requires an explicit
 worktree-local adoption receipt:
 
 ```sh
-uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
-  --script /path/to/workctl.py layout adopt \
+<receipt-bound-workctl> layout adopt \
   --expected-manifest-sha256 <digest-from-layout-status> \
   --expected-active-plan-id PLAN-YYYYMMDD-NNN \
   --ref user:<confirmation-reference>
@@ -242,17 +284,38 @@ closeout readiness. Status also reports delivery, activation, and
 `completion_claims`; only `no_required_next_step_allowed=true` supports a
 terminal no-next statement.
 
+Creating initial authority is also manifest-driven. `plan init` is not a
+normal admission path:
+
+```sh
+<receipt-bound-workctl> plan admit apply --manifest /path/to/admission.yaml
+<receipt-bound-workctl> plan admit recover
+```
+
+Admission validates the prepared schema-v4 Plan, its exact hash and accepted
+confirmation, stages a durable transaction, installs the Plan, and activates
+`.work-governance/_Plan/index.yaml` last. Once activation begins, recovery only
+rolls forward.
+
+Completion evidence is recorded separately before it is consumed:
+
+```sh
+<receipt-bound-workctl> plan evidence record --manifest /path/to/evidence.yaml
+<receipt-bound-workctl> plan validate --evidence-manifest /path/to/evidence.yaml
+```
+
+The manifest contains bounded typed metadata, not arbitrary payloads or log
+transcripts. The canonical record path and SHA256 must match exactly; later log
+appends cannot alter or invalidate the stored evidence.
+
 Reconciliation is manifest-driven:
 
 ```sh
-uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
-  --script /path/to/workctl.py plan reconcile apply \
+<receipt-bound-workctl> plan reconcile apply \
   --manifest /path/to/reconcile.yaml --dry-run
-uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
-  --script /path/to/workctl.py plan reconcile apply \
+<receipt-bound-workctl> plan reconcile apply \
   --manifest /path/to/reconcile.yaml
-uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
-  --script /path/to/workctl.py plan reconcile recover
+<receipt-bound-workctl> plan reconcile recover
 ```
 
 The transaction verifies source hashes/revisions and an optional Git baseline,
@@ -268,24 +331,21 @@ A complete terminal Plan starts a distinct successor through a confirmed
 rollover instead of reopening or overwriting the predecessor:
 
 ```sh
-uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
-  --script /path/to/workctl.py plan rollover apply \
+<receipt-bound-workctl> plan rollover apply \
   --manifest /path/to/rollover.yaml --dry-run
-uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
-  --script /path/to/workctl.py plan rollover apply \
+<receipt-bound-workctl> plan rollover apply \
   --manifest /path/to/rollover.yaml
-uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
-  --script /path/to/workctl.py plan rollover recover \
+<receipt-bound-workctl> plan rollover recover \
   --rollover-id ROL-YYYYMMDD-NNN
 ```
 
 The manifest fixes the predecessor ID, revision, path and SHA256, the exact
-`.work-governance/_Plan/index.yaml` baseline, and a prepared schema-v3 successor contract. Apply
-requires `C-PLAN-ROLLOVER` to carry the dry-run proposal digest. The transaction
-preserves the completed predecessor bytes, records recursive predecessor
-lineage in the successor, stages the successor and replacement index, and
-activates the index last. An incomplete rollover freezes ordinary work in
-`MIGRATION_RECOVERY_REQUIRED` until the named recovery converges. If
+`.work-governance/_Plan/index.yaml` baseline, and a prepared schema-v4 successor
+contract. Apply requires `C-PLAN-ROLLOVER` to carry the dry-run proposal digest.
+The transaction preserves the completed predecessor bytes, records recursive
+predecessor lineage in the successor, stages the successor and replacement
+index, and activates the index last. An incomplete rollover freezes ordinary
+work in `MIGRATION_RECOVERY_REQUIRED` until the named recovery converges. If
 `AGENTS.md` or `CLAUDE.md` explicitly names the predecessor path as authority,
 that routing must be separately revised before rollover so it cannot recreate
 competing authority after activation.
