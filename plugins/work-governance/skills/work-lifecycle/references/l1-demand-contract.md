@@ -26,7 +26,7 @@ evidence named by the target result. Prefer the smallest validation set that
 can discriminate the important failure modes, then add cases only when new
 evidence exposes a real gap.
 
-Classify every scope exclusion. In schema-v3 Plans, use a structured
+Classify every scope exclusion. In schema-v4 Plans, use a structured
 `disposition`:
 
 - `not_required` or `forbidden` with the confirming authority reference;

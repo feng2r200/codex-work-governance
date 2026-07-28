@@ -16,12 +16,16 @@ component, and the recovery condition.
 - Treat the current user instruction as the highest task authority.
 - Keep root `AGENTS.md` thin: route and hard constraints live there; reusable
   method lives in this plugin.
-- Use `workctl.py` for deterministic Plan mutations when a Plan is admitted.
+- Use the receipt-bound runtime `workctl.py` for deterministic Plan mutations.
 - Require the current SessionStart context and
   `.work-governance/bootstrap-state.json` to report `READY` for the exact
-  installed Plugin build before Plan-controlled work. If the hook is
+  Plugin build, `session_id`, `runtime_bundle_ref`, `controller_ref`,
+  `controller_sha256`, and `receipt_sha256` before Plan-controlled work. If the hook is
   untrusted, disabled, skipped by managed policy, absent, or stale, report
   `ENVIRONMENT_BLOCKED` and the recovery condition.
+- Treat `.work-governance/runtime/bootstrap-capability.json` as a separate,
+  SessionStart-only authority for exact layout migration or recovery commands.
+  It never authorizes Plan-controlled work or satisfies the READY requirement.
 - Do not create a Plan, index, or log entry for No-Plan tasks. Layout bootstrap
   may create `.work-governance/version.yaml` and ignored local infrastructure.
 - Keep `.work-governance/_Plan/index.yaml` as the active Plan locator and
@@ -98,9 +102,11 @@ Classify the request:
   remote/data/production actions, structural governance changes, or work that
   must be handed to a future agent.
 
-When admitting a Plan, create or use `.work-governance/_Plan/index.yaml` and
-`.work-governance/_Plan/<plan-id>.md`.
-Use IDs `PLAN-YYYYMMDD-NNN`, `O-`, `T-`, `V-`, and `A-`.
+Admit a Plan only through `plan admit apply --manifest`; recover interruption
+through `plan admit recover`. Do not create an empty Plan or index first. Use
+`plan confirmation add` for a new explicit gate. Schema v4 uses IDs
+`PLAN-YYYYMMDD-NNN`, `O-`, `T-`, `V-`, `A-`, and `U-`; tasks name linked
+unknowns and their expected evidence delta.
 
 Never infer a second execution authority from a filename, Git history, a phase
 design, or text such as "next step" alone. A likely second authority requires
@@ -108,18 +114,32 @@ review; a confirmed second authority requires reconciliation.
 
 ## Controller
 
-Run the controller from the project root:
+Run the exact `intake_command` injected by SessionStart from the project root.
+It reads the versioned runtime snapshot named by `runtime_bundle_ref`, verifies
+`controller_ref` against `controller_sha256`, and binds the command to the
+current `receipt_sha256`:
 
 ```bash
-uv run --offline --cache-dir .work-governance/cache/uv --no-python-downloads \
-  --script plugins/work-governance/scripts/workctl.py plan status
+uv run --no-project --offline --cache-dir .work-governance/cache/uv \
+  --no-python-downloads --script <absolute-controller_ref> \
+  --receipt-sha256 <receipt_sha256> intake status
 ```
 
-Run `layout status` first. Except for `layout status|validate|migrate|recover`,
-controller commands require `LAYOUT_READY`. READY bootstrap uses
-`.work-governance/cache/uv` and invokes the controller offline. All Plan writes
-must use the controller or an equivalent atomic write path with revision checks,
-the stable `.work-governance/workctl.lock`, and validation.
+Never derive a controller path from the repository, current branch, Plugin
+cache, or this skill's source path. Reuse the same absolute controller and
+receipt digest for every command in this session; pass `--receipt-sha256`
+before the command domain. A newer SessionStart supersedes the digest and old
+session writes fail closed; controller commands require `LAYOUT_READY` except
+for layout inspection/recovery. A blocked SessionStart may inject an exact
+capability-bound `layout_command_prefix`; use it only for the reported layout
+recovery, never for Plan writes. An active schema-v3 Plan reports
+`PLAN_CONTRACT_UPGRADE_REQUIRED` until `plan contract upgrade apply|recover`
+commits schema v4. Use `plan adapt`, `plan contract revise`, and
+`plan unknown add|resolve` for their separate responsibilities. Terminal
+evidence must be recorded under `.work-governance/_Plan/.evidence/` and passed
+by `--evidence-manifest`; `.work-governance/logs/` is local process detail only.
+All mutations still use the stable `.work-governance/workctl.lock`, expected
+revision checks, candidate validation, and atomic writes.
 
 ## SubAgent Delegation
 
