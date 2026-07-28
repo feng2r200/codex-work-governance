@@ -98,6 +98,17 @@ validation, and status commands offline. Exact Plugin builds and incremental
 state live only in the ignored `bootstrap-state.json`; detailed command
 evidence stays under `.work-governance/evidence/`.
 
+When a supported earlier 1.0 action revision is already committed, the next
+SessionStart treats it as `LAYOUT_MIGRATION_REQUIRED` and runs a recoverable
+action upgrade before issuing a new `READY` receipt. Action revision 4 corrects
+only active Plan scope entries exactly equal to `_Plan` or `_Plan/`; paths such
+as `_Plan/business-output` remain project-owned and unchanged. A changed active
+Plan receives one revision bump, the original migration commitment remains
+unchanged, and a separate versionable action-upgrade proof is written under
+`.work-governance/_Plan/.migrations/`. The local runtime journal and byte
+snapshots support deterministic recovery, while `version.yaml` is still written
+last. No-Plan layouts upgrade the action contract without creating a Plan.
+
 If no SessionStart hook ran because it is untrusted, disabled, skipped by
 managed policy, or absent, a current `READY` receipt cannot be established and
 Plan-controlled work is `ENVIRONMENT_BLOCKED`. If the hook itself emits an

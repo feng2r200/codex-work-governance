@@ -130,9 +130,10 @@ LAYOUT_SCHEMA_VERSION = 1
 LAYOUT_VERSION = 1
 BOOTSTRAP_CONTRACT_VERSION = 1
 PLUGIN_COMPATIBILITY = ">=1.0.0,<2.0.0"
-LEGACY_MIGRATION_ACTION_REVISION = 3
+LEGACY_MIGRATION_ACTION_REVISION = 4
 SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS = {
     2,
+    3,
     LEGACY_MIGRATION_ACTION_REVISION,
 }
 BOOTSTRAP_CLAIM_NAME = "bootstrap-claim.json"
@@ -230,6 +231,50 @@ ACTIVE_LAYOUT_JOURNAL_KEYS = {
     "log_files",
     "proposal_trees",
     "new_proposals_baseline_sha256",
+}
+ACTION_UPGRADE_JOURNAL_KEYS = {
+    "schema_version",
+    "kind",
+    "transaction_id",
+    "status",
+    "created_at",
+    "updated_at",
+    "from_action_revision",
+    "to_action_revision",
+    "version_before_sha256",
+    "version_after_sha256",
+    "git_baseline",
+    "active_plan_id",
+    "active_plan_path",
+    "active_plan_before_sha256",
+    "active_plan_after_sha256",
+    "active_plan_revision_before",
+    "active_plan_revision_after",
+    "index_sha256",
+    "conversion_table",
+    "conversion_table_sha256",
+    "proof_relative_path",
+    "proof_sha256",
+    "paths",
+    "completed_operations",
+}
+ACTION_UPGRADE_PROOF_KEYS = {
+    "schema_version",
+    "kind",
+    "transaction_id",
+    "status",
+    "from_action_revision",
+    "to_action_revision",
+    "active_plan_id",
+    "active_plan_path",
+    "active_plan_before_sha256",
+    "active_plan_after_sha256",
+    "active_plan_revision_before",
+    "active_plan_revision_after",
+    "version_before_sha256",
+    "version_after_sha256",
+    "conversion_table_sha256",
+    "created_at",
 }
 LAYOUT_STATES = {
     "LAYOUT_READY",
@@ -1320,7 +1365,10 @@ def layout_journal_paths(root: Path, *, include_committed: bool = False) -> list
         try:
             loaded = load_layout_journal(journal)
             if loaded.get("status") == "aborted":
-                validate_aborted_layout_journal(root, journal, loaded)
+                if loaded.get("kind") == "layout-action-upgrade":
+                    validate_aborted_action_upgrade_journal(root, journal, loaded)
+                else:
+                    validate_aborted_layout_journal(root, journal, loaded)
         except WorkctlError:
             journals.append(journal)
     return journals
@@ -1706,15 +1754,18 @@ def legacy_adoption_errors(
     expected = {
         "schema_version": 1,
         "kind": "work-governance-legacy-adoption",
-        "action_revision": LEGACY_MIGRATION_ACTION_REVISION,
         "project_root": root.resolve().as_posix(),
         "worktree_identity": identity,
         "active_plan_id": active_plan_id,
         "active_plan_path": active_name,
         "legacy_manifest_sha256": legacy_manifest_sha256,
-        "controller_sha256": sha256_file(Path(__file__).resolve()),
     }
-    if any(payload.get(field) != value for field, value in expected.items()):
+    if (
+        any(payload.get(field) != value for field, value in expected.items())
+        or payload.get("action_revision")
+        not in SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS
+        or SHA256_RE.fullmatch(str(payload.get("controller_sha256"))) is None
+    ):
         return ["legacy adoption receipt does not match this worktree and legacy snapshot"]
     if (
         not valid_reference(payload.get("confirmation_ref"))
@@ -1965,6 +2016,19 @@ def inspect_layout(root: Path) -> LayoutReport:
             return LayoutReport(
                 "LEGACY_ROOT_REAPPEARED",
                 ["legacy work-governance features reappeared after layout commitment"],
+                legacy,
+                LAYOUT_ALLOWED_COMMANDS,
+            )
+        version = load_yaml_file(version_path(root))
+        action_revision = version.get("legacy_migration_action_revision")
+        if action_revision != LEGACY_MIGRATION_ACTION_REVISION:
+            return LayoutReport(
+                "LAYOUT_MIGRATION_REQUIRED",
+                [
+                    "committed layout action revision "
+                    f"{action_revision} requires upgrade to "
+                    f"{LEGACY_MIGRATION_ACTION_REVISION}"
+                ],
                 legacy,
                 LAYOUT_ALLOWED_COMMANDS,
             )
@@ -3838,11 +3902,13 @@ def load_layout_journal(path: Path) -> dict[str, Any]:
     if (
         not isinstance(payload, dict)
         or payload.get("schema_version") != 1
-        or payload.get("kind") != "layout-migration"
+        or payload.get("kind") not in {"layout-migration", "layout-action-upgrade"}
         or not isinstance(payload.get("transaction_id"), str)
         or LAYOUT_TRANSACTION_RE.fullmatch(str(payload.get("transaction_id"))) is None
-        or payload.get("status")
-        not in {
+    ):
+        raise WorkctlError(f"INVALID_LAYOUT_JOURNAL: {path}")
+    if payload.get("kind") == "layout-migration":
+        allowed_statuses = {
             "preparing",
             "staged",
             "activating",
@@ -3852,7 +3918,17 @@ def load_layout_journal(path: Path) -> dict[str, Any]:
             "committed",
             "aborted",
         }
-    ):
+    else:
+        allowed_statuses = {
+            "preparing",
+            "staged",
+            "plan-activated",
+            "proof-installed",
+            "version-pending",
+            "committed",
+            "aborted",
+        }
+    if payload.get("status") not in allowed_statuses:
         raise WorkctlError(f"INVALID_LAYOUT_JOURNAL: {path}")
     return payload
 
@@ -4087,6 +4163,651 @@ def converted_plan_frontmatter(
         convert_active_scope_paths(converted)
         bump_revision(converted)
     return converted
+
+
+def action_upgrade_transaction_paths(
+    root: Path,
+    transaction_id: str,
+) -> tuple[Path, Path, Path, Path]:
+    """Return runtime, journal, staging, and local evidence paths for one action upgrade."""
+    if LAYOUT_TRANSACTION_RE.fullmatch(transaction_id) is None:
+        raise WorkctlError("INVALID_LAYOUT_TRANSACTION_ID")
+    transaction = runtime_dir(root) / transaction_id
+    journal = transaction / "journal.json"
+    staging = transaction / "staging"
+    evidence = evidence_dir(root) / "layout-action-upgrades" / transaction_id
+    for path in (transaction, journal, staging, evidence):
+        reject_symlink_components(root, path)
+    return transaction, journal, staging, evidence
+
+
+def action_upgrade_expected_paths(
+    root: Path,
+    transaction_id: str,
+    active_path: Path | None,
+) -> dict[str, object]:
+    """Build the exact transaction-owned and activation paths."""
+    _transaction, _journal, staging, evidence = action_upgrade_transaction_paths(
+        root, transaction_id
+    )
+    proof = (
+        plan_dir(root) / ".migrations" / f"{transaction_id}.yaml"
+        if active_path is not None
+        else None
+    )
+    return {
+        "staged_plan": (staging / "active-plan.md").as_posix(),
+        "staged_version": (staging / "version.yaml").as_posix(),
+        "staged_proof": (staging / "proof.yaml").as_posix(),
+        "original_plan": (evidence / "active-plan.before.md").as_posix(),
+        "original_version": (evidence / "version.before.yaml").as_posix(),
+        "target_plan": active_path.as_posix() if active_path is not None else None,
+        "target_proof": proof.as_posix() if proof is not None else None,
+    }
+
+
+def action_upgrade_plan_metadata(
+    root: Path,
+) -> tuple[Path | None, str | None, int | None, str | None, str | None]:
+    """Return a validated active Plan snapshot, or an explicit No-Plan snapshot."""
+    canonical = plan_dir(root)
+    if not canonical.exists() and not canonical.is_symlink():
+        return None, None, None, None, None
+    if canonical.is_symlink() or not canonical.is_dir():
+        raise WorkctlError("ACTION_UPGRADE_PLAN_ROOT_INVALID")
+    index = index_path(root)
+    reject_symlink_components(root, index)
+    if index.is_symlink() or not index.is_file():
+        raise WorkctlError("ACTION_UPGRADE_INDEX_INVALID")
+    errors = validate_plan(
+        root,
+        reject_blocking_artifacts=False,
+        require_governed=False,
+    )
+    if errors:
+        raise WorkctlError("ACTION_UPGRADE_PLAN_INVALID: " + "; ".join(errors))
+    active = active_plan_path(root)
+    reject_symlink_components(root, active)
+    if active.is_symlink() or not active.is_file() or active.parent != canonical:
+        raise WorkctlError("ACTION_UPGRADE_ACTIVE_PLAN_INVALID")
+    document = load_plan(active)
+    plan_id = document.frontmatter.get("plan_id")
+    revision = document.frontmatter.get("revision")
+    if (
+        not isinstance(plan_id, str)
+        or PLAN_ID_RE.fullmatch(plan_id) is None
+        or not isinstance(revision, int)
+        or revision < 1
+    ):
+        raise WorkctlError("ACTION_UPGRADE_ACTIVE_PLAN_INVALID")
+    return active, plan_id, revision, sha256_file(active), sha256_file(index)
+
+
+def validate_action_upgrade_journal(
+    root: Path,
+    journal_path: Path,
+    journal: dict[str, Any],
+) -> None:
+    """Authenticate every stable field of one committed-layout action upgrade."""
+    transaction_id = journal.get("transaction_id")
+    if not isinstance(transaction_id, str):
+        raise WorkctlError("INVALID_ACTION_UPGRADE_JOURNAL")
+    _transaction, expected_journal, _staging, _evidence = action_upgrade_transaction_paths(
+        root, transaction_id
+    )
+    active_path_raw = journal.get("active_plan_path")
+    active_relative = Path(active_path_raw) if isinstance(active_path_raw, str) else None
+    active_path = root / active_relative if active_relative is not None else None
+    expected_paths = action_upgrade_expected_paths(root, transaction_id, active_path)
+    conversion_table = journal.get("conversion_table")
+    plan_fields = (
+        journal.get("active_plan_id"),
+        journal.get("active_plan_path"),
+        journal.get("active_plan_before_sha256"),
+        journal.get("active_plan_after_sha256"),
+        journal.get("active_plan_revision_before"),
+        journal.get("active_plan_revision_after"),
+        journal.get("index_sha256"),
+        journal.get("proof_relative_path"),
+        journal.get("proof_sha256"),
+    )
+    if (
+        journal_path != expected_journal
+        or set(journal) != ACTION_UPGRADE_JOURNAL_KEYS
+        or journal.get("schema_version") != 1
+        or journal.get("kind") != "layout-action-upgrade"
+        or journal.get("status")
+        not in {
+            "preparing",
+            "staged",
+            "plan-activated",
+            "proof-installed",
+            "version-pending",
+            "committed",
+            "aborted",
+        }
+        or not isinstance(journal.get("created_at"), str)
+        or not journal.get("created_at")
+        or not isinstance(journal.get("updated_at"), str)
+        or not journal.get("updated_at")
+        or journal.get("from_action_revision")
+        not in (SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS - {LEGACY_MIGRATION_ACTION_REVISION})
+        or journal.get("to_action_revision") != LEGACY_MIGRATION_ACTION_REVISION
+        or SHA256_RE.fullmatch(str(journal.get("version_before_sha256"))) is None
+        or SHA256_RE.fullmatch(str(journal.get("version_after_sha256"))) is None
+        or not isinstance(journal.get("git_baseline"), dict)
+        or not isinstance(conversion_table, list)
+        or sha256_bytes(
+            json.dumps(conversion_table, sort_keys=True, separators=(",", ":")).encode()
+        )
+        != journal.get("conversion_table_sha256")
+        or journal.get("paths") != expected_paths
+        or not isinstance(journal.get("completed_operations"), list)
+    ):
+        raise WorkctlError("INVALID_ACTION_UPGRADE_JOURNAL")
+    if active_path is None:
+        if any(value is not None for value in plan_fields):
+            raise WorkctlError("INVALID_ACTION_UPGRADE_JOURNAL")
+        if conversion_table:
+            raise WorkctlError("INVALID_ACTION_UPGRADE_JOURNAL")
+        return
+    expected_proof = plan_relative_path(".migrations", f"{transaction_id}.yaml")
+    if (
+        active_relative is None
+        or active_relative.is_absolute()
+        or any(part in {"", ".", ".."} for part in active_relative.parts)
+        or active_relative.parent != Path(GOVERNANCE_DIR_NAME, PLAN_DIR_NAME)
+        or active_path.parent != plan_dir(root)
+        or journal.get("active_plan_id") != active_relative.stem
+        or PLAN_ID_RE.fullmatch(str(journal.get("active_plan_id"))) is None
+        or SHA256_RE.fullmatch(str(journal.get("active_plan_before_sha256"))) is None
+        or SHA256_RE.fullmatch(str(journal.get("active_plan_after_sha256"))) is None
+        or not isinstance(journal.get("active_plan_revision_before"), int)
+        or not isinstance(journal.get("active_plan_revision_after"), int)
+        or SHA256_RE.fullmatch(str(journal.get("index_sha256"))) is None
+        or journal.get("proof_relative_path") != expected_proof
+        or SHA256_RE.fullmatch(str(journal.get("proof_sha256"))) is None
+    ):
+        raise WorkctlError("INVALID_ACTION_UPGRADE_JOURNAL")
+    before_revision = cast(int, journal["active_plan_revision_before"])
+    after_revision = cast(int, journal["active_plan_revision_after"])
+    before_digest = str(journal["active_plan_before_sha256"])
+    after_digest = str(journal["active_plan_after_sha256"])
+    if conversion_table:
+        expected_conversion = [
+            {
+                "path": relative_project_path(root, active_path),
+                "kind": "active-plan-scope-root",
+                "before_sha256": before_digest,
+                "after_sha256": after_digest,
+            }
+        ]
+        if (
+            conversion_table != expected_conversion
+            or after_revision != before_revision + 1
+            or after_digest == before_digest
+        ):
+            raise WorkctlError("INVALID_ACTION_UPGRADE_JOURNAL")
+    elif after_revision != before_revision or after_digest != before_digest:
+        raise WorkctlError("INVALID_ACTION_UPGRADE_JOURNAL")
+
+
+def validate_aborted_action_upgrade_journal(
+    root: Path,
+    journal_path: Path,
+    journal: dict[str, Any],
+) -> None:
+    """Validate an ignored pre-activation action-upgrade receipt."""
+    validate_action_upgrade_journal(root, journal_path, journal)
+    if (
+        journal.get("status") != "aborted"
+        or journal.get("completed_operations") != ["snapshot", "preparation-preserved"]
+    ):
+        raise WorkctlError("INVALID_ABORTED_ACTION_UPGRADE_JOURNAL")
+
+
+def action_upgrade_proof_payload(
+    journal: dict[str, Any],
+) -> dict[str, object]:
+    """Build the versioned proof for one Plan-bearing action correction."""
+    return {
+        "schema_version": 1,
+        "kind": "layout-action-upgrade-proof",
+        "transaction_id": journal["transaction_id"],
+        "status": "prepared",
+        "from_action_revision": journal["from_action_revision"],
+        "to_action_revision": journal["to_action_revision"],
+        "active_plan_id": journal["active_plan_id"],
+        "active_plan_path": journal["active_plan_path"],
+        "active_plan_before_sha256": journal["active_plan_before_sha256"],
+        "active_plan_after_sha256": journal["active_plan_after_sha256"],
+        "active_plan_revision_before": journal["active_plan_revision_before"],
+        "active_plan_revision_after": journal["active_plan_revision_after"],
+        "version_before_sha256": journal["version_before_sha256"],
+        "version_after_sha256": journal["version_after_sha256"],
+        "conversion_table_sha256": journal["conversion_table_sha256"],
+        "created_at": journal["created_at"],
+    }
+
+
+def validate_action_upgrade_proof(path: Path, journal: dict[str, Any]) -> None:
+    """Bind one staged or installed proof to its transaction journal."""
+    if path.is_symlink() or not path.is_file():
+        raise WorkctlError("ACTION_UPGRADE_PROOF_MISSING")
+    try:
+        proof = load_yaml_file(path)
+    except (WorkctlError, yaml.YAMLError) as exc:
+        raise WorkctlError("ACTION_UPGRADE_PROOF_INVALID") from exc
+    if (
+        set(proof) != ACTION_UPGRADE_PROOF_KEYS
+        or proof != action_upgrade_proof_payload(journal)
+        or sha256_file(path) != journal.get("proof_sha256")
+    ):
+        raise WorkctlError("ACTION_UPGRADE_PROOF_INVALID")
+
+
+def verify_action_upgrade_staging(root: Path, journal: dict[str, Any]) -> None:
+    """Verify staged bytes, original evidence, and current non-governance inputs."""
+    transaction_id = str(journal["transaction_id"])
+    _transaction, _journal, staging, evidence = action_upgrade_transaction_paths(
+        root, transaction_id
+    )
+    paths = cast(dict[str, object], journal["paths"])
+    staged_version = Path(str(paths["staged_version"]))
+    original_version = Path(str(paths["original_version"]))
+    if (
+        staged_version != staging / "version.yaml"
+        or staged_version.is_symlink()
+        or not staged_version.is_file()
+        or sha256_file(staged_version) != journal.get("version_after_sha256")
+        or original_version != evidence / "version.before.yaml"
+        or original_version.is_symlink()
+        or not original_version.is_file()
+        or sha256_file(original_version) != journal.get("version_before_sha256")
+        or current_layout_git_baseline(root) != journal.get("git_baseline")
+    ):
+        raise WorkctlError("ACTION_UPGRADE_STAGING_DRIFT")
+    try:
+        original_version_payload = load_yaml_file(original_version)
+        staged_version_payload = load_yaml_file(staged_version)
+    except (WorkctlError, yaml.YAMLError) as exc:
+        raise WorkctlError("ACTION_UPGRADE_STAGING_DRIFT") from exc
+    expected_version_payload = copy.deepcopy(original_version_payload)
+    expected_version_payload["legacy_migration_action_revision"] = (
+        LEGACY_MIGRATION_ACTION_REVISION
+    )
+    if (
+        original_version_payload.get("legacy_migration_action_revision")
+        != journal.get("from_action_revision")
+        or staged_version_payload != expected_version_payload
+        or staged_version_payload.get("legacy_migration_action_revision")
+        != journal.get("to_action_revision")
+    ):
+        raise WorkctlError("ACTION_UPGRADE_STAGING_DRIFT")
+    active_path_raw = journal.get("active_plan_path")
+    if active_path_raw is None:
+        return
+    staged_plan = Path(str(paths["staged_plan"]))
+    original_plan = Path(str(paths["original_plan"]))
+    staged_proof = Path(str(paths["staged_proof"]))
+    if (
+        staged_plan != staging / "active-plan.md"
+        or staged_plan.is_symlink()
+        or not staged_plan.is_file()
+        or sha256_file(staged_plan) != journal.get("active_plan_after_sha256")
+        or original_plan != evidence / "active-plan.before.md"
+        or original_plan.is_symlink()
+        or not original_plan.is_file()
+        or sha256_file(original_plan) != journal.get("active_plan_before_sha256")
+        or staged_proof != staging / "proof.yaml"
+        or index_path(root).is_symlink()
+        or not index_path(root).is_file()
+        or sha256_file(index_path(root)) != journal.get("index_sha256")
+    ):
+        raise WorkctlError("ACTION_UPGRADE_STAGING_DRIFT")
+    original_document = load_plan(original_plan)
+    expected_frontmatter = copy.deepcopy(original_document.frontmatter)
+    convert_active_scope_paths(expected_frontmatter)
+    if expected_frontmatter != original_document.frontmatter:
+        expected_frontmatter["revision"] = journal["active_plan_revision_after"]
+        expected_frontmatter["updated_at"] = journal["created_at"]
+        expected_plan_bytes = dump_plan(
+            PlanDocument(original_plan, expected_frontmatter, original_document.body)
+        ).encode()
+    else:
+        expected_plan_bytes = original_plan.read_bytes()
+    if staged_plan.read_bytes() != expected_plan_bytes:
+        raise WorkctlError("ACTION_UPGRADE_STAGING_DRIFT")
+    validate_action_upgrade_proof(staged_proof, journal)
+
+
+def verify_action_upgrade_target_plan(
+    root: Path,
+    journal: dict[str, Any],
+    *,
+    allow_before: bool,
+) -> str:
+    """Return before/after for the bound active Plan and reject every other byte state."""
+    active_path_raw = journal.get("active_plan_path")
+    if active_path_raw is None:
+        if plan_dir(root).exists() or plan_dir(root).is_symlink():
+            raise WorkctlError("ACTION_UPGRADE_PLAN_APPEARED")
+        return "after"
+    active = root / str(active_path_raw)
+    reject_symlink_components(root, active)
+    if active.is_symlink() or not active.is_file():
+        raise WorkctlError("ACTION_UPGRADE_ACTIVE_PLAN_MISSING")
+    digest = sha256_file(active)
+    if digest == journal.get("active_plan_after_sha256"):
+        return "after"
+    if allow_before and digest == journal.get("active_plan_before_sha256"):
+        return "before"
+    raise WorkctlError("ACTION_UPGRADE_ACTIVE_PLAN_DRIFT")
+
+
+def prepare_action_upgrade_transaction(
+    root: Path,
+) -> tuple[Path, dict[str, Any]]:
+    """Snapshot and stage one correction from a supported committed action revision."""
+    version = version_path(root)
+    errors = layout_version_errors(root)
+    if errors:
+        raise WorkctlError("ACTION_UPGRADE_VERSION_INVALID: " + "; ".join(errors))
+    version_payload = load_yaml_file(version)
+    from_revision = version_payload.get("legacy_migration_action_revision")
+    if from_revision == LEGACY_MIGRATION_ACTION_REVISION:
+        raise WorkctlError("ACTION_UPGRADE_NOT_REQUIRED")
+    if from_revision not in SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS:
+        raise WorkctlError("ACTION_UPGRADE_REVISION_UNSUPPORTED")
+    created_at = utc_now()
+    version_before_bytes = version.read_bytes()
+    version_before_sha256 = sha256_bytes(version_before_bytes)
+    version_after_payload = copy.deepcopy(version_payload)
+    version_after_payload["legacy_migration_action_revision"] = (
+        LEGACY_MIGRATION_ACTION_REVISION
+    )
+    if {
+        key: value
+        for key, value in version_after_payload.items()
+        if key != "legacy_migration_action_revision"
+    } != {
+        key: value
+        for key, value in version_payload.items()
+        if key != "legacy_migration_action_revision"
+    }:
+        raise WorkctlError("ACTION_UPGRADE_VERSION_TRANSFORM_INVALID")
+    version_after_bytes = yaml.safe_dump(version_after_payload, sort_keys=False).encode()
+    version_after_sha256 = sha256_bytes(version_after_bytes)
+    active, plan_id, plan_revision, plan_before_sha256, index_sha256 = (
+        action_upgrade_plan_metadata(root)
+    )
+    conversion_table: list[dict[str, object]] = []
+    active_after_bytes: bytes | None = None
+    active_after_sha256: str | None = None
+    active_revision_after: int | None = None
+    if active is not None:
+        document = load_plan(active)
+        converted = copy.deepcopy(document.frontmatter)
+        convert_active_scope_paths(converted)
+        if converted != document.frontmatter:
+            converted["revision"] = cast(int, plan_revision) + 1
+            converted["updated_at"] = created_at
+            active_after_bytes = dump_plan(
+                PlanDocument(active, converted, document.body)
+            ).encode()
+            active_revision_after = cast(int, converted["revision"])
+        else:
+            active_after_bytes = active.read_bytes()
+            active_revision_after = plan_revision
+        active_after_sha256 = sha256_bytes(active_after_bytes)
+        if active_after_sha256 != plan_before_sha256:
+            conversion_table.append(
+                {
+                    "path": relative_project_path(root, active),
+                    "kind": "active-plan-scope-root",
+                    "before_sha256": plan_before_sha256,
+                    "after_sha256": active_after_sha256,
+                }
+            )
+    conversion_digest = sha256_bytes(
+        json.dumps(conversion_table, sort_keys=True, separators=(",", ":")).encode()
+    )
+    transaction_id = new_layout_transaction_id(version_before_sha256)
+    transaction, journal_path, staging, evidence = action_upgrade_transaction_paths(
+        root, transaction_id
+    )
+    if transaction.exists() or evidence.exists():
+        raise WorkctlError(f"LAYOUT_TRANSACTION_EXISTS: {transaction_id}")
+    proof_relative = (
+        plan_relative_path(".migrations", f"{transaction_id}.yaml")
+        if active is not None
+        else None
+    )
+    journal: dict[str, Any] = {
+        "schema_version": 1,
+        "kind": "layout-action-upgrade",
+        "transaction_id": transaction_id,
+        "status": "preparing",
+        "created_at": created_at,
+        "updated_at": created_at,
+        "from_action_revision": from_revision,
+        "to_action_revision": LEGACY_MIGRATION_ACTION_REVISION,
+        "version_before_sha256": version_before_sha256,
+        "version_after_sha256": version_after_sha256,
+        "git_baseline": current_layout_git_baseline(root),
+        "active_plan_id": plan_id,
+        "active_plan_path": (
+            relative_project_path(root, active) if active is not None else None
+        ),
+        "active_plan_before_sha256": plan_before_sha256,
+        "active_plan_after_sha256": active_after_sha256,
+        "active_plan_revision_before": plan_revision,
+        "active_plan_revision_after": active_revision_after,
+        "index_sha256": index_sha256,
+        "conversion_table": conversion_table,
+        "conversion_table_sha256": conversion_digest,
+        "proof_relative_path": proof_relative,
+        "proof_sha256": None,
+        "paths": action_upgrade_expected_paths(root, transaction_id, active),
+        "completed_operations": ["snapshot"],
+    }
+    if active is not None:
+        proof_bytes = yaml.safe_dump(
+            action_upgrade_proof_payload(journal),
+            sort_keys=False,
+        ).encode()
+        journal["proof_sha256"] = sha256_bytes(proof_bytes)
+    else:
+        proof_bytes = None
+    ensure_directory_durable(transaction)
+    write_layout_journal(journal_path, journal)
+    validate_action_upgrade_journal(root, journal_path, journal)
+    layout_test_interrupt("action-upgrade-preparing")
+    ensure_directory_durable(staging)
+    ensure_directory_durable(evidence)
+    write_atomic_bytes(evidence / "version.before.yaml", version_before_bytes)
+    write_atomic_bytes(staging / "version.yaml", version_after_bytes)
+    if active is not None and active_after_bytes is not None and proof_bytes is not None:
+        write_atomic_bytes(evidence / "active-plan.before.md", active.read_bytes())
+        write_atomic_bytes(staging / "active-plan.md", active_after_bytes)
+        write_atomic_bytes(staging / "proof.yaml", proof_bytes)
+        staged_document = load_plan(staging / "active-plan.md")
+        staged_errors = validate_frontmatter(
+            staged_document.frontmatter,
+            reject_blocking_artifacts=False,
+        )
+        if not staged_document.body.strip():
+            staged_errors.append("Plan body must not be empty")
+        if staged_errors:
+            raise WorkctlError(
+                "ACTION_UPGRADE_STAGED_PLAN_INVALID: " + "; ".join(staged_errors)
+            )
+    fsync_tree(staging)
+    fsync_tree(evidence)
+    journal["status"] = "staged"
+    journal["completed_operations"] = [
+        "snapshot",
+        "staging",
+        "conversion",
+        "staged-validation",
+    ]
+    write_layout_journal(journal_path, journal)
+    validate_action_upgrade_journal(root, journal_path, journal)
+    verify_action_upgrade_staging(root, journal)
+    return journal_path, journal
+
+
+def abandon_action_upgrade_preparation(
+    root: Path,
+    journal_path: Path,
+    journal: dict[str, Any],
+) -> None:
+    """Preserve a pre-activation interruption and release the next retry."""
+    validate_action_upgrade_journal(root, journal_path, journal)
+    if journal.get("status") != "preparing":
+        raise WorkctlError("ACTION_UPGRADE_PREPARATION_NOT_ABORTABLE")
+    if (
+        sha256_file(version_path(root)) != journal.get("version_before_sha256")
+        or current_layout_git_baseline(root) != journal.get("git_baseline")
+    ):
+        raise WorkctlError("ACTION_UPGRADE_INPUT_DRIFT")
+    active_path_raw = journal.get("active_plan_path")
+    if active_path_raw is not None:
+        active = root / str(active_path_raw)
+        if (
+            active.is_symlink()
+            or not active.is_file()
+            or sha256_file(active) != journal.get("active_plan_before_sha256")
+        ):
+            raise WorkctlError("ACTION_UPGRADE_INPUT_DRIFT")
+    elif plan_dir(root).exists() or plan_dir(root).is_symlink():
+        raise WorkctlError("ACTION_UPGRADE_INPUT_DRIFT")
+    journal["status"] = "aborted"
+    journal["completed_operations"] = ["snapshot", "preparation-preserved"]
+    write_layout_journal(journal_path, journal)
+    validate_aborted_action_upgrade_journal(root, journal_path, journal)
+    print(f"LAYOUT_ACTION_UPGRADE_PREPARATION_PRESERVED {journal['transaction_id']}")
+
+
+def resume_action_upgrade_transaction(
+    root: Path,
+    journal_path: Path,
+    journal: dict[str, Any],
+) -> None:
+    """Deterministically forward one staged action correction to version-last commit."""
+    validate_action_upgrade_journal(root, journal_path, journal)
+    if journal.get("status") == "committed":
+        print(f"LAYOUT_ACTION_UPGRADE_ALREADY_COMMITTED {journal['transaction_id']}")
+        return
+    if journal.get("status") in {"preparing", "aborted"}:
+        raise WorkctlError("ACTION_UPGRADE_TRANSACTION_NOT_RESUMABLE")
+    verify_action_upgrade_staging(root, journal)
+    paths = cast(dict[str, object], journal["paths"])
+    version_digest = sha256_file(version_path(root))
+    if version_digest not in {
+        journal.get("version_before_sha256"),
+        journal.get("version_after_sha256"),
+    }:
+        raise WorkctlError("ACTION_UPGRADE_VERSION_DRIFT")
+    status = str(journal["status"])
+    if status == "staged":
+        if version_digest != journal.get("version_before_sha256"):
+            raise WorkctlError("ACTION_UPGRADE_VERSION_ACTIVATED_EARLY")
+        plan_state = verify_action_upgrade_target_plan(root, journal, allow_before=True)
+        if plan_state == "before" and journal.get("active_plan_path") is not None:
+            write_atomic_bytes(
+                root / str(journal["active_plan_path"]),
+                Path(str(paths["staged_plan"])).read_bytes(),
+            )
+            layout_test_interrupt("action-upgrade-plan")
+        journal["status"] = "plan-activated"
+        journal["completed_operations"] = [
+            *journal["completed_operations"],
+            "plan-activation",
+        ]
+        write_layout_journal(journal_path, journal)
+    status = str(journal["status"])
+    if status == "plan-activated":
+        verify_action_upgrade_target_plan(root, journal, allow_before=False)
+        proof_relative = journal.get("proof_relative_path")
+        if proof_relative is not None:
+            proof_target = root / str(proof_relative)
+            reject_symlink_components(root, proof_target)
+            if proof_target.exists() or proof_target.is_symlink():
+                if (
+                    proof_target.is_symlink()
+                    or not proof_target.is_file()
+                    or sha256_file(proof_target) != journal.get("proof_sha256")
+                ):
+                    raise WorkctlError("ACTION_UPGRADE_PROOF_CONFLICT")
+            else:
+                write_atomic_bytes(
+                    proof_target,
+                    Path(str(paths["staged_proof"])).read_bytes(),
+                )
+                layout_test_interrupt("action-upgrade-proof")
+            validate_action_upgrade_proof(proof_target, journal)
+        journal["status"] = "proof-installed"
+        journal["completed_operations"] = [
+            *journal["completed_operations"],
+            "proof-install",
+        ]
+        write_layout_journal(journal_path, journal)
+    status = str(journal["status"])
+    if status == "proof-installed":
+        verify_action_upgrade_target_plan(root, journal, allow_before=False)
+        if index_path(root).exists():
+            errors = validate_plan(
+                root,
+                reject_blocking_artifacts=False,
+                require_governed=False,
+            )
+            if errors:
+                raise WorkctlError(
+                    "ACTION_UPGRADE_ACTIVATED_PLAN_INVALID: " + "; ".join(errors)
+                )
+        journal["status"] = "version-pending"
+        journal["completed_operations"] = [
+            *journal["completed_operations"],
+            "final-validation",
+        ]
+        write_layout_journal(journal_path, journal)
+    if str(journal["status"]) == "version-pending":
+        verify_action_upgrade_target_plan(root, journal, allow_before=False)
+        version_digest = sha256_file(version_path(root))
+        if version_digest == journal.get("version_before_sha256"):
+            write_atomic_bytes(
+                version_path(root),
+                Path(str(paths["staged_version"])).read_bytes(),
+            )
+            layout_test_interrupt("action-upgrade-version")
+        elif version_digest != journal.get("version_after_sha256"):
+            raise WorkctlError("ACTION_UPGRADE_VERSION_DRIFT")
+        version_errors = layout_version_errors(root)
+        if version_errors:
+            raise WorkctlError(
+                "ACTION_UPGRADE_VERSION_INVALID: " + "; ".join(version_errors)
+            )
+        journal["status"] = "committed"
+        journal["completed_operations"] = [
+            *journal["completed_operations"],
+            "version-commit",
+        ]
+        write_layout_journal(journal_path, journal)
+    final = inspect_layout(root)
+    if final.state != "LAYOUT_READY":
+        raise WorkctlError(
+            f"ACTION_UPGRADE_COMMITTED_BUT_INVALID: {final.state}; "
+            + "; ".join(final.blockers)
+        )
+    print(f"LAYOUT_ACTION_UPGRADED {journal['transaction_id']}")
+
+
+def migrate_layout_action_upgrade(root: Path) -> None:
+    """Execute the required committed-layout action correction."""
+    journal_path, journal = prepare_action_upgrade_transaction(root)
+    layout_test_interrupt("action-upgrade-staged")
+    resume_action_upgrade_transaction(root, journal_path, journal)
 
 
 def lineage_plan_paths(staged_plan: Path, active_name: str) -> list[Path]:
@@ -4773,13 +5494,11 @@ def validate_active_layout_journal_artifacts(
     expected_adoption = {
         "schema_version": 1,
         "kind": "work-governance-legacy-adoption",
-        "action_revision": LEGACY_MIGRATION_ACTION_REVISION,
         "project_root": root.resolve().as_posix(),
         "worktree_identity": identity,
         "active_plan_id": active_plan_id,
         "active_plan_path": journal.get("active_plan_path"),
         "legacy_manifest_sha256": journal.get("legacy_manifest_sha256"),
-        "controller_sha256": sha256_file(Path(__file__).resolve()),
     }
     expected_proof = {
         "schema_version": 1,
@@ -4828,6 +5547,9 @@ def validate_active_layout_journal_artifacts(
         or not isinstance(adoption_payload, dict)
         or set(adoption_payload) != LEGACY_ADOPTION_KEYS
         or any(adoption_payload.get(field) != value for field, value in expected_adoption.items())
+        or adoption_payload.get("action_revision")
+        not in SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS
+        or SHA256_RE.fullmatch(str(adoption_payload.get("controller_sha256"))) is None
         or not valid_reference(adoption_payload.get("confirmation_ref"))
         or not isinstance(adoption_payload.get("created_at"), str)
         or not adoption_payload.get("created_at")
@@ -5331,6 +6053,12 @@ def recover_layout_transaction(root: Path) -> None:
         raise WorkctlError("LAYOUT_TRANSACTION_ID_REQUIRED")
     journal_path = journals[0]
     journal = load_layout_journal(journal_path)
+    if journal.get("kind") == "layout-action-upgrade":
+        if journal.get("status") == "preparing":
+            abandon_action_upgrade_preparation(root, journal_path, journal)
+        else:
+            resume_action_upgrade_transaction(root, journal_path, journal)
+        return
     if journal.get("status") == "preparing":
         with legacy_layout_lock(root):
             abandon_layout_preparation(root, journal_path, journal)
@@ -5356,6 +6084,9 @@ def cmd_layout_migrate(_args: argparse.Namespace) -> None:
             details = "; ".join(report.blockers)
             suffix = f": {details}" if details else ""
             raise WorkctlError(f"LAYOUT_MIGRATION_BLOCKED: {report.state}{suffix}")
+        if version_path(root).is_file():
+            migrate_layout_action_upgrade(root)
+            return
         if report.legacy.classification == "NOT_APPLICABLE":
             commit_not_applicable_layout(root)
             print("LAYOUT_COMMITTED not_applicable")

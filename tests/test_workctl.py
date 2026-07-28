@@ -65,6 +65,14 @@ def write_plan(cwd: Path, frontmatter: dict[str, Any], body: str = "# Body\n") -
     plan_path(cwd).write_text(f"---\n{text}---\n{body}", encoding="utf-8")
 
 
+def set_layout_action_revision(cwd: Path, revision: int) -> None:
+    """Rewrite only the committed layout action revision in a test fixture."""
+    version_path = cwd / ".work-governance" / "version.yaml"
+    payload = yaml.safe_load(version_path.read_text(encoding="utf-8"))
+    payload["legacy_migration_action_revision"] = revision
+    version_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+
 def sha256_path(path: Path) -> str:
     """Return a test fixture file's SHA256 digest."""
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -1172,6 +1180,30 @@ def test_layout_migrates_strict_legacy_authority_and_commits_version(
     assert len(proof) == 1
     assert run_workctl(tmp_path, "layout", "validate").stdout.strip() == "LAYOUT_VALID"
     assert run_workctl(tmp_path, "plan", "validate").stdout.strip() == "PLAN_VALID"
+
+
+def test_current_controller_honors_supported_prior_adoption_receipt(
+    tmp_path: Path,
+) -> None:
+    """A user-bound action-3 adoption remains authoritative across the action upgrade."""
+    write_migratable_legacy(tmp_path)
+    adoption = tmp_path / ".work-governance" / "runtime" / "legacy-adoption.json"
+    payload = json.loads(adoption.read_text(encoding="utf-8"))
+    payload["action_revision"] = 3
+    payload["controller_sha256"] = "a" * 64
+    adoption.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    migrated = run_workctl(tmp_path, "layout", "migrate")
+
+    assert status["legacy"]["classification"] == "MIGRATABLE"
+    assert migrated.stdout.startswith("LAYOUT_COMMITTED LAY-")
+    assert json.loads(run_workctl(tmp_path, "layout", "status").stdout)[
+        "layout_state"
+    ] == "LAYOUT_READY"
 
 
 def test_layout_migrates_schema_one_confirmation_without_inventing_timestamp(
@@ -2642,6 +2674,172 @@ def test_normal_plan_revision_does_not_reopen_layout_migration(
     assert "TASK_UPDATED T-001 in_progress revision=3" in revised.stdout
     assert (tmp_path / ".work-governance" / "version.yaml").read_bytes() == version_before
     assert run_workctl(tmp_path, "layout", "validate").stdout.strip() == "LAYOUT_VALID"
+
+
+def test_old_committed_layout_corrects_exact_scope_root_with_version_last(
+    tmp_path: Path,
+) -> None:
+    """An observed action-3 residual is corrected once without absorbing child paths."""
+    write_migratable_legacy(tmp_path)
+    run_workctl(tmp_path, "layout", "migrate")
+    original_proof = next(
+        (tmp_path / ".work-governance" / "_Plan" / ".migrations").glob("LAY-*.yaml")
+    )
+    original_proof_bytes = original_proof.read_bytes()
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["scope"]["include"].extend(["_Plan/", "_Plan/business-output"])
+    write_plan(tmp_path, frontmatter, body)
+    revision_before = frontmatter["revision"]
+    plan_before_bytes = plan_path(tmp_path).read_bytes()
+    set_layout_action_revision(tmp_path, 3)
+
+    required = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    migrated = run_workctl(tmp_path, "layout", "migrate")
+    final = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    corrected, _body = read_plan(tmp_path)
+    version = yaml.safe_load(
+        (tmp_path / ".work-governance" / "version.yaml").read_text(encoding="utf-8")
+    )
+    proofs = sorted(
+        (tmp_path / ".work-governance" / "_Plan" / ".migrations").glob("LAY-*.yaml")
+    )
+    correction_proof = next(path for path in proofs if path != original_proof)
+    proof_payload = yaml.safe_load(correction_proof.read_text(encoding="utf-8"))
+    transaction = next(
+        path
+        for path in (tmp_path / ".work-governance" / "runtime").glob("LAY-*")
+        if path.name == correction_proof.stem
+    )
+    journal = json.loads((transaction / "journal.json").read_text(encoding="utf-8"))
+    evidence_plan = (
+        tmp_path
+        / ".work-governance"
+        / "evidence"
+        / "layout-action-upgrades"
+        / transaction.name
+        / "active-plan.before.md"
+    )
+
+    assert required["layout_state"] == "LAYOUT_MIGRATION_REQUIRED"
+    assert required["plan_authority_state"] == "NOT_INSPECTED"
+    assert migrated.stdout.startswith("LAYOUT_ACTION_UPGRADED LAY-")
+    assert final["layout_state"] == "LAYOUT_READY"
+    assert corrected["revision"] == revision_before + 1
+    assert ".work-governance/_Plan/" in corrected["scope"]["include"]
+    assert "_Plan/business-output" in corrected["scope"]["include"]
+    assert "_Plan/" not in corrected["scope"]["include"]
+    assert version["legacy_migration_action_revision"] == 4
+    assert original_proof.read_bytes() == original_proof_bytes
+    assert len(proofs) == 2
+    assert proof_payload["kind"] == "layout-action-upgrade-proof"
+    assert proof_payload["from_action_revision"] == 3
+    assert proof_payload["to_action_revision"] == 4
+    assert evidence_plan.read_bytes() == plan_before_bytes
+    assert journal["status"] == "committed"
+    assert journal["conversion_table"] == [
+        {
+            "path": ".work-governance/_Plan/PLAN-20260723-001.md",
+            "kind": "active-plan-scope-root",
+            "before_sha256": hashlib.sha256(plan_before_bytes).hexdigest(),
+            "after_sha256": sha256_path(plan_path(tmp_path)),
+        }
+    ]
+    assert run_workctl(tmp_path, "layout", "validate").stdout.strip() == "LAYOUT_VALID"
+    assert run_workctl(tmp_path, "layout", "migrate").stdout.strip() == "LAYOUT_ALREADY_READY"
+    assert read_plan(tmp_path)[0]["revision"] == revision_before + 1
+
+
+def test_old_no_plan_layout_upgrades_without_creating_authority(tmp_path: Path) -> None:
+    """A No-Plan layout changes only its action contract and local transaction evidence."""
+    run_workctl(tmp_path, "layout", "migrate")
+    set_layout_action_revision(tmp_path, 3)
+
+    migrated = run_workctl(tmp_path, "layout", "migrate")
+    version = yaml.safe_load(
+        (tmp_path / ".work-governance" / "version.yaml").read_text(encoding="utf-8")
+    )
+
+    assert migrated.stdout.startswith("LAYOUT_ACTION_UPGRADED LAY-")
+    assert version["legacy_migration_action_revision"] == 4
+    assert not (tmp_path / ".work-governance" / "_Plan").exists()
+    assert run_workctl(tmp_path, "layout", "validate").stdout.strip() == "LAYOUT_VALID"
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "action-upgrade-preparing",
+        "action-upgrade-staged",
+        "action-upgrade-plan",
+        "action-upgrade-proof",
+        "action-upgrade-version",
+    ],
+)
+def test_action_upgrade_recovers_each_durable_boundary(
+    tmp_path: Path,
+    phase: str,
+) -> None:
+    """Preparation is safely abandoned; every activation boundary forwards once."""
+    write_migratable_legacy(tmp_path)
+    run_workctl(tmp_path, "layout", "migrate")
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["scope"]["include"].append("_Plan/")
+    write_plan(tmp_path, frontmatter, body)
+    revision_before = frontmatter["revision"]
+    set_layout_action_revision(tmp_path, 3)
+
+    interrupted = run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": phase},
+    )
+    recovery_required = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    recovered = run_workctl(tmp_path, "layout", "recover")
+    if phase == "action-upgrade-preparing":
+        pending = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+        assert pending["layout_state"] == "LAYOUT_MIGRATION_REQUIRED"
+        run_workctl(tmp_path, "layout", "migrate")
+
+    final = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    corrected, _body = read_plan(tmp_path)
+
+    assert interrupted.returncode == 2
+    assert f"LAYOUT_TEST_INTERRUPTED: {phase}" in interrupted.stderr
+    assert recovery_required["layout_state"] == "LAYOUT_RECOVERY_REQUIRED"
+    if phase == "action-upgrade-preparing":
+        assert recovered.stdout.startswith("LAYOUT_ACTION_UPGRADE_PREPARATION_PRESERVED")
+    else:
+        assert recovered.stdout.startswith("LAYOUT_ACTION_UPGRADED")
+    assert final["layout_state"] == "LAYOUT_READY"
+    assert corrected["revision"] == revision_before + 1
+    assert "_Plan/" not in corrected["scope"]["include"]
+
+
+def test_action_upgrade_recovery_rejects_active_plan_drift(tmp_path: Path) -> None:
+    """A staged correction cannot overwrite a changed active Plan."""
+    write_migratable_legacy(tmp_path)
+    run_workctl(tmp_path, "layout", "migrate")
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["scope"]["include"].append("_Plan/")
+    write_plan(tmp_path, frontmatter, body)
+    set_layout_action_revision(tmp_path, 3)
+    run_workctl(
+        tmp_path,
+        "layout",
+        "migrate",
+        check=False,
+        env={"WORKCTL_TEST_LAYOUT_INTERRUPT_AFTER": "action-upgrade-staged"},
+    )
+    plan_path(tmp_path).write_bytes(plan_path(tmp_path).read_bytes() + b"\nexternal drift\n")
+
+    recovered = run_workctl(tmp_path, "layout", "recover", check=False)
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+
+    assert recovered.returncode == 2
+    assert "ACTION_UPGRADE_ACTIVE_PLAN_DRIFT" in recovered.stderr
+    assert status["layout_state"] == "LAYOUT_RECOVERY_REQUIRED"
 
 
 def test_layout_converts_lineage_pointer_and_operational_journal_once(
