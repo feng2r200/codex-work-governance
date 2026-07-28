@@ -1174,6 +1174,74 @@ def test_layout_migrates_strict_legacy_authority_and_commits_version(
     assert run_workctl(tmp_path, "plan", "validate").stdout.strip() == "PLAN_VALID"
 
 
+def test_layout_migrates_schema_one_confirmation_without_inventing_timestamp(
+    tmp_path: Path,
+) -> None:
+    """A pre-timestamp schema-v1 decision remains truthful during migration."""
+    source = write_migratable_legacy(tmp_path, adopt=False)
+    frontmatter = legacy_frontmatter("PLAN-20260723-001")
+    frontmatter["confirmations"]["accepted"] = [
+        {
+            "id": "C-001",
+            "description": "Legacy user authorization.",
+            "status": "accepted",
+            "ref": "user message 2026-07-23: continue",
+        }
+    ]
+    write_markdown_plan(source, frontmatter)
+    adopt_legacy(tmp_path)
+
+    before = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    migrated = run_workctl(tmp_path, "layout", "migrate")
+    after, _body = read_plan(tmp_path)
+    decision = after["confirmations"]["accepted"][0]
+
+    assert before["legacy"]["classification"] == "MIGRATABLE"
+    assert migrated.stdout.startswith("LAYOUT_COMMITTED LAY-")
+    assert after["revision"] == frontmatter["revision"] + 1
+    assert decision["ref"] == "user message 2026-07-23: continue"
+    assert "accepted_at" not in decision
+    assert "decided_at" not in decision
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    plan_validation = run_workctl(tmp_path, "plan", "validate", check=False)
+    assert status["layout_state"] == "LAYOUT_READY"
+    assert status["plan_authority_state"] == "AUTHORITY_REGISTRATION_REQUIRED"
+    assert run_workctl(tmp_path, "layout", "validate").stdout.strip() == "LAYOUT_VALID"
+    assert plan_validation.returncode == 1
+    assert "authority state is AUTHORITY_REGISTRATION_REQUIRED" in plan_validation.stderr
+
+
+def test_layout_classifier_rejects_invalid_current_schema_before_transaction(
+    tmp_path: Path,
+) -> None:
+    """Current-schema incompatibility fails closed before a journal is created."""
+    source = write_migratable_legacy(tmp_path, adopt=False)
+    frontmatter = canonical_frontmatter("PLAN-20260723-001")
+    frontmatter["confirmations"]["accepted"] = [
+        {
+            "id": "C-001",
+            "description": "Malformed current-schema authorization.",
+            "status": "accepted",
+            "ref": "user:test",
+        }
+    ]
+    write_markdown_plan(source, frontmatter)
+
+    status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
+    migration = run_workctl(tmp_path, "layout", "migrate", check=False)
+
+    assert status["legacy"]["classification"] == "AMBIGUOUS"
+    assert status["layout_state"] == "LEGACY_CLASSIFICATION_REQUIRED"
+    assert any(
+        "C-001 resolved confirmation requires a timestamp" in blocker
+        for blocker in status["legacy"]["blocking_reasons"]
+    )
+    assert migration.returncode == 2
+    assert "LAYOUT_MIGRATION_BLOCKED: LEGACY_CLASSIFICATION_REQUIRED" in migration.stderr
+    runtime = tmp_path / ".work-governance" / "runtime"
+    assert not any(path.name.startswith("LAY-") for path in runtime.iterdir())
+
+
 @pytest.mark.parametrize(
     "phase",
     ["staged", "legacy-rename", "legacy-backup", "plan-activation", "version"],
@@ -2353,6 +2421,8 @@ def test_layout_rejects_unsupported_lineage_path(tmp_path: Path) -> None:
         "revision": 1,
         "sha256": sha256_path(predecessor),
     }
+    frontmatter["authority"]["rollover_id"] = "ROL-20260723-001"
+    frontmatter["authority"]["confirmations"]["rollover"] = "C-PLAN-ROLLOVER"
     write_markdown_plan(source, frontmatter)
     adopt_legacy(tmp_path)
 
