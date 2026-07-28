@@ -1,6 +1,6 @@
 {
   "name": "work-governance",
-  "version": "1.0.1+codex.20260727181800",
+  "version": "1.0.2+codex.20260728034709",
   "description": "Govern Codex work and migrate project authority into one versioned local layout.",
   "author": {
     "name": "Work Governance Contributors"

@@ -23,7 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, cast
 
-ACTION_REVISION = 2
+ACTION_REVISION = 3
+SUPPORTED_ACTION_REVISIONS = {2, ACTION_REVISION}
 BOOTSTRAP_CONTRACT_VERSION = 1
 GOVERNANCE_DIR = ".work-governance"
 LOCAL_DIRECTORIES = (
@@ -64,10 +65,55 @@ BLOCKED_RECEIPT_KEYS = {
     "evidence_ref",
     "evidence_sha256",
 }
+BLOCKED_EVIDENCE_CONTEXT_KEYS = {"hook_source", "session_id"}
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+HOOK_SOURCES = {"startup", "resume", "clear", "compact"}
 BOOTSTRAP_EVIDENCE_NAME_RE = re.compile(r"^\d{8}T\d{6}\.\d{6}Z-\d+\.json$")
 LAYOUT_TRANSACTION_RE = re.compile(
     r"^LAY-\d{8}T\d{6}Z-[0-9a-f]{8}(?:-[0-9a-f]{8}(?:[0-9a-f]{8}){0,3})?$"
 )
+ACTIVE_LAYOUT_JOURNAL_KEYS = {
+    "schema_version",
+    "kind",
+    "transaction_id",
+    "status",
+    "created_at",
+    "updated_at",
+    "active_plan_id",
+    "active_plan_path",
+    "legacy_manifest",
+    "legacy_manifest_sha256",
+    "legacy_proposals_manifest",
+    "legacy_proposals_sha256",
+    "legacy_adoption_sha256",
+    "git_baseline",
+    "paths",
+    "completed_operations",
+    "new_layout_manifest",
+    "new_layout_baseline_sha256",
+    "conversion_table",
+    "conversion_table_sha256",
+    "log_files",
+    "proposal_trees",
+    "new_proposals_baseline_sha256",
+}
+LEGACY_ADOPTION_KEYS = {
+    "schema_version",
+    "kind",
+    "action_revision",
+    "project_root",
+    "worktree_identity",
+    "active_plan_id",
+    "active_plan_path",
+    "legacy_manifest_sha256",
+    "controller_sha256",
+    "confirmation_ref",
+    "created_at",
+}
+PLAN_ID_RE = re.compile(r"^PLAN-\d{8}-\d{3}$")
+MIGRATION_ID_RE = re.compile(r"^MIG-\d{8}-\d{3}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+REFERENCE_RE = re.compile(r"^(user|project|git|runtime|evidence|handoff|codex-plugin-list):\S+$")
 
 
 class BootstrapError(RuntimeError):
@@ -203,6 +249,138 @@ def path_manifest(path: Path) -> List[Dict[str, Any]]:
     return sorted(entries, key=lambda item: (str(item["path"]), str(item["kind"])))
 
 
+def regular_tree_manifest(
+    path: Path,
+    *,
+    exclude_names: Iterable[str] = (),
+) -> Optional[List[Dict[str, Any]]]:
+    """Return a regular directory manifest without its root or excluded exact names."""
+    manifest = path_manifest(path)
+    if (
+        not manifest
+        or manifest[0] != {"path": ".", "kind": "directory"}
+        or any(entry.get("kind") not in {"directory", "file"} for entry in manifest[1:])
+    ):
+        return None
+    excluded = set(exclude_names)
+    return [entry for entry in manifest[1:] if Path(str(entry.get("path"))).name not in excluded]
+
+
+def worktree_identity(project_root: Path) -> Dict[str, Any]:
+    """Return the same physical Git-worktree identity recorded by the controller."""
+    probe = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=project_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if probe.returncode != 0 or probe.stdout.strip() != "true":
+        return {"repository": False, "project_root": project_root.resolve().as_posix()}
+    commands = {
+        "project_root": ["git", "rev-parse", "--show-toplevel"],
+        "git_dir": ["git", "rev-parse", "--absolute-git-dir"],
+        "git_common_dir": [
+            "git",
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ],
+    }
+    values: Dict[str, Any] = {}
+    for field, command in commands.items():
+        result = subprocess.run(
+            command,
+            cwd=project_root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            raise BootstrapError("LEGACY_ADOPTION_GIT_IDENTITY_UNAVAILABLE")
+        values[field] = Path(result.stdout.strip()).resolve().as_posix()
+    if values["project_root"] != project_root.resolve().as_posix():
+        raise BootstrapError("LEGACY_ADOPTION_PROJECT_ROOT_MISMATCH")
+    return {"repository": True, **values}
+
+
+def validate_active_adoption(
+    governance: Path,
+    adoption: Path,
+    journal: Mapping[str, Any],
+) -> None:
+    """Require the formal worktree-bound adoption contract, not only its self-reported hash."""
+    try:
+        payload = json.loads(adoption.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID") from exc
+    project_root = governance.parent
+    expected = {
+        "schema_version": 1,
+        "kind": "work-governance-legacy-adoption",
+        "action_revision": ACTION_REVISION,
+        "project_root": project_root.resolve().as_posix(),
+        "worktree_identity": worktree_identity(project_root),
+        "active_plan_id": journal.get("active_plan_id"),
+        "active_plan_path": journal.get("active_plan_path"),
+        "legacy_manifest_sha256": journal.get("legacy_manifest_sha256"),
+        "controller_sha256": sha256_file(plugin_root() / "scripts" / "workctl.py"),
+    }
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != LEGACY_ADOPTION_KEYS
+        or any(payload.get(field) != value for field, value in expected.items())
+        or not isinstance(payload.get("confirmation_ref"), str)
+        or REFERENCE_RE.fullmatch(str(payload.get("confirmation_ref"))) is None
+        or not isinstance(payload.get("created_at"), str)
+        or not payload.get("created_at")
+    ):
+        raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+
+
+def validate_active_migration_proof(
+    proof: Path,
+    journal: Mapping[str, Any],
+) -> None:
+    """Validate the exact standard-library-readable proof and all journal cross-bindings."""
+    expected_keys = [
+        "schema_version",
+        "kind",
+        "transaction_id",
+        "status",
+        "legacy_manifest_sha256",
+        "legacy_adoption_sha256",
+        "conversion_table_sha256",
+        "legacy_proposals_sha256",
+        "new_proposals_baseline_sha256",
+        "created_at",
+    ]
+    lines = proof.read_text(encoding="utf-8").splitlines()
+    values: Dict[str, str] = {}
+    if len(lines) != len(expected_keys):
+        raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+    for index, key in enumerate(expected_keys):
+        match = re.fullmatch(rf"{re.escape(key)}:(?: (.*))?", lines[index])
+        if match is None or match.group(1) is None:
+            raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+        values[key] = str(match.group(1)).strip("'\"")
+    expected = {
+        "schema_version": "1",
+        "kind": "layout-migration-proof",
+        "transaction_id": str(journal.get("transaction_id")),
+        "status": "prepared",
+        "legacy_manifest_sha256": str(journal.get("legacy_manifest_sha256")),
+        "legacy_adoption_sha256": str(journal.get("legacy_adoption_sha256")),
+        "conversion_table_sha256": str(journal.get("conversion_table_sha256")),
+        "legacy_proposals_sha256": str(journal.get("legacy_proposals_sha256")),
+        "new_proposals_baseline_sha256": str(journal.get("new_proposals_baseline_sha256")),
+    }
+    if any(values.get(field) != value for field, value in expected.items()) or not values.get(
+        "created_at"
+    ):
+        raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+
+
 def load_hook_input() -> Dict[str, Any]:
     """Parse the SessionStart JSON object from stdin."""
     try:
@@ -285,7 +463,7 @@ def validate_bootstrap_claim(project_root: Path, claim: Path) -> None:
         payload.get("schema_version") != 1
         or payload.get("kind") != "work-governance-bootstrap-claim"
         or payload.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
-        or payload.get("action_revision") != ACTION_REVISION
+        or payload.get("action_revision") not in SUPPORTED_ACTION_REVISIONS
         or payload.get("project_root") != project_root.resolve().as_posix()
         or payload.get("creator") not in {"workctl", "session-start"}
         or not isinstance(payload.get("created_at"), str)
@@ -419,7 +597,8 @@ def validate_layout_version(project_root: Path, governance: Path) -> None:
         or parsed.get("layout_version") != "1"
         or parsed.get("bootstrap_contract_version") != "1"
         or parsed.get("plugin_compatibility") != ">=1.0.0,<2.0.0"
-        or parsed.get("legacy_migration_action_revision") != "2"
+        or parsed.get("legacy_migration_action_revision")
+        not in {str(value) for value in SUPPORTED_ACTION_REVISIONS}
         or parsed.get("status") not in {"migrated", "not_applicable"}
         or re.fullmatch(r"[0-9a-f]{64}", parsed.get("legacy_manifest_sha256", "")) is None
         or re.fullmatch(r"[0-9a-f]{64}", parsed.get("new_layout_baseline_sha256", "")) is None
@@ -440,7 +619,7 @@ def validate_layout_version(project_root: Path, governance: Path) -> None:
             or sha256_file(proof) != parsed["sha256"]
         ):
             raise BootstrapError("GOVERNANCE_VERSION_UNPROVEN")
-        proof_expected = [
+        legacy_proof_expected = [
             (0, "schema_version"),
             (0, "kind"),
             (0, "transaction_id"),
@@ -450,10 +629,20 @@ def validate_layout_version(project_root: Path, governance: Path) -> None:
             (0, "conversion_table_sha256"),
             (0, "created_at"),
         ]
+        proposal_proof_expected = [
+            *legacy_proof_expected[:-1],
+            (0, "legacy_proposals_sha256"),
+            (0, "new_proposals_baseline_sha256"),
+            legacy_proof_expected[-1],
+        ]
         proof_lines = proof.read_text(encoding="utf-8").splitlines()
-        proof_values: Dict[str, str] = {}
-        if len(proof_lines) != len(proof_expected):
+        if len(proof_lines) == len(legacy_proof_expected):
+            proof_expected = legacy_proof_expected
+        elif len(proof_lines) == len(proposal_proof_expected):
+            proof_expected = proposal_proof_expected
+        else:
             raise BootstrapError("GOVERNANCE_VERSION_UNPROVEN")
+        proof_values: Dict[str, str] = {}
         for index, (indent, key) in enumerate(proof_expected):
             line = proof_lines[index]
             match = re.fullmatch(rf" {{{indent}}}{re.escape(key)}:(?: (.*))?", line)
@@ -469,6 +658,21 @@ def validate_layout_version(project_root: Path, governance: Path) -> None:
             or re.fullmatch(r"[0-9a-f]{64}", proof_values.get("legacy_adoption_sha256", "")) is None
             or re.fullmatch(r"[0-9a-f]{64}", proof_values.get("conversion_table_sha256", ""))
             is None
+            or (
+                proof_expected == proposal_proof_expected
+                and (
+                    re.fullmatch(
+                        r"[0-9a-f]{64}",
+                        proof_values.get("legacy_proposals_sha256", ""),
+                    )
+                    is None
+                    or re.fullmatch(
+                        r"[0-9a-f]{64}",
+                        proof_values.get("new_proposals_baseline_sha256", ""),
+                    )
+                    is None
+                )
+            )
             or not proof_values.get("created_at")
         ):
             raise BootstrapError("GOVERNANCE_VERSION_UNPROVEN")
@@ -506,7 +710,7 @@ def validate_blocked_record(governance: Path) -> set[Path]:
         or set(receipt) != BLOCKED_RECEIPT_KEYS
         or receipt.get("schema_version") != 1
         or receipt.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
-        or receipt.get("action_revision") != ACTION_REVISION
+        or receipt.get("action_revision") not in SUPPORTED_ACTION_REVISIONS
         or receipt.get("status") != "ENVIRONMENT_BLOCKED"
         or not isinstance(receipt.get("updated_at"), str)
         or not isinstance(receipt.get("reason"), str)
@@ -541,10 +745,26 @@ def validate_blocked_record(governance: Path) -> set[Path]:
         evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         raise BootstrapError("UNCOMMITTED_BOOTSTRAP_EVIDENCE_INVALID") from exc
-    expected_evidence_keys = (BLOCKED_RECEIPT_KEYS - {"evidence_sha256"}) | {"commands"}
+    legacy_evidence_keys = (BLOCKED_RECEIPT_KEYS - {"evidence_sha256"}) | {"commands"}
+    current_evidence_keys = legacy_evidence_keys | BLOCKED_EVIDENCE_CONTEXT_KEYS
+    evidence_keys = set(evidence) if isinstance(evidence, dict) else set()
     if (
         not isinstance(evidence, dict)
-        or set(evidence) != expected_evidence_keys
+        or evidence_keys not in (legacy_evidence_keys, current_evidence_keys)
+        or (
+            receipt.get("action_revision") == ACTION_REVISION
+            and evidence_keys != current_evidence_keys
+        )
+        or (
+            evidence_keys == current_evidence_keys
+            and (
+                evidence.get("hook_source") not in {*HOOK_SOURCES, None}
+                or (
+                    evidence.get("session_id") is not None
+                    and SESSION_ID_RE.fullmatch(str(evidence.get("session_id"))) is None
+                )
+            )
+        )
         or not isinstance(evidence.get("commands"), list)
         or any(evidence.get(key) != receipt.get(key) for key in receipt if key != "evidence_sha256")
     ):
@@ -571,7 +791,8 @@ def validate_blocked_evidence_history(
     if claim.is_symlink() or not claim.is_file():
         raise BootstrapError("UNCOMMITTED_BOOTSTRAP_EVIDENCE_HISTORY_INVALID")
     claim_sha256 = sha256_file(claim)
-    expected_keys = (BLOCKED_RECEIPT_KEYS - {"evidence_sha256"}) | {"commands"}
+    legacy_keys = (BLOCKED_RECEIPT_KEYS - {"evidence_sha256"}) | {"commands"}
+    current_keys = legacy_keys | BLOCKED_EVIDENCE_CONTEXT_KEYS
     allowed = set(current_evidence)
     for evidence_path in evidence_children:
         relative = evidence_path.relative_to(project_root).as_posix()
@@ -590,12 +811,26 @@ def validate_blocked_evidence_history(
         except (json.JSONDecodeError, OSError) as exc:
             raise BootstrapError("UNCOMMITTED_BOOTSTRAP_EVIDENCE_HISTORY_INVALID") from exc
         commands = evidence.get("commands") if isinstance(evidence, dict) else None
+        evidence_keys = set(evidence) if isinstance(evidence, dict) else set()
         if (
             not isinstance(evidence, dict)
-            or set(evidence) != expected_keys
+            or evidence_keys not in (legacy_keys, current_keys)
+            or (
+                evidence.get("action_revision") == ACTION_REVISION and evidence_keys != current_keys
+            )
+            or (
+                evidence_keys == current_keys
+                and (
+                    evidence.get("hook_source") not in {*HOOK_SOURCES, None}
+                    or (
+                        evidence.get("session_id") is not None
+                        and SESSION_ID_RE.fullmatch(str(evidence.get("session_id"))) is None
+                    )
+                )
+            )
             or evidence.get("schema_version") != 1
             or evidence.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
-            or evidence.get("action_revision") != ACTION_REVISION
+            or evidence.get("action_revision") not in SUPPORTED_ACTION_REVISIONS
             or evidence.get("status") != "ENVIRONMENT_BLOCKED"
             or evidence.get("claim_sha256") != claim_sha256
             or re.fullmatch(r"[0-9a-f]{64}", str(evidence.get("project_input_sha256"))) is None
@@ -619,6 +854,223 @@ def validate_blocked_evidence_history(
             raise BootstrapError("UNCOMMITTED_BOOTSTRAP_EVIDENCE_HISTORY_INVALID")
         allowed.add(resolved)
     return allowed
+
+
+def validate_transaction_bound_proposals(
+    governance: Path,
+    transactions: Sequence[Path],
+) -> None:
+    """Accept non-empty proposals only when an active layout journal proves every byte."""
+    proposals = governance / "proposals"
+    if proposals.is_symlink() or (proposals.exists() and not proposals.is_dir()):
+        raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+    expected: Dict[str, List[Dict[str, Any]]] = {}
+    staged_locations: Dict[str, Path] = {}
+    active_status: Optional[str] = None
+    active_transaction: Optional[Path] = None
+    for transaction in transactions:
+        if transaction.is_symlink() or not transaction.is_dir():
+            raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+        journal_path = transaction / "journal.json"
+        if journal_path.is_symlink() or not journal_path.is_file():
+            continue
+        try:
+            journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID") from exc
+        if not isinstance(journal, dict):
+            raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+        status = journal.get("status")
+        if status not in {"plan-activated", "version-pending"}:
+            continue
+        if active_transaction is not None:
+            raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+        active_status = str(status)
+        active_transaction = transaction
+        transaction_id = journal.get("transaction_id")
+        expected_paths = {
+            "staged_plan": (transaction / "staging" / "_Plan").as_posix(),
+            "staged_proposals": (transaction / "staging" / "proposals").as_posix(),
+            "target_proposals": (governance / "proposals").as_posix(),
+            "backup_plan": (transaction / "backup" / "_Plan").as_posix(),
+            "original_evidence": (
+                governance / "evidence" / "layout-migrations" / transaction.name / "legacy-_Plan"
+            ).as_posix(),
+        }
+        active_plan_id = journal.get("active_plan_id")
+        active_plan_path = journal.get("active_plan_path")
+        completed_operations = journal.get("completed_operations")
+        expected_operations = [
+            "snapshot",
+            "staging",
+            "conversion",
+            "staged-validation",
+            "legacy-backup",
+            "plan-activation",
+        ]
+        if status == "version-pending":
+            expected_operations.extend(["side-files", "final-validation"])
+        manifests = (
+            ("legacy_manifest", "legacy_manifest_sha256"),
+            ("legacy_proposals_manifest", "legacy_proposals_sha256"),
+            ("new_layout_manifest", "new_layout_baseline_sha256"),
+            ("conversion_table", "conversion_table_sha256"),
+        )
+        if (
+            set(journal) != ACTIVE_LAYOUT_JOURNAL_KEYS
+            or journal.get("schema_version") != 1
+            or journal.get("kind") != "layout-migration"
+            or not isinstance(transaction_id, str)
+            or transaction_id != transaction.name
+            or LAYOUT_TRANSACTION_RE.fullmatch(transaction_id) is None
+            or not isinstance(active_plan_id, str)
+            or PLAN_ID_RE.fullmatch(active_plan_id) is None
+            or active_plan_path != f"{active_plan_id}.md"
+            or not isinstance(journal.get("created_at"), str)
+            or not journal.get("created_at")
+            or not isinstance(journal.get("updated_at"), str)
+            or not journal.get("updated_at")
+            or not isinstance(journal.get("git_baseline"), dict)
+            or journal.get("paths") != expected_paths
+            or completed_operations != expected_operations
+            or not isinstance(journal.get("log_files"), list)
+            or not isinstance(journal.get("proposal_trees"), list)
+            or SHA256_RE.fullmatch(str(journal.get("legacy_adoption_sha256"))) is None
+            or any(
+                not isinstance(journal.get(manifest_key), list)
+                or SHA256_RE.fullmatch(str(journal.get(digest_key))) is None
+                or stable_digest(journal[manifest_key]) != journal[digest_key]
+                for manifest_key, digest_key in manifests
+            )
+            or journal.get("new_proposals_baseline_sha256")
+            != journal.get("legacy_proposals_sha256")
+        ):
+            raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+        legacy_manifest = cast(List[Dict[str, Any]], journal["legacy_manifest"])
+        projected_proposals = [
+            {
+                **entry,
+                "path": str(entry["path"]).removeprefix("proposals/"),
+            }
+            for entry in legacy_manifest
+            if isinstance(entry, dict)
+            and isinstance(entry.get("path"), str)
+            and str(entry["path"]).startswith("proposals/")
+        ]
+        canonical_plan = governance / "_Plan"
+        backup_plan = transaction / "backup" / "_Plan"
+        original_evidence = (
+            governance / "evidence" / "layout-migrations" / transaction.name / "legacy-_Plan"
+        )
+        adoption = governance / "runtime" / LEGACY_ADOPTION_NAME
+        proof_relative = f".migrations/{transaction.name}.yaml"
+        proof = canonical_plan / proof_relative
+        guard = governance.parent / "_Plan"
+        if (
+            projected_proposals != journal.get("legacy_proposals_manifest")
+            or regular_tree_manifest(canonical_plan) != journal.get("new_layout_manifest")
+            or regular_tree_manifest(backup_plan, exclude_names={".workctl.lock"})
+            != legacy_manifest
+            or regular_tree_manifest(original_evidence) != legacy_manifest
+            or adoption.is_symlink()
+            or not adoption.is_file()
+            or sha256_file(adoption) != journal.get("legacy_adoption_sha256")
+            or proof.is_symlink()
+            or not proof.is_file()
+            or not any(
+                entry.get("path") == proof_relative and entry.get("kind") == "file"
+                for entry in cast(List[Dict[str, Any]], journal["new_layout_manifest"])
+            )
+            or (transaction / "staging" / "_Plan").exists()
+            or (transaction / "staging" / "_Plan").is_symlink()
+            or (
+                status == "plan-activated"
+                and (
+                    guard.is_symlink()
+                    or not guard.is_file()
+                    or guard.read_text(encoding="utf-8")
+                    != "WORK_GOVERNANCE_LAYOUT_ACTIVATION_GUARD\n"
+                )
+            )
+            or (status == "version-pending" and (guard.exists() or guard.is_symlink()))
+        ):
+            raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+        validate_active_adoption(governance, adoption, journal)
+        validate_active_migration_proof(proof, journal)
+        records = journal.get("proposal_trees")
+        assert isinstance(records, list)
+        combined_manifest: List[Dict[str, Any]] = []
+        for record in records:
+            if not isinstance(record, dict) or set(record) != {
+                "migration_id",
+                "manifest",
+                "manifest_sha256",
+                "staged_path",
+                "target",
+            }:
+                raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+            migration_id = record.get("migration_id")
+            manifest = record.get("manifest")
+            manifest_sha256 = record.get("manifest_sha256")
+            if (
+                not isinstance(migration_id, str)
+                or MIGRATION_ID_RE.fullmatch(migration_id) is None
+                or migration_id in expected
+                or not isinstance(manifest, list)
+                or not isinstance(manifest_sha256, str)
+                or SHA256_RE.fullmatch(manifest_sha256) is None
+                or stable_digest(manifest) != manifest_sha256
+                or record.get("staged_path")
+                != (transaction / "staging" / "proposals" / migration_id).as_posix()
+                or record.get("target") != f"{GOVERNANCE_DIR}/proposals/{migration_id}"
+            ):
+                raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+            expected[migration_id] = cast(List[Dict[str, Any]], manifest)
+            staged_locations[migration_id] = transaction / "staging" / "proposals" / migration_id
+            combined_manifest.append({"path": migration_id, "kind": "directory"})
+            for entry in manifest:
+                if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+                    raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+                combined_manifest.append(
+                    {
+                        **entry,
+                        "path": f"{migration_id}/{entry['path']}",
+                    }
+                )
+        combined_manifest.sort(key=lambda entry: str(entry["path"]))
+        if combined_manifest != journal.get("legacy_proposals_manifest"):
+            raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+    actual_names = {child.name for child in proposals.iterdir()} if proposals.is_dir() else set()
+    if not actual_names.issubset(expected):
+        raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+    if active_transaction is None:
+        if actual_names:
+            raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+        return
+    staged_root = active_transaction / "staging" / "proposals"
+    if staged_root.is_symlink() or (staged_root.exists() and not staged_root.is_dir()):
+        raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+    staged_names = (
+        {child.name for child in staged_root.iterdir()} if staged_root.is_dir() else set()
+    )
+    if (
+        not staged_names.issubset(expected)
+        or staged_names & actual_names
+        or staged_names | actual_names != set(expected)
+        or (active_status == "version-pending" and staged_names)
+    ):
+        raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
+    for name in sorted(expected):
+        proposal = proposals / name if name in actual_names else staged_locations[name]
+        manifest = path_manifest(proposal)
+        if (
+            proposal.is_symlink()
+            or not proposal.is_dir()
+            or not manifest
+            or manifest[0] != {"path": ".", "kind": "directory"}
+            or manifest[1:] != expected[name]
+        ):
+            raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
 
 
 def audit_uncommitted_root(governance: Path) -> None:
@@ -648,7 +1100,7 @@ def audit_uncommitted_root(governance: Path) -> None:
         raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
     bootstrap_evidence = validate_blocked_record(governance)
     bootstrap_evidence = validate_blocked_evidence_history(governance, bootstrap_evidence)
-    for name in ("logs", "worktrees", "proposals"):
+    for name in ("logs", "worktrees"):
         path = governance / name
         if path.is_symlink() or (path.exists() and not path.is_dir()):
             raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
@@ -669,6 +1121,7 @@ def audit_uncommitted_root(governance: Path) -> None:
         if LAYOUT_TRANSACTION_RE.fullmatch(child.name) is None:
             raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
         transactions.append(child)
+    validate_transaction_bound_proposals(governance, transactions)
     evidence = governance / "evidence"
     if evidence.is_symlink() or (evidence.exists() and not evidence.is_dir()):
         raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID")
@@ -691,7 +1144,10 @@ def audit_uncommitted_root(governance: Path) -> None:
                     and not bootstrap.is_symlink()
                     and {child.resolve() for child in bootstrap.iterdir()} == bootstrap_evidence,
                 ),
-                ("layout-migrations", bool(migration_names)),
+                (
+                    "layout-migrations",
+                    migrations.is_dir() and not migrations.is_symlink() and bool(transaction_names),
+                ),
             )
             if condition
         }
@@ -955,7 +1411,9 @@ def persist_blocked_failure(
     manifest_digest: str,
     input_digest: str,
     records: Sequence[Mapping[str, Any]],
-) -> None:
+    hook_source: Optional[str],
+    session_id: Optional[str],
+) -> str:
     """Journal, install, and validate one claim-bound uncommitted failure record."""
     project_root = governance.parent
     runtime = governance / "runtime"
@@ -981,7 +1439,12 @@ def persist_blocked_failure(
         "claim_sha256": sha256_file(claim),
         "evidence_ref": evidence_ref,
     }
-    evidence_payload = {**common, "commands": [dict(record) for record in records]}
+    evidence_payload = {
+        **common,
+        "hook_source": hook_source,
+        "session_id": session_id,
+        "commands": [dict(record) for record in records],
+    }
     receipt_payload = {
         **common,
         "evidence_sha256": sha256_bytes(json_payload_bytes(evidence_payload)),
@@ -997,6 +1460,60 @@ def persist_blocked_failure(
     if os.environ.get("WORK_GOVERNANCE_TEST_INTERRUPT_FAILURE_AFTER_JOURNAL") == "1":
         raise BootstrapError("BOOTSTRAP_TEST_INTERRUPTED_FAILURE_INSTALL")
     recover_blocked_failure(governance)
+    return evidence_ref
+
+
+def bounded_hook_source(value: object) -> Optional[str]:
+    """Return only one documented SessionStart source value."""
+    return str(value) if isinstance(value, str) and value in HOOK_SOURCES else None
+
+
+def bounded_session_id(value: object) -> Optional[str]:
+    """Return one bounded local session correlation value."""
+    if not isinstance(value, str) or SESSION_ID_RE.fullmatch(value) is None:
+        return None
+    return value
+
+
+def failed_command_detail(records: Sequence[Mapping[str, Any]]) -> str:
+    """Return the last bounded non-zero command diagnostic for short hook context."""
+    for record in reversed(records):
+        if record.get("returncode") == 0:
+            continue
+        raw = record.get("stderr")
+        if not isinstance(raw, str) or not raw.strip():
+            raw = record.get("stdout")
+        if isinstance(raw, str) and raw.strip():
+            return re.sub(r"\s+", " ", raw).strip()[:500]
+    return "unavailable"
+
+
+def blocked_recovery_action(reason: str, detail: str) -> str:
+    """Map an observed bootstrap failure to the next allowed recovery action."""
+    primary_reason = reason.split(";", 1)[0].strip()
+    if primary_reason == "CONTROLLER_PREWARM_FAILED":
+        return (
+            "restore the exact project-local controller cache or permitted dependency "
+            "access, then start a fresh session"
+        )
+    if primary_reason == "LAYOUT_MIGRATION_NOT_READY":
+        if "LAYOUT_RECOVERY_REQUIRED" in detail:
+            return "run workctl layout recover, verify layout status, then start a fresh session"
+        if "RECONCILIATION_REQUIRED" in detail:
+            return (
+                "run workctl layout status and reconcile the competing authorities; "
+                "do not migrate by guess"
+            )
+        if "LEGACY_CLASSIFICATION_REQUIRED" in detail:
+            return (
+                "run workctl layout status; review the exact blockers; when only adoption "
+                "remains, run workctl layout adopt with the current manifest, active Plan "
+                "and user reference, then start a fresh session"
+            )
+        return "run workctl layout status, resolve its exact blockers, then start a fresh session"
+    if primary_reason == "LAYOUT_VALIDATION_FAILED":
+        return "run workctl layout validate and recover the reported transaction before retrying"
+    return "inspect the local bootstrap evidence and correct the reported control-path failure"
 
 
 def run_command(
@@ -1148,6 +1665,8 @@ def main() -> int:
     build: Optional[str] = None
     manifest_digest: Optional[str] = None
     input_digest: Optional[str] = None
+    hook_source: Optional[str] = None
+    session_id: Optional[str] = None
     records: List[Dict[str, Any]] = []
     base_receipt: Dict[str, Any] = {
         "schema_version": 1,
@@ -1157,6 +1676,8 @@ def main() -> int:
     }
     try:
         hook_input = load_hook_input()
+        hook_source = bounded_hook_source(hook_input.get("source"))
+        session_id = bounded_session_id(hook_input.get("session_id"))
         project_root = discover_project_root(Path(str(hook_input["cwd"])))
         installed_plugin = plugin_root()
         build = plugin_build(installed_plugin)
@@ -1211,6 +1732,8 @@ def main() -> int:
         return 0
     except (BootstrapError, OSError, subprocess.SubprocessError) as exc:
         reason = str(exc).replace("\n", " ")[:500]
+        detail = failed_command_detail(records)
+        blocked_evidence_ref = "unavailable"
         try:
             if (
                 governance is not None
@@ -1218,7 +1741,7 @@ def main() -> int:
                 and isinstance(manifest_digest, str)
                 and isinstance(input_digest, str)
             ):
-                persist_blocked_failure(
+                blocked_evidence_ref = persist_blocked_failure(
                     governance,
                     base_receipt=base_receipt,
                     reason=reason,
@@ -1226,16 +1749,18 @@ def main() -> int:
                     manifest_digest=manifest_digest,
                     input_digest=input_digest,
                     records=records,
+                    hook_source=hook_source,
+                    session_id=session_id,
                 )
             elif governance is not None and receipt_path is not None:
                 invalidate_bootstrap_receipt(governance.parent, receipt_path)
         except (BootstrapError, OSError) as record_error:
             reason = f"{reason}; BLOCKED_RECORD_FAILED: {record_error}"[:500]
         emit_context(
-            f"WORK_GOVERNANCE_BOOTSTRAP ENVIRONMENT_BLOCKED; reason={reason}. "
-            "Do not perform Plan-controlled work. Restore a trusted/enabled "
-            "SessionStart hook and a valid READY receipt, then start a fresh "
-            "session."
+            f"WORK_GOVERNANCE_BOOTSTRAP ENVIRONMENT_BLOCKED; hook=executed; "
+            f"source={hook_source or 'unknown'}; reason={reason}; detail={detail}; "
+            f"evidence={blocked_evidence_ref}. Do not perform Plan-controlled work. "
+            f"Next allowed recovery: {blocked_recovery_action(reason, detail)}."
         )
         return 0
 

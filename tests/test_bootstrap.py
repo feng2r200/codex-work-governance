@@ -98,6 +98,255 @@ def read_uv_commands(log_path: Path) -> list[list[str]]:
     return [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
 
 
+def write_active_proposal_journal(
+    namespace: dict[str, Any],
+    governance: Path,
+) -> tuple[Path, dict[str, Any]]:
+    """Write the controller artifacts and journal around a partial proposal activation."""
+    transaction = governance / "runtime" / "LAY-20260728T000000Z-12345678-abcdef12"
+    transaction.mkdir(parents=True)
+    backup_plan = transaction / "backup" / "_Plan"
+    proposal_sources = [
+        backup_plan / "proposals" / migration_id
+        for migration_id in ("MIG-20260727-001", "MIG-20260727-002")
+    ]
+    for proposal in proposal_sources:
+        proposal.mkdir(parents=True)
+        (proposal / "reconciliation.yaml").write_text(
+            f"migration_id: {proposal.name}\nconfirmations: {{}}\n",
+            encoding="utf-8",
+        )
+    (backup_plan / "index.yaml").write_text(
+        "schema_version: 1\nactive_plan_id: PLAN-20260728-001\n",
+        encoding="utf-8",
+    )
+    (backup_plan / "PLAN-20260728-001.md").write_text(
+        "---\nplan_id: PLAN-20260728-001\n---\n# Legacy\n",
+        encoding="utf-8",
+    )
+    original_evidence = (
+        governance / "evidence" / "layout-migrations" / transaction.name / "legacy-_Plan"
+    )
+    shutil.copytree(backup_plan, original_evidence)
+    legacy_manifest = namespace["path_manifest"](backup_plan)[1:]
+    legacy_proposals_manifest = namespace["path_manifest"](backup_plan / "proposals")[1:]
+    empty_digest = namespace["stable_digest"]([])
+    proposal_digest = namespace["stable_digest"](legacy_proposals_manifest)
+    adoption = governance / "runtime" / "legacy-adoption.json"
+    adoption_payload = {
+        "schema_version": 1,
+        "kind": "work-governance-legacy-adoption",
+        "action_revision": 3,
+        "project_root": governance.parent.resolve().as_posix(),
+        "worktree_identity": {
+            "repository": False,
+            "project_root": governance.parent.resolve().as_posix(),
+        },
+        "active_plan_id": "PLAN-20260728-001",
+        "active_plan_path": "PLAN-20260728-001.md",
+        "legacy_manifest_sha256": namespace["stable_digest"](legacy_manifest),
+        "controller_sha256": hashlib.sha256(WORKCTL.read_bytes()).hexdigest(),
+        "confirmation_ref": "user:test-legacy-adoption",
+        "created_at": "2026-07-28T00:00:00+00:00",
+    }
+    adoption.write_text(json.dumps(adoption_payload), encoding="utf-8")
+    adoption_sha256 = hashlib.sha256(adoption.read_bytes()).hexdigest()
+    canonical_plan = governance / "_Plan"
+    proof = canonical_plan / ".migrations" / f"{transaction.name}.yaml"
+    proof.parent.mkdir(parents=True)
+    proof.write_text(
+        "schema_version: 1\n"
+        "kind: layout-migration-proof\n"
+        f"transaction_id: {transaction.name}\n"
+        "status: prepared\n"
+        f"legacy_manifest_sha256: {namespace['stable_digest'](legacy_manifest)}\n"
+        f"legacy_adoption_sha256: {adoption_sha256}\n"
+        f"conversion_table_sha256: {empty_digest}\n"
+        f"legacy_proposals_sha256: {proposal_digest}\n"
+        f"new_proposals_baseline_sha256: {proposal_digest}\n"
+        "created_at: '2026-07-28T00:00:00+00:00'\n",
+        encoding="utf-8",
+    )
+    (canonical_plan / "index.yaml").write_text(
+        "schema_version: 1\nactive_plan_id: PLAN-20260728-001\n",
+        encoding="utf-8",
+    )
+    (canonical_plan / "PLAN-20260728-001.md").write_text(
+        "---\nplan_id: PLAN-20260728-001\n---\n# Canonical\n",
+        encoding="utf-8",
+    )
+    (governance.parent / "_Plan").write_text(
+        "WORK_GOVERNANCE_LAYOUT_ACTIVATION_GUARD\n",
+        encoding="utf-8",
+    )
+    proposals = governance / "proposals"
+    first = proposals / proposal_sources[0].name
+    second = transaction / "staging" / "proposals" / proposal_sources[1].name
+    shutil.copytree(proposal_sources[0], first)
+    shutil.copytree(proposal_sources[1], second)
+    records = []
+    for proposal in (first, second):
+        migration_id = proposal.name
+        manifest = namespace["path_manifest"](proposal)[1:]
+        records.append(
+            {
+                "migration_id": migration_id,
+                "manifest": manifest,
+                "manifest_sha256": namespace["stable_digest"](manifest),
+                "staged_path": (transaction / "staging" / "proposals" / migration_id).as_posix(),
+                "target": f".work-governance/proposals/{migration_id}",
+            }
+        )
+    new_layout_manifest = namespace["path_manifest"](canonical_plan)[1:]
+    journal = {
+        "schema_version": 1,
+        "kind": "layout-migration",
+        "transaction_id": transaction.name,
+        "status": "plan-activated",
+        "created_at": "2026-07-28T00:00:00+00:00",
+        "updated_at": "2026-07-28T00:01:00+00:00",
+        "active_plan_id": "PLAN-20260728-001",
+        "active_plan_path": "PLAN-20260728-001.md",
+        "legacy_manifest": legacy_manifest,
+        "legacy_manifest_sha256": namespace["stable_digest"](legacy_manifest),
+        "legacy_proposals_manifest": legacy_proposals_manifest,
+        "legacy_proposals_sha256": proposal_digest,
+        "legacy_adoption_sha256": adoption_sha256,
+        "git_baseline": {"repository": False},
+        "paths": {
+            "staged_plan": (transaction / "staging" / "_Plan").as_posix(),
+            "staged_proposals": (transaction / "staging" / "proposals").as_posix(),
+            "target_proposals": proposals.as_posix(),
+            "backup_plan": backup_plan.as_posix(),
+            "original_evidence": original_evidence.as_posix(),
+        },
+        "completed_operations": [
+            "snapshot",
+            "staging",
+            "conversion",
+            "staged-validation",
+            "legacy-backup",
+            "plan-activation",
+        ],
+        "new_layout_manifest": new_layout_manifest,
+        "new_layout_baseline_sha256": namespace["stable_digest"](new_layout_manifest),
+        "conversion_table": [],
+        "conversion_table_sha256": empty_digest,
+        "log_files": [],
+        "proposal_trees": records,
+        "new_proposals_baseline_sha256": proposal_digest,
+    }
+    (transaction / "journal.json").write_text(json.dumps(journal), encoding="utf-8")
+    return transaction, journal
+
+
+def test_uncommitted_audit_accepts_journal_bound_partial_proposal_activation(
+    tmp_path: Path,
+) -> None:
+    """SessionStart permits only an exact controller-journal proposal partition."""
+    namespace = runpy.run_path(str(HOOK), run_name="session_start_partial_proposal_test")
+    controller = runpy.run_path(str(WORKCTL), run_name="workctl_partial_proposal_test")
+    governance = tmp_path / ".work-governance"
+    write_active_proposal_journal(namespace, governance)
+
+    namespace["audit_uncommitted_root"](governance)
+    assert controller["uncommitted_governance_footprint_errors"](tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "forgery",
+    [
+        "minimal-journal",
+        "transaction-id",
+        "record-hash",
+        "missing-adoption",
+        "invalid-proof",
+        "missing-staged",
+        "rehash-drift",
+    ],
+)
+def test_uncommitted_audit_rejects_self_asserted_proposal_journal(
+    tmp_path: Path,
+    forgery: str,
+) -> None:
+    """A proposal cannot authorize itself through an incomplete or drifted journal."""
+    namespace = runpy.run_path(str(HOOK), run_name="session_start_forged_proposal_test")
+    governance = tmp_path / ".work-governance"
+    transaction, journal = write_active_proposal_journal(namespace, governance)
+    if forgery == "minimal-journal":
+        first = governance / "proposals" / "MIG-20260727-001"
+        manifest = namespace["path_manifest"](first)[1:]
+        journal = {
+            "status": "plan-activated",
+            "proposal_trees": [
+                {
+                    "migration_id": first.name,
+                    "manifest_sha256": namespace["stable_digest"](manifest),
+                    "target": f".work-governance/proposals/{first.name}",
+                }
+            ],
+        }
+    elif forgery == "transaction-id":
+        journal["transaction_id"] = "LAY-20260728T000000Z-87654321-abcdef12"
+    elif forgery == "record-hash":
+        journal["proposal_trees"][0]["manifest_sha256"] = "f" * 64
+    elif forgery == "missing-adoption":
+        (governance / "runtime" / "legacy-adoption.json").unlink()
+    elif forgery == "invalid-proof":
+        proof = governance / "_Plan" / ".migrations" / f"{transaction.name}.yaml"
+        proof.write_text(
+            f"kind: layout-migration-proof\ntransaction_id: {transaction.name}\n",
+            encoding="utf-8",
+        )
+        journal["new_layout_manifest"] = namespace["path_manifest"](governance / "_Plan")[1:]
+        journal["new_layout_baseline_sha256"] = namespace["stable_digest"](
+            journal["new_layout_manifest"]
+        )
+    elif forgery == "missing-staged":
+        shutil.rmtree(transaction / "staging" / "proposals" / "MIG-20260727-002")
+    else:
+        first = governance / "proposals" / "MIG-20260727-001" / "reconciliation.yaml"
+        first.write_text(
+            "migration_id: MIG-20260727-001\nconfirmations: {}\ndrift: true\n",
+            encoding="utf-8",
+        )
+        first_manifest = namespace["path_manifest"](first.parent)[1:]
+        journal["proposal_trees"][0]["manifest"] = first_manifest
+        journal["proposal_trees"][0]["manifest_sha256"] = namespace["stable_digest"](first_manifest)
+        combined = []
+        for record in journal["proposal_trees"]:
+            combined.append({"path": record["migration_id"], "kind": "directory"})
+            combined.extend(
+                {
+                    **entry,
+                    "path": f"{record['migration_id']}/{entry['path']}",
+                }
+                for entry in record["manifest"]
+            )
+        combined.sort(key=lambda entry: str(entry["path"]))
+        journal["legacy_proposals_manifest"] = combined
+        journal["legacy_proposals_sha256"] = namespace["stable_digest"](combined)
+        journal["new_proposals_baseline_sha256"] = namespace["stable_digest"](combined)
+        legacy_manifest = journal["legacy_manifest"]
+        drift_path = "proposals/MIG-20260727-001/reconciliation.yaml"
+        for entry in legacy_manifest:
+            if entry["path"] == drift_path:
+                entry["size"] = first.stat().st_size
+                entry["sha256"] = hashlib.sha256(first.read_bytes()).hexdigest()
+        journal["legacy_manifest_sha256"] = namespace["stable_digest"](legacy_manifest)
+    (transaction / "journal.json").write_text(json.dumps(journal), encoding="utf-8")
+
+    with pytest.raises(
+        namespace["BootstrapError"],
+        match="UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID",
+    ):
+        namespace["audit_uncommitted_root"](governance)
+    controller = runpy.run_path(str(WORKCTL), run_name=f"workctl_forged_proposal_{forgery}")
+    assert "uncommitted governance proposals are not transaction-bound" in controller[
+        "uncommitted_governance_footprint_errors"
+    ](tmp_path)
+
+
 def adopt_legacy(project: Path) -> dict[str, Any]:
     """Bind the reviewed bootstrap fixture to its physical project root."""
     status_result = subprocess.run(
@@ -298,6 +547,110 @@ def test_prewarm_retry_keeps_prior_bootstrap_evidence_and_allows_adoption(
     assert (project / ".work-governance" / "version.yaml").is_file()
     assert not (project / "_Plan").exists()
     assert len(evidence) == 3
+
+
+def test_resume_block_reports_executed_hook_and_exact_adoption_recovery(
+    tmp_path: Path,
+) -> None:
+    """The observed classification failure never misreports an absent SessionStart hook."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv_log = tmp_path / "uv.jsonl"
+    install_fake_uv(fake_bin, uv_log)
+    project = tmp_path / "project"
+    project.mkdir()
+    write_migratable_legacy(project)
+    session_id = "019f8e2d-96e9-75b0-ab00-09512f6fbfa0"
+
+    blocked = run_hook(
+        project,
+        fake_bin,
+        uv_log,
+        payload={
+            "session_id": session_id,
+            "cwd": str(project),
+            "hook_event_name": "SessionStart",
+            "source": "resume",
+        },
+    )
+
+    context = blocked["hookSpecificOutput"]["additionalContext"]
+    receipt = json.loads(
+        (project / ".work-governance" / "bootstrap-state.json").read_text(encoding="utf-8")
+    )
+    evidence_path = project / receipt["evidence_ref"].removeprefix("evidence:")
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+
+    assert "hook=executed; source=resume" in context
+    assert "LEGACY_CLASSIFICATION_REQUIRED" in context
+    assert "workctl layout adopt" in context
+    assert f"evidence={receipt['evidence_ref']}" in context
+    assert "Restore a trusted/enabled" not in context
+    assert evidence["hook_source"] == "resume"
+    assert evidence["session_id"] == session_id
+    assert receipt["status"] == "ENVIRONMENT_BLOCKED"
+
+
+def test_action_revision_three_accepts_and_preserves_revision_two_blocked_history(
+    tmp_path: Path,
+) -> None:
+    """A 1.0.2 retry reads the exact 1.0.1 uncommitted claim and evidence contract."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv_log = tmp_path / "uv.jsonl"
+    install_fake_uv(fake_bin, uv_log)
+    project = tmp_path / "project"
+    project.mkdir()
+    write_migratable_legacy(project)
+    run_hook(project, fake_bin, uv_log)
+    governance = project / ".work-governance"
+    claim_path = governance / "runtime" / "bootstrap-claim.json"
+    receipt_path = governance / "bootstrap-state.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    evidence_path = project / receipt["evidence_ref"].removeprefix("evidence:")
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+
+    claim = json.loads(claim_path.read_text(encoding="utf-8"))
+    claim["action_revision"] = 2
+    claim_path.write_text(json.dumps(claim, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    claim_sha256 = hashlib.sha256(claim_path.read_bytes()).hexdigest()
+    legacy_evidence = {
+        key: value for key, value in evidence.items() if key not in {"hook_source", "session_id"}
+    }
+    legacy_evidence["action_revision"] = 2
+    legacy_evidence["claim_sha256"] = claim_sha256
+    evidence_path.write_text(
+        json.dumps(legacy_evidence, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    receipt["action_revision"] = 2
+    receipt["claim_sha256"] = claim_sha256
+    receipt["evidence_sha256"] = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    receipt_path.write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    retried = run_hook(
+        project,
+        fake_bin,
+        uv_log,
+        payload={
+            "session_id": "revision-three-retry",
+            "cwd": str(project),
+            "hook_event_name": "SessionStart",
+            "source": "resume",
+        },
+    )
+    current_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    evidence_payloads = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (governance / "evidence" / "bootstrap").glob("*.json")
+    ]
+
+    assert "LEGACY_CLASSIFICATION_REQUIRED" in (retried["hookSpecificOutput"]["additionalContext"])
+    assert current_receipt["action_revision"] == 3
+    assert {payload["action_revision"] for payload in evidence_payloads} == {2, 3}
 
 
 @pytest.mark.parametrize("forgery", ["invalid-json", "symlink-current", "missing-receipt"])
@@ -691,8 +1044,12 @@ def test_committed_layout_recovers_interrupted_failure_transaction(
         "project_input_sha256",
         "claim_sha256",
         "evidence_ref",
+        "hook_source",
+        "session_id",
         "commands",
     }
+    assert blocked_evidence[0]["hook_source"] == "startup"
+    assert blocked_evidence[0]["session_id"] == "test-session"
 
 
 def test_committed_layout_bootstraps_missing_local_directories(tmp_path: Path) -> None:
@@ -995,8 +1352,12 @@ def test_first_prewarm_failure_records_and_recovers_claim_bound_evidence(
     )
     governance = project / ".work-governance"
     journal = governance / "runtime" / "bootstrap-failure-journal.json"
+    failed_context = failed["hookSpecificOutput"]["additionalContext"]
 
-    assert "CONTROLLER_PREWARM_FAILED" in failed["hookSpecificOutput"]["additionalContext"]
+    assert "CONTROLLER_PREWARM_FAILED" in failed_context
+    assert "hook=executed; source=startup" in failed_context
+    assert "exact project-local controller cache or permitted dependency access" in failed_context
+    assert "Restore a trusted/enabled" not in failed_context
     assert journal.is_file()
     assert not (governance / "bootstrap-state.json").exists()
 

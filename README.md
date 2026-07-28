@@ -98,10 +98,14 @@ validation, and status commands offline. Exact Plugin builds and incremental
 state live only in the ignored `bootstrap-state.json`; detailed command
 evidence stays under `.work-governance/evidence/`.
 
-If the hook is untrusted, disabled, skipped by managed policy, absent, stale,
-or cannot prepare a valid receipt, Plan-controlled work is
-`ENVIRONMENT_BLOCKED`. Restore the hook and a current `READY` receipt, then
-start a fresh session.
+If no SessionStart hook ran because it is untrusted, disabled, skipped by
+managed policy, or absent, a current `READY` receipt cannot be established and
+Plan-controlled work is `ENVIRONMENT_BLOCKED`. If the hook itself emits an
+`ENVIRONMENT_BLOCKED` result, that output proves the hook ran: it reports
+`hook=executed`, the startup or resume source, the observed failure, a local
+evidence reference, and the cause-specific next recovery action. Do not
+reinterpret such output as a hook-trust failure. Restore the reported
+precondition and obtain a current `READY` receipt in a fresh session.
 
 ## Controller
 
@@ -200,6 +204,21 @@ legacy lock, complete manifest and Git baseline, staged field-level conversion,
 staged validation, old-root backup, new Plan activation, and `version.yaml`
 commitment last. Interruptions before activation can discard staging; once
 activation starts, recovery only rolls forward.
+
+A legacy `_Plan/proposals/` side tree is migratable only when every
+`MIG-YYYYMMDD-NNN` directory satisfies the closed reconciliation proposal
+contract: a valid manifest, a supported prepared Plan, validated source
+records, optional validated Git/AGENTS proposal metadata, no symlink or extra
+entry, and an empty pending confirmation map. The transaction preserves its
+bytes and pending state, proves its manifest separately, and activates it at
+`.work-governance/proposals/`; it never places proposals under the canonical
+Plan root, applies an AGENTS replacement, or accepts the proposal.
+
+The directory name `proposals/` alone is not ownership evidence. Confirmed,
+malformed, mixed, drifting, or symlinked proposal content remains
+`LEGACY_CLASSIFICATION_REQUIRED` for explicit review rather than being guessed
+into the migration.
+
 Partial, mixed, symlinked, coexisting, drifted, or incomplete-journal layouts
 fail closed. Ordinary business `_Plan/` content is left untouched.
 

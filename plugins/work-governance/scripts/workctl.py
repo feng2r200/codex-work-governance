@@ -27,7 +27,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -130,7 +130,11 @@ LAYOUT_SCHEMA_VERSION = 1
 LAYOUT_VERSION = 1
 BOOTSTRAP_CONTRACT_VERSION = 1
 PLUGIN_COMPATIBILITY = ">=1.0.0,<2.0.0"
-LEGACY_MIGRATION_ACTION_REVISION = 2
+LEGACY_MIGRATION_ACTION_REVISION = 3
+SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS = {
+    2,
+    LEGACY_MIGRATION_ACTION_REVISION,
+}
 BOOTSTRAP_CLAIM_NAME = "bootstrap-claim.json"
 LEGACY_ADOPTION_NAME = "legacy-adoption.json"
 BOOTSTRAP_STAGING_NAME = ".work-governance.bootstrap"
@@ -172,6 +176,9 @@ BLOCKED_BOOTSTRAP_RECEIPT_KEYS = {
     "evidence_ref",
     "evidence_sha256",
 }
+BLOCKED_BOOTSTRAP_EVIDENCE_CONTEXT_KEYS = {"hook_source", "session_id"}
+BOOTSTRAP_HOOK_SOURCES = {"startup", "resume", "clear", "compact"}
+BOOTSTRAP_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 BOOTSTRAP_EVIDENCE_NAME_RE = re.compile(r"^\d{8}T\d{6}\.\d{6}Z-\d+\.json$")
 LAYOUT_TRANSACTION_RE = re.compile(
     r"^LAY-\d{8}T\d{6}Z-[0-9a-f]{8}(?:-[0-9a-f]{8}(?:[0-9a-f]{8}){0,3})?$"
@@ -187,6 +194,8 @@ PREPARING_LAYOUT_JOURNAL_KEYS = {
     "active_plan_path",
     "legacy_manifest",
     "legacy_manifest_sha256",
+    "legacy_proposals_manifest",
+    "legacy_proposals_sha256",
     "legacy_adoption_sha256",
     "git_baseline",
     "planned_log_files",
@@ -196,6 +205,31 @@ PREPARING_LAYOUT_JOURNAL_KEYS = {
 ABORTED_LAYOUT_JOURNAL_KEYS = {
     *PREPARING_LAYOUT_JOURNAL_KEYS,
     "preparing_journal_sha256",
+}
+ACTIVE_LAYOUT_JOURNAL_KEYS = {
+    "schema_version",
+    "kind",
+    "transaction_id",
+    "status",
+    "created_at",
+    "updated_at",
+    "active_plan_id",
+    "active_plan_path",
+    "legacy_manifest",
+    "legacy_manifest_sha256",
+    "legacy_proposals_manifest",
+    "legacy_proposals_sha256",
+    "legacy_adoption_sha256",
+    "git_baseline",
+    "paths",
+    "completed_operations",
+    "new_layout_manifest",
+    "new_layout_baseline_sha256",
+    "conversion_table",
+    "conversion_table_sha256",
+    "log_files",
+    "proposal_trees",
+    "new_proposals_baseline_sha256",
 }
 LAYOUT_STATES = {
     "LAYOUT_READY",
@@ -240,13 +274,20 @@ LAYOUT_PROOF_KEYS = {
     "conversion_table_sha256",
     "created_at",
 }
+LAYOUT_PROPOSAL_PROOF_KEYS = {
+    *LAYOUT_PROOF_KEYS,
+    "legacy_proposals_sha256",
+    "new_proposals_baseline_sha256",
+}
 LEGACY_LAYOUT_DIRECT_NAMES = {
     "index.yaml",
     ".workctl.lock",
     "archive",
     ".migrations",
     ".rollovers",
+    "proposals",
 }
+LEGACY_LAYOUT_FEATURE_NAMES = LEGACY_LAYOUT_DIRECT_NAMES - {"proposals"}
 LAYOUT_ALLOWED_COMMANDS = [
     "layout status",
     "layout validate",
@@ -550,6 +591,25 @@ def manifest_sha256(entries: list[dict[str, object]]) -> str:
     return sha256_bytes(payload)
 
 
+def proposal_manifest_from_plan_manifest(
+    legacy_manifest: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Project the exact ``proposals/`` subtree from a complete legacy Plan manifest."""
+    prefix = "proposals/"
+    projected: list[dict[str, object]] = []
+    for entry in legacy_manifest:
+        raw_path = entry.get("path")
+        if not isinstance(raw_path, str) or not raw_path.startswith(prefix):
+            continue
+        projected.append(
+            {
+                **entry,
+                "path": raw_path.removeprefix(prefix),
+            }
+        )
+    return projected
+
+
 def manifest_matches_allowed_subset(
     path: Path,
     allowed_paths: set[str],
@@ -620,7 +680,7 @@ def governance_claim_errors(root: Path, governance: Path | None = None) -> list[
         payload.get("schema_version") != 1
         or payload.get("kind") != "work-governance-bootstrap-claim"
         or payload.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
-        or payload.get("action_revision") != LEGACY_MIGRATION_ACTION_REVISION
+        or payload.get("action_revision") not in SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS
         or payload.get("project_root") != root.resolve().as_posix()
         or payload.get("creator") not in {"workctl", "session-start"}
         or not isinstance(payload.get("created_at"), str)
@@ -662,7 +722,7 @@ def uncommitted_governance_footprint_errors(root: Path) -> list[str]:
         bootstrap_evidence,
     )
     errors.extend(bootstrap_history_errors)
-    for name in ("logs", "worktrees", "proposals"):
+    for name in ("logs", "worktrees"):
         path = governance / name
         if path.is_symlink() or (path.exists() and not path.is_dir()):
             errors.append(f"uncommitted governance local path is invalid: {name}")
@@ -704,6 +764,47 @@ def uncommitted_governance_footprint_errors(root: Path) -> list[str]:
         adoption = runtime / LEGACY_ADOPTION_NAME
         if adoption.is_symlink() or (adoption.exists() and not adoption.is_file()):
             errors.append("uncommitted legacy adoption receipt is not regular")
+    proposals = proposals_dir(root)
+    if proposals.is_symlink() or (proposals.exists() and not proposals.is_dir()):
+        errors.append("uncommitted governance local path is invalid: proposals")
+    else:
+        expected_proposals: dict[str, list[dict[str, object]]] = {}
+        active_journal_count = 0
+        invalid_active_journal = False
+        for transaction_name in sorted(transaction_names):
+            journal_path = runtime / transaction_name / "journal.json"
+            try:
+                journal = load_layout_journal(journal_path)
+                if journal.get("status") not in {"plan-activated", "version-pending"}:
+                    continue
+                active_journal_count += 1
+                validate_active_layout_journal_artifacts(root, journal_path, journal)
+                for record in layout_proposal_records(root, journal):
+                    expected_proposals[str(record["migration_id"])] = cast(
+                        list[dict[str, object]],
+                        record["manifest"],
+                    )
+            except WorkctlError:
+                invalid_active_journal = True
+        actual_names = (
+            {child.name for child in proposals.iterdir()} if proposals.is_dir() else set()
+        )
+        if (
+            invalid_active_journal
+            or active_journal_count > 1
+            or not actual_names.issubset(expected_proposals)
+        ):
+            errors.append("uncommitted governance proposals are not transaction-bound")
+        else:
+            for name in actual_names:
+                candidate = proposals / name
+                if (
+                    candidate.is_symlink()
+                    or not candidate.is_dir()
+                    or tree_manifest(candidate) != expected_proposals[name]
+                ):
+                    errors.append("uncommitted governance proposals are not transaction-bound")
+                    break
     evidence = governance / "evidence"
     if evidence.is_symlink() or (evidence.exists() and not evidence.is_dir()):
         errors.append("uncommitted governance local path is invalid: evidence")
@@ -725,7 +826,10 @@ def uncommitted_governance_footprint_errors(root: Path) -> list[str]:
                     and not bootstrap.is_symlink()
                     and {child.resolve() for child in bootstrap.iterdir()} == bootstrap_evidence,
                 ),
-                ("layout-migrations", bool(migration_names)),
+                (
+                    "layout-migrations",
+                    migrations.is_dir() and not migrations.is_symlink() and bool(transaction_names),
+                ),
             )
             if condition
         }
@@ -772,7 +876,7 @@ def uncommitted_bootstrap_record(root: Path) -> tuple[set[Path], list[str]]:
     if (
         receipt.get("schema_version") != 1
         or receipt.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
-        or receipt.get("action_revision") != LEGACY_MIGRATION_ACTION_REVISION
+        or receipt.get("action_revision") not in SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS
         or receipt.get("status") != "ENVIRONMENT_BLOCKED"
         or not isinstance(receipt.get("updated_at"), str)
         or not isinstance(receipt.get("reason"), str)
@@ -809,10 +913,26 @@ def uncommitted_bootstrap_record(root: Path) -> tuple[set[Path], list[str]]:
         evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return set(), ["uncommitted bootstrap evidence is invalid"]
-    expected_evidence_keys = (BLOCKED_BOOTSTRAP_RECEIPT_KEYS - {"evidence_sha256"}) | {"commands"}
+    legacy_evidence_keys = (BLOCKED_BOOTSTRAP_RECEIPT_KEYS - {"evidence_sha256"}) | {"commands"}
+    current_evidence_keys = legacy_evidence_keys | BLOCKED_BOOTSTRAP_EVIDENCE_CONTEXT_KEYS
+    evidence_keys = set(evidence) if isinstance(evidence, dict) else set()
     if (
         not isinstance(evidence, dict)
-        or set(evidence) != expected_evidence_keys
+        or evidence_keys not in (legacy_evidence_keys, current_evidence_keys)
+        or (
+            receipt.get("action_revision") == LEGACY_MIGRATION_ACTION_REVISION
+            and evidence_keys != current_evidence_keys
+        )
+        or (
+            evidence_keys == current_evidence_keys
+            and (
+                evidence.get("hook_source") not in {*BOOTSTRAP_HOOK_SOURCES, None}
+                or (
+                    evidence.get("session_id") is not None
+                    and BOOTSTRAP_SESSION_ID_RE.fullmatch(str(evidence.get("session_id"))) is None
+                )
+            )
+        )
         or not isinstance(evidence.get("commands"), list)
         or any(evidence.get(key) != receipt.get(key) for key in receipt if key != "evidence_sha256")
     ):
@@ -843,7 +963,8 @@ def uncommitted_bootstrap_evidence_history(
 
     allowed = set(current_evidence)
     errors: list[str] = []
-    expected_keys = (BLOCKED_BOOTSTRAP_RECEIPT_KEYS - {"evidence_sha256"}) | {"commands"}
+    legacy_keys = (BLOCKED_BOOTSTRAP_RECEIPT_KEYS - {"evidence_sha256"}) | {"commands"}
+    current_keys = legacy_keys | BLOCKED_BOOTSTRAP_EVIDENCE_CONTEXT_KEYS
     for evidence_path in evidence_children:
         relative = evidence_path.relative_to(root).as_posix()
         try:
@@ -865,12 +986,28 @@ def uncommitted_bootstrap_evidence_history(
             continue
         expected_ref = f"evidence:{relative}"
         commands = evidence.get("commands") if isinstance(evidence, dict) else None
+        evidence_keys = set(evidence) if isinstance(evidence, dict) else set()
         if (
             not isinstance(evidence, dict)
-            or set(evidence) != expected_keys
+            or evidence_keys not in (legacy_keys, current_keys)
+            or (
+                evidence.get("action_revision") == LEGACY_MIGRATION_ACTION_REVISION
+                and evidence_keys != current_keys
+            )
+            or (
+                evidence_keys == current_keys
+                and (
+                    evidence.get("hook_source") not in {*BOOTSTRAP_HOOK_SOURCES, None}
+                    or (
+                        evidence.get("session_id") is not None
+                        and BOOTSTRAP_SESSION_ID_RE.fullmatch(str(evidence.get("session_id")))
+                        is None
+                    )
+                )
+            )
             or evidence.get("schema_version") != 1
             or evidence.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
-            or evidence.get("action_revision") != LEGACY_MIGRATION_ACTION_REVISION
+            or evidence.get("action_revision") not in SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS
             or evidence.get("status") != "ENVIRONMENT_BLOCKED"
             or evidence.get("claim_sha256") != claim_sha256
             or SHA256_RE.fullmatch(str(evidence.get("project_input_sha256"))) is None
@@ -1043,11 +1180,15 @@ def layout_version_errors(root: Path) -> list[str]:
         "layout_version": LAYOUT_VERSION,
         "bootstrap_contract_version": BOOTSTRAP_CONTRACT_VERSION,
         "plugin_compatibility": PLUGIN_COMPATIBILITY,
-        "legacy_migration_action_revision": LEGACY_MIGRATION_ACTION_REVISION,
     }
     for field, expected in expected_scalars.items():
         if payload.get(field) != expected:
             errors.append(f"version.yaml {field} must be {expected}")
+    if (
+        payload.get("legacy_migration_action_revision")
+        not in SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS
+    ):
+        errors.append("version.yaml legacy_migration_action_revision must be a supported revision")
     migration = payload.get("migration")
     if not isinstance(migration, dict):
         errors.append("version.yaml migration must be a mapping")
@@ -1107,7 +1248,10 @@ def layout_version_errors(root: Path) -> list[str]:
                     except (WorkctlError, yaml.YAMLError) as exc:
                         errors.append(f"version.yaml migration proof is invalid: {exc}")
                     else:
-                        if set(proof) != LAYOUT_PROOF_KEYS:
+                        if set(proof) not in (
+                            LAYOUT_PROOF_KEYS,
+                            LAYOUT_PROPOSAL_PROOF_KEYS,
+                        ):
                             errors.append(
                                 "version.yaml migration proof keys must match the contract"
                             )
@@ -1128,6 +1272,14 @@ def layout_version_errors(root: Path) -> list[str]:
                         ):
                             errors.append(
                                 "version.yaml migration proof fields do not match the commitment"
+                            )
+                        if set(proof) == LAYOUT_PROPOSAL_PROOF_KEYS and (
+                            SHA256_RE.fullmatch(str(proof.get("legacy_proposals_sha256"))) is None
+                            or SHA256_RE.fullmatch(str(proof.get("new_proposals_baseline_sha256")))
+                            is None
+                        ):
+                            errors.append(
+                                "version.yaml migration proposal proof fields are invalid"
                             )
             elif evidence_kind != "not-applicable-receipt" or evidence_path != "not-applicable":
                 errors.append("version.yaml not_applicable completion evidence is invalid")
@@ -1180,11 +1332,234 @@ def legacy_layout_feature_names(path: Path) -> set[str]:
         return set()
     features: set[str] = set()
     for child in path.iterdir():
-        if child.name in LEGACY_LAYOUT_DIRECT_NAMES or re.fullmatch(
+        if child.name in LEGACY_LAYOUT_FEATURE_NAMES or re.fullmatch(
             r"PLAN-\d{8}-\d{3}\.md", child.name
         ):
             features.add(child.name)
     return features
+
+
+def safe_proposal_child_name(value: object, *, suffix: str) -> str | None:
+    """Return one traversal-free proposal-local file name with the required suffix."""
+    if not isinstance(value, str):
+        return None
+    candidate = Path(value)
+    if (
+        not value
+        or candidate.is_absolute()
+        or candidate.name != value
+        or any(part in {"", ".", ".."} for part in candidate.parts)
+        or not value.endswith(suffix)
+    ):
+        return None
+    return value
+
+
+def legacy_prepared_plan_errors(
+    prepared_doc: PlanDocument,
+    migration_id: str,
+    sources: list[dict[str, Any]],
+) -> list[str]:
+    """Validate a prepared Plan in its pre-reconciliation state.
+
+    Reconciliation proposals legitimately omit ``authority`` until their exact
+    confirmations and source archives are applied. Project the deterministic
+    authority fields on a copy and reuse the canonical Plan validator without
+    mutating or accepting the pending proposal.
+    """
+    projected = copy.deepcopy(prepared_doc.frontmatter)
+    try:
+        upgrade_reconciled_plan_to_schema3(projected, migration_id)
+    except WorkctlError as exc:
+        return [str(exc)]
+    projected["authority"] = {
+        "model": AUTHORITY_MODEL,
+        "state": AUTHORITY_STATE,
+        "canonical_plan_id": projected.get("plan_id"),
+        "migration_id": migration_id,
+        "sources": sources,
+        "confirmations": {},
+    }
+    errors = validate_frontmatter(projected, reject_blocking_artifacts=False)
+    if not prepared_doc.body.strip():
+        errors.append("Plan body must not be empty")
+    return errors
+
+
+def legacy_proposal_errors(legacy_plan: Path) -> list[str]:
+    """Validate the closed legacy reconciliation-proposal side tree.
+
+    Proposal ownership is proven structurally, not from the directory name.
+    External source hashes are retained as proposal bytes but are not re-certified
+    by layout migration, and any already-bound confirmation remains fail-closed.
+    """
+    proposals = legacy_plan / "proposals"
+    if not proposals.exists() and not proposals.is_symlink():
+        return []
+    if proposals.is_symlink() or not proposals.is_dir():
+        return ["legacy proposals path must be a non-symlinked ordinary directory"]
+    try:
+        tree_manifest(proposals)
+    except WorkctlError as exc:
+        return [f"legacy proposals tree is not closed: {exc}"]
+
+    errors: list[str] = []
+    for proposal in sorted(proposals.iterdir(), key=lambda item: item.name):
+        if (
+            proposal.is_symlink()
+            or not proposal.is_dir()
+            or MIGRATION_ID_RE.fullmatch(proposal.name) is None
+        ):
+            errors.append(f"legacy proposals has an unsupported entry: {proposal.name}")
+            continue
+        manifest_path = proposal / "reconciliation.yaml"
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            errors.append(f"legacy proposal {proposal.name} lacks reconciliation.yaml")
+            continue
+        try:
+            manifest = load_yaml_file(manifest_path)
+        except (WorkctlError, yaml.YAMLError):
+            errors.append(f"legacy proposal {proposal.name} manifest is invalid")
+            continue
+        required_keys = {"migration_id", "target_plan", "sources", "confirmations"}
+        allowed_keys = {*required_keys, "schema_version", "git_baseline", "agents_rewrite"}
+        if not required_keys.issubset(manifest) or not set(manifest).issubset(allowed_keys):
+            errors.append(f"legacy proposal {proposal.name} manifest keys are unsupported")
+            continue
+        if manifest.get("schema_version") not in {None, 1}:
+            errors.append(f"legacy proposal {proposal.name} schema is unsupported")
+        if manifest.get("migration_id") != proposal.name:
+            errors.append(f"legacy proposal {proposal.name} migration_id does not match")
+
+        target_value = manifest.get("target_plan")
+        prepared_name: str | None = None
+        prepared_doc: PlanDocument | None = None
+        if not isinstance(target_value, dict) or set(target_value) != {"prepared_file"}:
+            errors.append(f"legacy proposal {proposal.name} target_plan is unsupported")
+        else:
+            prepared_name = safe_proposal_child_name(
+                target_value.get("prepared_file"),
+                suffix=".prepared.md",
+            )
+            if prepared_name is None:
+                errors.append(f"legacy proposal {proposal.name} prepared file is invalid")
+        if prepared_name is not None:
+            prepared_path = proposal / prepared_name
+            if prepared_path.is_symlink() or not prepared_path.is_file():
+                errors.append(f"legacy proposal {proposal.name} prepared Plan is missing")
+            else:
+                try:
+                    prepared_doc = load_plan(prepared_path)
+                except WorkctlError:
+                    errors.append(f"legacy proposal {proposal.name} prepared Plan is invalid")
+
+        sources = manifest.get("sources")
+        validated_sources: list[dict[str, Any]] = []
+        if not isinstance(sources, list) or not sources:
+            errors.append(f"legacy proposal {proposal.name} sources must be a non-empty list")
+        else:
+            seen_sources: set[str] = set()
+            for number, source in enumerate(sources):
+                source_label = f"legacy proposal {proposal.name} source[{number}]"
+                if not isinstance(source, dict):
+                    errors.append(f"{source_label} must be a mapping")
+                    continue
+                required_source_keys = {"path", "role", "sha256", "classification"}
+                allowed_source_keys = {*required_source_keys, "revision"}
+                if not required_source_keys.issubset(source) or not set(source).issubset(
+                    allowed_source_keys
+                ):
+                    errors.append(f"{source_label} keys are unsupported")
+                    continue
+                source_path = source.get("path")
+                if (
+                    not isinstance(source_path, str)
+                    or not source_path
+                    or Path(source_path).is_absolute()
+                    or any(part in {"", ".", ".."} for part in Path(source_path).parts)
+                    or source_path in seen_sources
+                ):
+                    errors.append(f"{source_label} path is invalid")
+                else:
+                    seen_sources.add(source_path)
+                if source.get("role") not in SOURCE_ROLES:
+                    errors.append(f"{source_label} role is unsupported")
+                if source.get("classification") != "CONFIRMED_AUTHORITY":
+                    errors.append(f"{source_label} classification is unsupported")
+                if SHA256_RE.fullmatch(str(source.get("sha256"))) is None:
+                    errors.append(f"{source_label} sha256 is invalid")
+                revision = source.get("revision")
+                if revision is not None and (type(revision) is not int or revision < 1):
+                    errors.append(f"{source_label} revision is invalid")
+                if not any(error.startswith(source_label) for error in errors):
+                    assert isinstance(source_path, str)
+                    normalized_source: dict[str, Any] = {
+                        "path": source_path,
+                        "role": source["role"],
+                        "sha256": source["sha256"],
+                        "archive_path": archive_path_for_source(proposal.name, source_path),
+                        "classification": source["classification"],
+                    }
+                    if revision is not None:
+                        normalized_source["revision"] = revision
+                    validated_sources.append(normalized_source)
+
+        if prepared_doc is not None:
+            prepared_errors = legacy_prepared_plan_errors(
+                prepared_doc,
+                proposal.name,
+                validated_sources,
+            )
+            if prepared_doc.frontmatter.get("status") != "active" or prepared_errors:
+                errors.append(
+                    f"legacy proposal {proposal.name} prepared Plan contract is unsupported"
+                )
+
+        git_baseline = manifest.get("git_baseline")
+        if git_baseline is not None and (
+            not isinstance(git_baseline, str)
+            or re.fullmatch(r"[0-9a-f]{40,64}", git_baseline) is None
+        ):
+            errors.append(f"legacy proposal {proposal.name} git_baseline is invalid")
+        confirmations_value = manifest.get("confirmations")
+        if not isinstance(confirmations_value, dict) or confirmations_value:
+            errors.append(
+                f"legacy proposal {proposal.name} has confirmations requiring reclassification"
+            )
+
+        expected_children = {"reconciliation.yaml"}
+        if prepared_name is not None:
+            expected_children.add(prepared_name)
+        agents_value = manifest.get("agents_rewrite")
+        if agents_value is not None:
+            replacement_name: str | None = None
+            if not isinstance(agents_value, dict) or set(agents_value) != {
+                "path",
+                "sha256",
+                "replacement_file",
+            }:
+                errors.append(f"legacy proposal {proposal.name} agents_rewrite is unsupported")
+            else:
+                replacement_name = safe_proposal_child_name(
+                    agents_value.get("replacement_file"),
+                    suffix=".proposed.md",
+                )
+                if (
+                    agents_value.get("path") != "AGENTS.md"
+                    or SHA256_RE.fullmatch(str(agents_value.get("sha256"))) is None
+                    or replacement_name is None
+                ):
+                    errors.append(f"legacy proposal {proposal.name} agents_rewrite is invalid")
+            if replacement_name is not None:
+                replacement_path = proposal / replacement_name
+                expected_children.add(replacement_name)
+                if replacement_path.is_symlink() or not replacement_path.is_file():
+                    errors.append(f"legacy proposal {proposal.name} AGENTS replacement is missing")
+
+        actual_children = {child.name for child in proposal.iterdir()}
+        if actual_children != expected_children:
+            errors.append(f"legacy proposal {proposal.name} inventory is not closed")
+    return errors
 
 
 def legacy_journal_errors(path: Path) -> list[str]:
@@ -1386,6 +1761,7 @@ def classify_legacy_layout(
     unexpected = sorted(child.name for child in path.iterdir() if child.name not in allowed_names)
     if unexpected:
         blockers.append("legacy _Plan has unregistered direct children: " + ", ".join(unexpected))
+    blockers.extend(legacy_proposal_errors(path))
     index = path / "index.yaml"
     if not index.is_file() or index.is_symlink():
         blockers.append("legacy _Plan has features but no regular index.yaml")
@@ -3477,6 +3853,8 @@ def validate_preparing_layout_payload(root: Path, journal: dict[str, Any]) -> No
     )
     expected_paths = {
         "staged_plan": (staging / PLAN_DIR_NAME).as_posix(),
+        "staged_proposals": (staging / "proposals").as_posix(),
+        "target_proposals": proposals_dir(root).as_posix(),
         "backup_plan": (backup / PLAN_DIR_NAME).as_posix(),
         "original_evidence": (evidence / f"legacy-{PLAN_DIR_NAME}").as_posix(),
     }
@@ -3527,6 +3905,17 @@ def validate_preparing_layout_payload(root: Path, journal: dict[str, Any]) -> No
         else:
             raise WorkctlError("INVALID_PREPARING_LAYOUT_JOURNAL")
     if manifest_sha256(legacy_manifest) != journal.get("legacy_manifest_sha256"):
+        raise WorkctlError("INVALID_PREPARING_LAYOUT_JOURNAL")
+    legacy_proposals_manifest = journal.get("legacy_proposals_manifest")
+    legacy_proposals_sha256 = journal.get("legacy_proposals_sha256")
+    if (
+        not isinstance(legacy_proposals_manifest, list)
+        or not isinstance(legacy_proposals_sha256, str)
+        or SHA256_RE.fullmatch(legacy_proposals_sha256) is None
+        or manifest_sha256(legacy_proposals_manifest) != legacy_proposals_sha256
+        or proposal_manifest_from_plan_manifest(cast(list[dict[str, object]], legacy_manifest))
+        != legacy_proposals_manifest
+    ):
         raise WorkctlError("INVALID_PREPARING_LAYOUT_JOURNAL")
     adoption_sha256 = journal.get("legacy_adoption_sha256")
     if not isinstance(adoption_sha256, str) or SHA256_RE.fullmatch(adoption_sha256) is None:
@@ -3958,6 +4347,41 @@ def stage_proven_logs(
     return records
 
 
+def proposal_tree_manifest(legacy_plan: Path) -> list[dict[str, object]]:
+    """Return the exact legacy proposal side-tree manifest, or an empty manifest."""
+    proposals = legacy_plan / "proposals"
+    if not proposals.exists() and not proposals.is_symlink():
+        return []
+    return tree_manifest(proposals)
+
+
+def staged_proposal_records(staged_proposals: Path) -> list[dict[str, object]]:
+    """Describe each staged reconciliation proposal for idempotent activation."""
+    if not staged_proposals.exists() and not staged_proposals.is_symlink():
+        return []
+    if staged_proposals.is_symlink() or not staged_proposals.is_dir():
+        raise WorkctlError("STAGED_LAYOUT_PROPOSALS_INVALID")
+    records: list[dict[str, object]] = []
+    for proposal in sorted(staged_proposals.iterdir(), key=lambda item: item.name):
+        if (
+            proposal.is_symlink()
+            or not proposal.is_dir()
+            or MIGRATION_ID_RE.fullmatch(proposal.name) is None
+        ):
+            raise WorkctlError("STAGED_LAYOUT_PROPOSALS_INVALID")
+        manifest = tree_manifest(proposal)
+        records.append(
+            {
+                "migration_id": proposal.name,
+                "manifest": manifest,
+                "manifest_sha256": manifest_sha256(manifest),
+                "staged_path": proposal.as_posix(),
+                "target": (Path(GOVERNANCE_DIR_NAME) / "proposals" / proposal.name).as_posix(),
+            }
+        )
+    return records
+
+
 def validate_staged_plan(staged_plan: Path, active_name: str) -> None:
     """Validate staged schema, index, and recursive predecessor hashes before activation."""
     index = load_yaml_file(staged_plan / "index.yaml")
@@ -3999,6 +4423,10 @@ def prepare_layout_transaction(
     source_digest = manifest_sha256(source_manifest)
     if source_digest != legacy.manifest_sha256:
         raise WorkctlError("LEGACY_LAYOUT_INPUT_DRIFT")
+    legacy_proposals_manifest = proposal_manifest_from_plan_manifest(source_manifest)
+    if proposal_tree_manifest(legacy_plan_dir(root)) != legacy_proposals_manifest:
+        raise WorkctlError("LEGACY_PROPOSALS_INPUT_DRIFT")
+    legacy_proposals_digest = manifest_sha256(legacy_proposals_manifest)
     git_baseline = current_layout_git_baseline(root)
     evidence_mapping, referenced_logs = legacy_evidence_reference_mapping(
         root, legacy_plan_dir(root), legacy.active_plan_path
@@ -4017,6 +4445,7 @@ def prepare_layout_transaction(
     adoption_sha256 = sha256_file(adoption)
     ensure_directory_durable(transaction)
     staged_plan = staging / PLAN_DIR_NAME
+    staged_proposals = staging / "proposals"
     original_plan = evidence / f"legacy-{PLAN_DIR_NAME}"
     journal: dict[str, Any] = {
         "schema_version": 1,
@@ -4029,11 +4458,15 @@ def prepare_layout_transaction(
         "active_plan_path": legacy.active_plan_path,
         "legacy_manifest": source_manifest,
         "legacy_manifest_sha256": source_digest,
+        "legacy_proposals_manifest": legacy_proposals_manifest,
+        "legacy_proposals_sha256": legacy_proposals_digest,
         "legacy_adoption_sha256": adoption_sha256,
         "git_baseline": git_baseline,
         "planned_log_files": planned_logs,
         "paths": {
             "staged_plan": staged_plan.as_posix(),
+            "staged_proposals": staged_proposals.as_posix(),
+            "target_proposals": proposals_dir(root).as_posix(),
             "backup_plan": (backup / PLAN_DIR_NAME).as_posix(),
             "original_evidence": original_plan.as_posix(),
         },
@@ -4049,11 +4482,21 @@ def prepare_layout_transaction(
         staged_plan,
         ignore=shutil.ignore_patterns(".workctl.lock"),
     )
+    layout_test_interrupt("legacy-plan-staging")
     shutil.copytree(
         legacy_plan_dir(root),
         original_plan,
         ignore=shutil.ignore_patterns(".workctl.lock"),
     )
+    staged_plan_proposals = staged_plan / "proposals"
+    if staged_plan_proposals.exists() or staged_plan_proposals.is_symlink():
+        if staged_plan_proposals.is_symlink() or not staged_plan_proposals.is_dir():
+            raise WorkctlError("STAGED_LAYOUT_PROPOSALS_INVALID")
+        durable_replace(staged_plan_proposals, staged_proposals)
+        layout_test_interrupt("proposal-staging")
+    proposal_records = staged_proposal_records(staged_proposals)
+    if manifest_sha256(proposal_tree_manifest(staging)) != legacy_proposals_digest:
+        raise WorkctlError("STAGED_LAYOUT_PROPOSALS_MANIFEST_MISMATCH")
     conversions: list[dict[str, object]] = []
     convert_lineage_plans(
         staged_plan,
@@ -4076,6 +4519,8 @@ def prepare_layout_transaction(
         "legacy_manifest_sha256": source_digest,
         "legacy_adoption_sha256": adoption_sha256,
         "conversion_table_sha256": conversion_digest,
+        "legacy_proposals_sha256": legacy_proposals_digest,
+        "new_proposals_baseline_sha256": legacy_proposals_digest,
         "created_at": utc_now(),
     }
     write_atomic(
@@ -4098,6 +4543,8 @@ def prepare_layout_transaction(
             "conversion_table": conversions,
             "conversion_table_sha256": conversion_digest,
             "log_files": log_files,
+            "proposal_trees": proposal_records,
+            "new_proposals_baseline_sha256": legacy_proposals_digest,
             "completed_operations": ["snapshot", "staging", "conversion", "staged-validation"],
         }
     )
@@ -4113,6 +4560,8 @@ def verify_layout_inputs(root: Path, journal: dict[str, Any]) -> None:
     actual_manifest = tree_manifest(legacy, exclude_names={".workctl.lock"})
     if manifest_sha256(actual_manifest) != journal.get("legacy_manifest_sha256"):
         raise WorkctlError("LEGACY_LAYOUT_INPUT_DRIFT")
+    if manifest_sha256(proposal_tree_manifest(legacy)) != journal.get("legacy_proposals_sha256"):
+        raise WorkctlError("LEGACY_PROPOSALS_INPUT_DRIFT")
     if current_layout_git_baseline(root) != journal.get("git_baseline"):
         raise WorkctlError("LAYOUT_GIT_BASELINE_DRIFT")
     adoption = legacy_adoption_path(root)
@@ -4134,8 +4583,278 @@ def verify_layout_inputs(root: Path, journal: dict[str, Any]) -> None:
             raise WorkctlError(f"LAYOUT_LOG_INPUT_DRIFT: {record.get('source')}")
 
 
+def layout_proposal_records(
+    root: Path,
+    journal: dict[str, Any],
+) -> list[dict[str, object]]:
+    """Validate and return proposal activation records from a layout journal."""
+    raw_records = journal.get("proposal_trees")
+    if not isinstance(raw_records, list):
+        raise WorkctlError("INVALID_LAYOUT_PROPOSAL_JOURNAL")
+    transaction_id = journal.get("transaction_id")
+    if not isinstance(transaction_id, str):
+        raise WorkctlError("INVALID_LAYOUT_PROPOSAL_JOURNAL")
+    _transaction, _journal, staging, _backup, _evidence, _guard = layout_transaction_paths(
+        root,
+        transaction_id,
+    )
+    seen: set[str] = set()
+    records: list[dict[str, object]] = []
+    for raw_record in raw_records:
+        if not isinstance(raw_record, dict) or set(raw_record) != {
+            "migration_id",
+            "manifest",
+            "manifest_sha256",
+            "staged_path",
+            "target",
+        }:
+            raise WorkctlError("INVALID_LAYOUT_PROPOSAL_JOURNAL")
+        migration_id = raw_record.get("migration_id")
+        manifest = raw_record.get("manifest")
+        manifest_digest = raw_record.get("manifest_sha256")
+        if (
+            not isinstance(migration_id, str)
+            or MIGRATION_ID_RE.fullmatch(migration_id) is None
+            or migration_id in seen
+            or not isinstance(manifest, list)
+            or not isinstance(manifest_digest, str)
+            or SHA256_RE.fullmatch(manifest_digest) is None
+            or manifest_sha256(manifest) != manifest_digest
+            or raw_record.get("staged_path") != (staging / "proposals" / migration_id).as_posix()
+            or raw_record.get("target")
+            != (Path(GOVERNANCE_DIR_NAME) / "proposals" / migration_id).as_posix()
+        ):
+            raise WorkctlError("INVALID_LAYOUT_PROPOSAL_JOURNAL")
+        seen.add(migration_id)
+        records.append(cast(dict[str, object], raw_record))
+    return records
+
+
+def validate_active_layout_journal_artifacts(
+    root: Path,
+    journal_path: Path,
+    journal: dict[str, Any],
+) -> None:
+    """Bind an active journal to the exact controller artifacts already on disk."""
+    transaction_id = journal.get("transaction_id")
+    status = journal.get("status")
+    if not isinstance(transaction_id, str) or status not in {
+        "plan-activated",
+        "version-pending",
+    }:
+        raise WorkctlError("INVALID_ACTIVE_LAYOUT_JOURNAL")
+    transaction, expected_journal, staging, backup, evidence, guard = layout_transaction_paths(
+        root,
+        transaction_id,
+    )
+    active_plan_id = journal.get("active_plan_id")
+    expected_operations = [
+        "snapshot",
+        "staging",
+        "conversion",
+        "staged-validation",
+        "legacy-backup",
+        "plan-activation",
+    ]
+    if status == "version-pending":
+        expected_operations.extend(["side-files", "final-validation"])
+    legacy_manifest = journal.get("legacy_manifest")
+    legacy_proposals_manifest = journal.get("legacy_proposals_manifest")
+    new_layout_manifest = journal.get("new_layout_manifest")
+    conversion_table = journal.get("conversion_table")
+    expected_paths = {
+        "staged_plan": (staging / PLAN_DIR_NAME).as_posix(),
+        "staged_proposals": (staging / "proposals").as_posix(),
+        "target_proposals": proposals_dir(root).as_posix(),
+        "backup_plan": (backup / PLAN_DIR_NAME).as_posix(),
+        "original_evidence": (evidence / f"legacy-{PLAN_DIR_NAME}").as_posix(),
+    }
+    if (
+        journal_path != expected_journal
+        or journal_path.parent != transaction
+        or set(journal) != ACTIVE_LAYOUT_JOURNAL_KEYS
+        or journal.get("schema_version") != 1
+        or journal.get("kind") != "layout-migration"
+        or journal_path.parent.name != transaction_id
+        or not isinstance(active_plan_id, str)
+        or PLAN_ID_RE.fullmatch(active_plan_id) is None
+        or journal.get("active_plan_path") != f"{active_plan_id}.md"
+        or not isinstance(journal.get("created_at"), str)
+        or not journal.get("created_at")
+        or not isinstance(journal.get("updated_at"), str)
+        or not journal.get("updated_at")
+        or not isinstance(journal.get("git_baseline"), dict)
+        or journal.get("paths") != expected_paths
+        or journal.get("completed_operations") != expected_operations
+        or not isinstance(journal.get("log_files"), list)
+        or not isinstance(legacy_manifest, list)
+        or manifest_sha256(cast(list[dict[str, object]], legacy_manifest))
+        != journal.get("legacy_manifest_sha256")
+        or not isinstance(legacy_proposals_manifest, list)
+        or manifest_sha256(cast(list[dict[str, object]], legacy_proposals_manifest))
+        != journal.get("legacy_proposals_sha256")
+        or proposal_manifest_from_plan_manifest(cast(list[dict[str, object]], legacy_manifest))
+        != legacy_proposals_manifest
+        or not isinstance(new_layout_manifest, list)
+        or manifest_sha256(cast(list[dict[str, object]], new_layout_manifest))
+        != journal.get("new_layout_baseline_sha256")
+        or not isinstance(conversion_table, list)
+        or manifest_sha256(cast(list[dict[str, object]], conversion_table))
+        != journal.get("conversion_table_sha256")
+        or journal.get("new_proposals_baseline_sha256") != journal.get("legacy_proposals_sha256")
+    ):
+        raise WorkctlError("INVALID_ACTIVE_LAYOUT_JOURNAL")
+    records = layout_proposal_records(root, journal)
+    combined_manifest: list[dict[str, object]] = []
+    for record in records:
+        migration_id = str(record["migration_id"])
+        combined_manifest.append({"path": migration_id, "kind": "directory"})
+        for entry in cast(list[dict[str, object]], record["manifest"]):
+            combined_manifest.append(
+                {
+                    **entry,
+                    "path": f"{migration_id}/{entry['path']}",
+                }
+            )
+    combined_manifest.sort(key=lambda entry: str(entry["path"]))
+    canonical_plan = plan_dir(root)
+    backup_plan = backup / PLAN_DIR_NAME
+    original_evidence = evidence / f"legacy-{PLAN_DIR_NAME}"
+    adoption = legacy_adoption_path(root)
+    proof_relative = (Path(".migrations") / f"{transaction_id}.yaml").as_posix()
+    proof = canonical_plan / proof_relative
+    try:
+        adoption_payload = json.loads(adoption.read_text(encoding="utf-8"))
+        proof_payload = load_yaml_file(proof)
+        identity = git_worktree_identity(root)
+    except (OSError, json.JSONDecodeError, WorkctlError, yaml.YAMLError) as exc:
+        raise WorkctlError("INVALID_ACTIVE_LAYOUT_JOURNAL") from exc
+    expected_adoption = {
+        "schema_version": 1,
+        "kind": "work-governance-legacy-adoption",
+        "action_revision": LEGACY_MIGRATION_ACTION_REVISION,
+        "project_root": root.resolve().as_posix(),
+        "worktree_identity": identity,
+        "active_plan_id": active_plan_id,
+        "active_plan_path": journal.get("active_plan_path"),
+        "legacy_manifest_sha256": journal.get("legacy_manifest_sha256"),
+        "controller_sha256": sha256_file(Path(__file__).resolve()),
+    }
+    expected_proof = {
+        "schema_version": 1,
+        "kind": "layout-migration-proof",
+        "transaction_id": transaction_id,
+        "status": "prepared",
+        "legacy_manifest_sha256": journal.get("legacy_manifest_sha256"),
+        "legacy_adoption_sha256": journal.get("legacy_adoption_sha256"),
+        "conversion_table_sha256": journal.get("conversion_table_sha256"),
+        "legacy_proposals_sha256": journal.get("legacy_proposals_sha256"),
+        "new_proposals_baseline_sha256": journal.get("new_proposals_baseline_sha256"),
+    }
+    expected_proposals = {
+        str(record["migration_id"]): cast(
+            list[dict[str, object]],
+            record["manifest"],
+        )
+        for record in records
+    }
+    target_root = proposals_dir(root)
+    staged_root = staging / "proposals"
+    if target_root.is_symlink() or (target_root.exists() and not target_root.is_dir()):
+        raise WorkctlError("INVALID_ACTIVE_LAYOUT_JOURNAL")
+    if staged_root.is_symlink() or (staged_root.exists() and not staged_root.is_dir()):
+        raise WorkctlError("INVALID_ACTIVE_LAYOUT_JOURNAL")
+    actual_names = (
+        {child.name for child in target_root.iterdir()} if target_root.is_dir() else set()
+    )
+    staged_names = (
+        {child.name for child in staged_root.iterdir()} if staged_root.is_dir() else set()
+    )
+    if (
+        combined_manifest != legacy_proposals_manifest
+        or tree_manifest(canonical_plan) != new_layout_manifest
+        or tree_manifest(backup_plan, exclude_names={".workctl.lock"}) != legacy_manifest
+        or tree_manifest(original_evidence) != legacy_manifest
+        or adoption.is_symlink()
+        or not adoption.is_file()
+        or sha256_file(adoption) != journal.get("legacy_adoption_sha256")
+        or proof.is_symlink()
+        or not proof.is_file()
+        or not any(
+            entry.get("path") == proof_relative and entry.get("kind") == "file"
+            for entry in cast(list[dict[str, object]], new_layout_manifest)
+        )
+        or not isinstance(adoption_payload, dict)
+        or set(adoption_payload) != LEGACY_ADOPTION_KEYS
+        or any(adoption_payload.get(field) != value for field, value in expected_adoption.items())
+        or not valid_reference(adoption_payload.get("confirmation_ref"))
+        or not isinstance(adoption_payload.get("created_at"), str)
+        or not adoption_payload.get("created_at")
+        or set(proof_payload) != LAYOUT_PROPOSAL_PROOF_KEYS
+        or any(proof_payload.get(field) != value for field, value in expected_proof.items())
+        or not isinstance(proof_payload.get("created_at"), str)
+        or not proof_payload.get("created_at")
+        or not actual_names.issubset(expected_proposals)
+        or not staged_names.issubset(expected_proposals)
+        or actual_names & staged_names
+        or actual_names | staged_names != set(expected_proposals)
+        or (status == "version-pending" and staged_names)
+        or any(
+            tree_manifest(target_root / name) != expected_proposals[name] for name in actual_names
+        )
+        or any(
+            tree_manifest(staged_root / name) != expected_proposals[name] for name in staged_names
+        )
+        or (staging / PLAN_DIR_NAME).exists()
+        or (staging / PLAN_DIR_NAME).is_symlink()
+        or (
+            status == "plan-activated"
+            and (
+                guard.is_symlink()
+                or not guard.is_file()
+                or guard.read_text(encoding="utf-8") != "WORK_GOVERNANCE_LAYOUT_ACTIVATION_GUARD\n"
+            )
+        )
+        or (status == "version-pending" and (guard.exists() or guard.is_symlink()))
+    ):
+        raise WorkctlError("INVALID_ACTIVE_LAYOUT_JOURNAL")
+
+
+def install_staged_proposals(root: Path, journal: dict[str, Any]) -> None:
+    """Install each validated proposal tree idempotently under the canonical side root."""
+    target_root = proposals_dir(root)
+    reject_symlink_components(root, target_root)
+    if target_root.is_symlink() or (target_root.exists() and not target_root.is_dir()):
+        raise WorkctlError("LAYOUT_PROPOSALS_TARGET_INVALID")
+    ensure_directory_durable(target_root)
+    for record in layout_proposal_records(root, journal):
+        migration_id = str(record["migration_id"])
+        expected_manifest = cast(list[dict[str, object]], record["manifest"])
+        source = Path(str(record["staged_path"]))
+        target = root / str(record["target"])
+        reject_symlink_components(root, target)
+        if target.exists() or target.is_symlink():
+            if (
+                target.is_symlink()
+                or not target.is_dir()
+                or tree_manifest(target) != expected_manifest
+            ):
+                raise WorkctlError(f"LAYOUT_PROPOSAL_TARGET_CONFLICT: {migration_id}")
+            if source.exists() or source.is_symlink():
+                raise WorkctlError(f"LAYOUT_PROPOSAL_DUPLICATED: {migration_id}")
+            continue
+        if source.is_symlink() or not source.is_dir() or tree_manifest(source) != expected_manifest:
+            raise WorkctlError(f"STAGED_LAYOUT_PROPOSAL_MISMATCH: {migration_id}")
+        durable_replace(source, target)
+        layout_test_interrupt(f"proposal-activation-{migration_id}")
+    actual_digest = manifest_sha256(tree_manifest(target_root))
+    if actual_digest != journal.get("new_proposals_baseline_sha256"):
+        raise WorkctlError("LAYOUT_PROPOSALS_BASELINE_MISMATCH")
+
+
 def install_staged_side_files(root: Path, journal: dict[str, Any]) -> None:
-    """Install proven governance logs idempotently."""
+    """Install validated proposals and proven governance logs idempotently."""
+    install_staged_proposals(root, journal)
     for record in journal.get("log_files", []):
         if not isinstance(record, dict):
             raise WorkctlError("INVALID_LAYOUT_JOURNAL")
@@ -4175,6 +4894,7 @@ def commit_layout_version(root: Path, journal_path: Path, journal: dict[str, Any
         "final-validation",
     ]
     write_layout_journal(journal_path, journal)
+    validate_active_layout_journal_artifacts(root, journal_path, journal)
     completed_at = utc_now()
     payload = layout_version_payload(
         migration_status="migrated",
@@ -4199,7 +4919,7 @@ def commit_layout_version(root: Path, journal_path: Path, journal: dict[str, Any
 def resume_layout_transaction(root: Path, journal_path: Path, journal: dict[str, Any]) -> None:
     """Forward one staged or activated transaction to version commitment."""
     transaction_id = str(journal["transaction_id"])
-    _transaction, expected_journal, staging, backup, _evidence, guard = layout_transaction_paths(
+    _transaction, expected_journal, staging, backup, evidence, guard = layout_transaction_paths(
         root, transaction_id
     )
     if expected_journal != journal_path:
@@ -4208,6 +4928,16 @@ def resume_layout_transaction(root: Path, journal_path: Path, journal: dict[str,
     backup_plan = backup / PLAN_DIR_NAME
     target_plan = plan_dir(root)
     status = str(journal["status"])
+    if status in {"staged", "activating", "legacy-backed-up"}:
+        legacy_manifest = journal.get("legacy_manifest")
+        original_evidence = evidence / f"legacy-{PLAN_DIR_NAME}"
+        if (
+            not isinstance(legacy_manifest, list)
+            or tree_manifest(original_evidence) != legacy_manifest
+        ):
+            raise WorkctlError("LAYOUT_ORIGINAL_EVIDENCE_MANIFEST_MISMATCH")
+    if status in {"plan-activated", "version-pending"}:
+        validate_active_layout_journal_artifacts(root, journal_path, journal)
     if status == "committed":
         print(f"LAYOUT_ALREADY_COMMITTED {transaction_id}")
         return
@@ -4218,6 +4948,10 @@ def resume_layout_transaction(root: Path, journal_path: Path, journal: dict[str,
             != journal.get("new_layout_baseline_sha256")
         ):
             raise WorkctlError("STAGED_LAYOUT_MANIFEST_MISMATCH")
+        if manifest_sha256(proposal_tree_manifest(staging)) != journal.get(
+            "new_proposals_baseline_sha256"
+        ):
+            raise WorkctlError("STAGED_LAYOUT_PROPOSALS_MANIFEST_MISMATCH")
         journal["status"] = "activating"
         write_layout_journal(journal_path, journal)
     status = str(journal["status"])
@@ -4270,6 +5004,7 @@ def resume_layout_transaction(root: Path, journal_path: Path, journal: dict[str,
         layout_test_interrupt("plan-activation")
     if str(journal["status"]) in {"plan-activated", "version-pending"}:
         install_staged_side_files(root, journal)
+        layout_test_interrupt("proposal-activation")
         if guard.exists() and (
             not guard.is_file()
             or guard.read_text(encoding="utf-8") != "WORK_GOVERNANCE_LAYOUT_ACTIVATION_GUARD\n"
@@ -4317,6 +5052,8 @@ def abandon_layout_preparation(root: Path, journal_path: Path, journal: dict[str
     )
     expected_paths = {
         "staged_plan": (staging / PLAN_DIR_NAME).as_posix(),
+        "staged_proposals": (staging / "proposals").as_posix(),
+        "target_proposals": proposals_dir(root).as_posix(),
         "backup_plan": (backup / PLAN_DIR_NAME).as_posix(),
         "original_evidence": (evidence / f"legacy-{PLAN_DIR_NAME}").as_posix(),
     }
@@ -4340,6 +5077,8 @@ def abandon_layout_preparation(root: Path, journal_path: Path, journal: dict[str
     ):
         raise WorkctlError("INVALID_PREPARING_LAYOUT_JOURNAL")
     source_paths: set[str] = set()
+    source_file_hashes: dict[str, str] = {}
+    proposal_source_hashes: dict[str, str] = {}
     for entry in legacy_manifest:
         if (
             not isinstance(entry, dict)
@@ -4347,7 +5086,12 @@ def abandon_layout_preparation(root: Path, journal_path: Path, journal: dict[str
             or entry.get("kind") not in {"directory", "file"}
         ):
             raise WorkctlError("INVALID_PREPARING_LAYOUT_JOURNAL")
-        source_paths.add(str(entry["path"]))
+        raw_source_path = str(entry["path"])
+        source_paths.add(raw_source_path)
+        if entry.get("kind") == "file":
+            source_file_hashes[raw_source_path] = str(entry["sha256"])
+            if raw_source_path.startswith("proposals/"):
+                proposal_source_hashes[raw_source_path] = str(entry["sha256"])
     planned_log_hashes: dict[str, str] = {}
     for entry in planned_logs:
         if (
@@ -4418,7 +5162,9 @@ def abandon_layout_preparation(root: Path, journal_path: Path, journal: dict[str
             and (
                 staging.is_symlink()
                 or not staging.is_dir()
-                or not {child.name for child in staging.iterdir()}.issubset({PLAN_DIR_NAME, "logs"})
+                or not {child.name for child in staging.iterdir()}.issubset(
+                    {PLAN_DIR_NAME, "logs", "proposals"}
+                )
             )
         )
         or (
@@ -4438,6 +5184,18 @@ def abandon_layout_preparation(root: Path, journal_path: Path, journal: dict[str
     ):
         raise WorkctlError("LAYOUT_PREPARATION_INVENTORY_INVALID")
     staged_plan = staging / PLAN_DIR_NAME
+    staged_proposals = staging / "proposals"
+    legacy_proposals_manifest = cast(
+        list[dict[str, object]],
+        journal["legacy_proposals_manifest"],
+    )
+    allowed_proposal_paths: set[str] = set()
+    expected_proposal_hashes: dict[str, str] = {}
+    for entry in legacy_proposals_manifest:
+        raw_path = str(entry["path"])
+        allowed_proposal_paths.add(raw_path)
+        if entry.get("kind") == "file":
+            expected_proposal_hashes[raw_path] = str(entry["sha256"])
     proof_relative = (Path(".migrations") / f"{transaction_id}.yaml").as_posix()
     allowed_staged_plan_paths = {
         *source_paths,
@@ -4460,6 +5218,7 @@ def abandon_layout_preparation(root: Path, journal_path: Path, journal: dict[str
                 or not manifest_matches_allowed_subset(
                     staged_plan,
                     allowed_staged_plan_paths,
+                    proposal_source_hashes,
                 )
             )
         )
@@ -4468,7 +5227,11 @@ def abandon_layout_preparation(root: Path, journal_path: Path, journal: dict[str
             and (
                 original_plan.is_symlink()
                 or not original_plan.is_dir()
-                or not manifest_matches_allowed_subset(original_plan, source_paths)
+                or not manifest_matches_allowed_subset(
+                    original_plan,
+                    source_paths,
+                    source_file_hashes,
+                )
             )
         )
         or (
@@ -4480,6 +5243,18 @@ def abandon_layout_preparation(root: Path, journal_path: Path, journal: dict[str
                     staged_logs,
                     allowed_log_paths,
                     planned_log_hashes,
+                )
+            )
+        )
+        or (
+            staged_proposals.exists()
+            and (
+                staged_proposals.is_symlink()
+                or not staged_proposals.is_dir()
+                or not manifest_matches_allowed_subset(
+                    staged_proposals,
+                    allowed_proposal_paths,
+                    expected_proposal_hashes,
                 )
             )
         )
