@@ -1188,6 +1188,8 @@ def test_layout_migrates_schema_one_confirmation_without_inventing_timestamp(
             "ref": "user message 2026-07-23: continue",
         }
     ]
+    frontmatter["scope"]["include"].extend(["_Plan/", "_Plan/business-output"])
+    frontmatter["scope"]["exclude"].append("_Plan")
     write_markdown_plan(source, frontmatter)
     adopt_legacy(tmp_path)
 
@@ -1202,6 +1204,11 @@ def test_layout_migrates_schema_one_confirmation_without_inventing_timestamp(
     assert decision["ref"] == "user message 2026-07-23: continue"
     assert "accepted_at" not in decision
     assert "decided_at" not in decision
+    assert ".work-governance/_Plan/" in after["scope"]["include"]
+    assert ".work-governance/_Plan" in after["scope"]["exclude"]
+    assert "_Plan/business-output" in after["scope"]["include"]
+    assert "_Plan/" not in after["scope"]["include"]
+    assert "_Plan" not in after["scope"]["exclude"]
     status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
     plan_validation = run_workctl(tmp_path, "plan", "validate", check=False)
     assert status["layout_state"] == "LAYOUT_READY"

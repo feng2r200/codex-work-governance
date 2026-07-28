@@ -4005,6 +4005,29 @@ def rewrite_legacy_plan_path(value: str) -> str:
     return value
 
 
+def rewrite_legacy_scope_root(value: str) -> str:
+    """Translate only an exact legacy governance-root scope entry."""
+    if value == PLAN_DIR_NAME:
+        return plan_relative_path()
+    if value == f"{PLAN_DIR_NAME}/":
+        return f"{plan_relative_path()}/"
+    return value
+
+
+def convert_active_scope_paths(frontmatter: dict[str, Any]) -> None:
+    """Convert exact active scope roots without absorbing project-owned child paths."""
+    scope = frontmatter.get("scope")
+    if not isinstance(scope, dict):
+        return
+    for field in ("include", "exclude"):
+        entries = scope.get(field)
+        if isinstance(entries, list):
+            scope[field] = [
+                rewrite_legacy_scope_root(entry) if isinstance(entry, str) else entry
+                for entry in entries
+            ]
+
+
 def rewrite_evidence_reference(value: str, mapping: dict[str, str]) -> str:
     """Translate only a legacy reference bound to a staged governance target."""
     return mapping.get(value, value)
@@ -4061,6 +4084,7 @@ def converted_plan_frontmatter(
     assert isinstance(evidence_converted, dict)
     converted = evidence_converted
     if active:
+        convert_active_scope_paths(converted)
         bump_revision(converted)
     return converted
 
