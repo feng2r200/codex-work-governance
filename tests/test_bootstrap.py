@@ -591,10 +591,10 @@ def test_resume_block_reports_executed_hook_and_exact_adoption_recovery(
     assert receipt["status"] == "ENVIRONMENT_BLOCKED"
 
 
-def test_action_revision_three_accepts_and_preserves_revision_two_blocked_history(
+def test_action_revision_four_accepts_and_preserves_revision_two_blocked_history(
     tmp_path: Path,
 ) -> None:
-    """A 1.0.2 retry reads the exact 1.0.1 uncommitted claim and evidence contract."""
+    """A newer 1.0.2 action reads the exact 1.0.1 uncommitted evidence contract."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     uv_log = tmp_path / "uv.jsonl"
@@ -636,7 +636,7 @@ def test_action_revision_three_accepts_and_preserves_revision_two_blocked_histor
         fake_bin,
         uv_log,
         payload={
-            "session_id": "revision-three-retry",
+            "session_id": "revision-four-retry",
             "cwd": str(project),
             "hook_event_name": "SessionStart",
             "source": "resume",
@@ -649,8 +649,8 @@ def test_action_revision_three_accepts_and_preserves_revision_two_blocked_histor
     ]
 
     assert "LEGACY_CLASSIFICATION_REQUIRED" in (retried["hookSpecificOutput"]["additionalContext"])
-    assert current_receipt["action_revision"] == 3
-    assert {payload["action_revision"] for payload in evidence_payloads} == {2, 3}
+    assert current_receipt["action_revision"] == 4
+    assert {payload["action_revision"] for payload in evidence_payloads} == {2, 4}
 
 
 @pytest.mark.parametrize("forgery", ["invalid-json", "symlink-current", "missing-receipt"])
@@ -853,6 +853,94 @@ def test_migrated_layout_remains_ready_on_second_session(tmp_path: Path) -> None
     assert re.fullmatch(r"LAY-\d{8}T\d{6}Z-[0-9a-f]{8}-[0-9a-f]{32}", transactions[0])
     assert receipt["status"] == "READY"
     assert not (project / "_Plan").exists()
+
+
+def test_action_four_sessionstart_upgrades_action_three_scope_residual(
+    tmp_path: Path,
+) -> None:
+    """A fresh 1.0.2 session runs the real offline correction before issuing READY."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv_log = tmp_path / "uv.jsonl"
+    install_fake_uv(fake_bin, uv_log)
+    project = tmp_path / "project"
+    project.mkdir()
+    run_hook(project, fake_bin, uv_log)
+    governance = project / ".work-governance"
+    prior_command_count = len(read_uv_commands(uv_log))
+    subprocess.run(
+        [
+            sys.executable,
+            str(WORKCTL),
+            "plan",
+            "init",
+            "--plan-id",
+            "PLAN-20260728-001",
+            "--title",
+            "Action upgrade bootstrap fixture",
+        ],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    plan = governance / "_Plan" / "PLAN-20260728-001.md"
+    _, raw_frontmatter, body = plan.read_text(encoding="utf-8").split("---\n", 2)
+    frontmatter = yaml.safe_load(raw_frontmatter)
+    frontmatter["scope"]["include"].extend(["_Plan/", "_Plan/business-output"])
+    revision_before = frontmatter["revision"]
+    plan.write_text(
+        f"---\n{yaml.safe_dump(frontmatter, sort_keys=False)}---\n{body.lstrip()}",
+        encoding="utf-8",
+    )
+    version_path = governance / "version.yaml"
+    version = yaml.safe_load(version_path.read_text(encoding="utf-8"))
+    version["legacy_migration_action_revision"] = 3
+    version_path.write_text(yaml.safe_dump(version, sort_keys=False), encoding="utf-8")
+    receipt_path = governance / "bootstrap-state.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["action_revision"] = 3
+    receipt_path.write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    resumed = run_hook(
+        project,
+        fake_bin,
+        uv_log,
+        payload={
+            "session_id": "action-four-layout-upgrade",
+            "cwd": str(project),
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+        },
+    )
+    resumed_commands = read_uv_commands(uv_log)[prior_command_count:]
+    current_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    current_version = yaml.safe_load(version_path.read_text(encoding="utf-8"))
+    _, corrected_raw, _corrected_body = plan.read_text(encoding="utf-8").split("---\n", 2)
+    corrected = yaml.safe_load(corrected_raw)
+    proofs = list((governance / "_Plan" / ".migrations").glob("LAY-*.yaml"))
+
+    assert "WORK_GOVERNANCE_BOOTSTRAP READY" in (
+        resumed["hookSpecificOutput"]["additionalContext"]
+    )
+    assert len(resumed_commands) == 4
+    assert resumed_commands[0][-1] == "--help"
+    assert "--offline" not in resumed_commands[0]
+    assert all("--offline" in command for command in resumed_commands[1:])
+    assert current_receipt["status"] == "READY"
+    assert current_receipt["action_revision"] == 4
+    assert current_version["legacy_migration_action_revision"] == 4
+    assert corrected["revision"] == revision_before + 1
+    assert ".work-governance/_Plan/" in corrected["scope"]["include"]
+    assert "_Plan/business-output" in corrected["scope"]["include"]
+    assert "_Plan/" not in corrected["scope"]["include"]
+    assert len(proofs) == 1
+    assert yaml.safe_load(proofs[0].read_text(encoding="utf-8"))["kind"] == (
+        "layout-action-upgrade-proof"
+    )
 
 
 def test_migrated_layout_with_suspect_artifact_recovers_prior_minimal_receipt(

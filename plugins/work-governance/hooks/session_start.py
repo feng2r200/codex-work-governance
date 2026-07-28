@@ -23,8 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, cast
 
-ACTION_REVISION = 3
-SUPPORTED_ACTION_REVISIONS = {2, ACTION_REVISION}
+ACTION_REVISION = 4
+SUPPORTED_ACTION_REVISIONS = {2, 3, ACTION_REVISION}
 BOOTSTRAP_CONTRACT_VERSION = 1
 GOVERNANCE_DIR = ".work-governance"
 LOCAL_DIRECTORIES = (
@@ -318,18 +318,18 @@ def validate_active_adoption(
     expected = {
         "schema_version": 1,
         "kind": "work-governance-legacy-adoption",
-        "action_revision": ACTION_REVISION,
         "project_root": project_root.resolve().as_posix(),
         "worktree_identity": worktree_identity(project_root),
         "active_plan_id": journal.get("active_plan_id"),
         "active_plan_path": journal.get("active_plan_path"),
         "legacy_manifest_sha256": journal.get("legacy_manifest_sha256"),
-        "controller_sha256": sha256_file(plugin_root() / "scripts" / "workctl.py"),
     }
     if (
         not isinstance(payload, dict)
         or set(payload) != LEGACY_ADOPTION_KEYS
         or any(payload.get(field) != value for field, value in expected.items())
+        or payload.get("action_revision") not in SUPPORTED_ACTION_REVISIONS
+        or re.fullmatch(r"[0-9a-f]{64}", str(payload.get("controller_sha256"))) is None
         or not isinstance(payload.get("confirmation_ref"), str)
         or REFERENCE_RE.fullmatch(str(payload.get("confirmation_ref"))) is None
         or not isinstance(payload.get("created_at"), str)
