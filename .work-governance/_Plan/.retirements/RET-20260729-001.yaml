@@ -1,0 +1,73 @@
+schema_version: 1
+kind: plan-retirement-journal
+retirement_id: RET-20260729-001
+status: committed
+created_at: '2026-07-29T12:09:26+00:00'
+updated_at: '2026-07-29T12:24:22+00:00'
+source_plan:
+  path: .work-governance/_Plan/PLAN-20260728-001.md
+  plan_id: PLAN-20260728-001
+  revision: 126
+  sha256: d78f12178757bd17d5c5db3314048614c406db995030636960e51f7e4cc3e906
+index_baseline:
+  active_plan_id: PLAN-20260728-001
+  sha256: e8362dbd37597cd2d566aec2fdc9ee694622c499d9cd3ba96b825907c9003dde
+reason: The user restricted all further work to the work-governance Plan and prohibited
+  operating the PharmaceuticalGroup Plan. The only unfinished route is therefore obsolete
+  and must be retired without claiming completion.
+dispositions:
+  exclusions:
+  - description: Mutate the committed PharmaceuticalGroup Plan to correct the residual
+      exact _Plan/ scope entry, or roll back and remigrate.
+    disposition: not_required
+    reason: The user explicitly prohibited operating the PharmaceuticalGroup Plan,
+      resolving the deferred cross-project choice by removing it from this route.
+    resolution_ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
+  obligations:
+  - id: O-008
+    disposition: not_required
+    reason: The user explicitly removed PharmaceuticalGroup Plan correction from the
+      authorized route; this obligation remains unverified and is not represented
+      as completed.
+    resolution_ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
+  tasks:
+  - id: T-006
+    disposition: not_required
+    reason: The user prohibited further PharmaceuticalGroup Plan operations, so the
+      in-progress cross-project migration and validation task will not resume.
+    resolution_ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
+  validations:
+  - id: V-008
+    disposition: not_required
+    reason: The target-project correction will not be performed, so this validation
+      remains unexecuted and is not represented as passed.
+    resolution_ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
+  activation:
+    disposition: preserved
+    reason: Historical activation records remain audit evidence; retirement makes
+      no new claim about PharmaceuticalGroup activation or correction.
+    resolution_ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
+  route:
+    disposition: superseded
+    reason: The cross-project residual route is superseded by the user's instruction
+      to operate only the work-governance Plan.
+    resolution_ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
+  handoff:
+    disposition: superseded
+    reason: The handoff to a PharmaceuticalGroup session is withdrawn; no successor
+      execution queue is created in this project.
+    resolution_ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
+proposal_sha256: f11bd149ffb7e9a55b5a4ed86afb40d79e1c99a5d4b5c56e9b3f69e7ce79074b
+retirement_confirmation:
+  id: C-PLAN-RETIREMENT
+  description: Approve retirement of the exact obsolete Plan without claiming completion.
+  status: accepted
+  ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
+  accepted_at: '2026-07-29T12:09:11Z'
+  evidence_sha256: f11bd149ffb7e9a55b5a4ed86afb40d79e1c99a5d4b5c56e9b3f69e7ce79074b
+archive_path: .work-governance/_Plan/.retirements/RET-20260729-001/original.md
+staged_plan: .work-governance/_Plan/.retirements/RET-20260729-001/staging/retired-plan.md
+retired_plan_sha256: 171f47347cf273b179dc914588da75a45fad52af31bdb08b762528b705aa2218
+completed_operations:
+- retirement-source-plan
+- retirement-index-removal

@@ -2,11 +2,11 @@
 schema_version: 4
 plan_id: PLAN-20260728-001
 title: Work Governance 1.0.2 legacy proposal migration and bootstrap diagnostics
-status: retired
+status: active
 mode: autonomous
-revision: 127
+revision: 126
 created_at: '2026-07-28T01:41:31Z'
-updated_at: '2026-07-29T12:09:26+00:00'
+updated_at: '2026-07-29T11:59:19+00:00'
 scope:
   exclude:
   - description: Push, publish, create remote branches, or open a pull request.
@@ -171,12 +171,6 @@ confirmations:
     status: accepted
     ref: user:session/019fadb2-40ff-7dc3-b710-c833ee8a2f2c/turn/019fadba-ccb7-7212-8c4a-bf6e1f7642a5/sha256/487269fc02287573f1c3703da1ae294002a5015365367ccda20012dca4879588
     accepted_at: '2026-07-29T11:58:27+00:00'
-  - id: C-PLAN-RETIREMENT
-    description: Approve retirement of the exact obsolete Plan without claiming completion.
-    status: accepted
-    ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
-    accepted_at: '2026-07-29T12:09:11Z'
-    evidence_sha256: f11bd149ffb7e9a55b5a4ed86afb40d79e1c99a5d4b5c56e9b3f69e7ce79074b
 obligations:
 - description: A closed, non-symlinked legacy reconciliation proposal with supported
     schema and validated referenced files is classified as governance-owned without
@@ -1203,68 +1197,6 @@ revision_history:
     gate for every PharmaceuticalGroup write.
   confirmation_id: C-LEGACY-ROUTE-COMPLETION
   evidence_manifest: evidence:.work-governance/_Plan/.evidence/PLAN-20260728-001/d2c5338d951861b42aa895477becfdf629fd121b026fabf8f032e5d8ee6b1fe1.json
-- revision: 127
-  kind: retirement
-  changed_at: '2026-07-29T12:09:26+00:00'
-  rationale: The user restricted all further work to the work-governance Plan and
-    prohibited operating the PharmaceuticalGroup Plan. The only unfinished route is
-    therefore obsolete and must be retired without claiming completion.
-  confirmation_id: C-PLAN-RETIREMENT
-retirement:
-  retirement_id: RET-20260729-001
-  reason: The user restricted all further work to the work-governance Plan and prohibited
-    operating the PharmaceuticalGroup Plan. The only unfinished route is therefore
-    obsolete and must be retired without claiming completion.
-  retired_at: '2026-07-29T12:09:11Z'
-  proposal_sha256: f11bd149ffb7e9a55b5a4ed86afb40d79e1c99a5d4b5c56e9b3f69e7ce79074b
-  original_path: .work-governance/_Plan/.retirements/RET-20260729-001/original.md
-  original_sha256: d78f12178757bd17d5c5db3314048614c406db995030636960e51f7e4cc3e906
-  confirmation:
-    id: C-PLAN-RETIREMENT
-    ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
-    evidence_sha256: f11bd149ffb7e9a55b5a4ed86afb40d79e1c99a5d4b5c56e9b3f69e7ce79074b
-  dispositions:
-    exclusions:
-    - description: Mutate the committed PharmaceuticalGroup Plan to correct the residual
-        exact _Plan/ scope entry, or roll back and remigrate.
-      disposition: not_required
-      reason: The user explicitly prohibited operating the PharmaceuticalGroup Plan,
-        resolving the deferred cross-project choice by removing it from this route.
-      resolution_ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
-    obligations:
-    - id: O-008
-      disposition: not_required
-      reason: The user explicitly removed PharmaceuticalGroup Plan correction from
-        the authorized route; this obligation remains unverified and is not represented
-        as completed.
-      resolution_ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
-    tasks:
-    - id: T-006
-      disposition: not_required
-      reason: The user prohibited further PharmaceuticalGroup Plan operations, so
-        the in-progress cross-project migration and validation task will not resume.
-      resolution_ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
-    validations:
-    - id: V-008
-      disposition: not_required
-      reason: The target-project correction will not be performed, so this validation
-        remains unexecuted and is not represented as passed.
-      resolution_ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
-    activation:
-      disposition: preserved
-      reason: Historical activation records remain audit evidence; retirement makes
-        no new claim about PharmaceuticalGroup activation or correction.
-      resolution_ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
-    route:
-      disposition: superseded
-      reason: The cross-project residual route is superseded by the user's instruction
-        to operate only the work-governance Plan.
-      resolution_ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
-    handoff:
-      disposition: superseded
-      reason: The handoff to a PharmaceuticalGroup session is withdrawn; no successor
-        execution queue is created in this project.
-      resolution_ref: user:2026-07-29-confirm-C-PLAN-RETIREMENT
 ---
 # Work Governance 1.0.2 candidate
 
