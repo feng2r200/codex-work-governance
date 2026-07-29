@@ -23,6 +23,9 @@ request. Validation challenges claims; it does not own the parent Plan.
 - `stop-loss-audit`: whether retries changed inputs or evidence, whether an
   ineffective loop should already have stopped, and whether test additions
   have real provenance instead of serving coverage count.
+- `batch-gate-audit`: whether bulk authorization waived only repeated prompts,
+  the pilot dependency was verified before fan-out, and
+  `QUALITY_DRIFT_DETECTED` froze every dependent downstream batch.
 - `rollback-review`: whether suspect artifacts are identified and whether a
   proposed rollback, quarantine, or compensation is safe to recommend.
 

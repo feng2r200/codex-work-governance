@@ -46,6 +46,12 @@ journals. Its states are:
 - `MIGRATION_RECOVERY_REQUIRED`: a journal is incomplete or deterministic
   migration evidence is invalid.
 
+Prefer this exact form for new user decisions:
+`user:session/<SessionId>/turn/<TurnId>/sha256/<digest>`. The digest should bind
+the exact user message bytes or an immutable evidence manifest. Existing typed
+references remain valid; this is a provenance-strength preference, not a
+retroactive schema migration.
+
 Only `GOVERNED_ACTIVE` permits ordinary Plan writes or real task progress. All
 other states are fail-closed and permit only inspection, schema/full
 validation, reconciliation, and recovery.
@@ -59,6 +65,9 @@ Plan files:
 - `.work-governance/_Plan/.migrations/<migration-id>.yaml`: recoverable transaction journal.
 - `.work-governance/_Plan/.rollovers/<rollover-id>.yaml`: recoverable terminal-Plan rollover
   journal.
+- `.work-governance/_Plan/.retirements/<retirement-id>.yaml`: recoverable
+  active-Plan retirement journal; its sibling directory preserves the exact
+  original and staged retired bytes.
 - `.work-governance/_Plan/.evidence/<plan-id>/<sha256>.json`: versionable,
   immutable canonical evidence metadata.
 - `.work-governance/logs/`: append-only local process detail, never completion
@@ -157,6 +166,18 @@ Allowed structural changes:
   staged target and index hashes, then idempotently finish an interrupted
   rollover. Ordinary work remains frozen in `MIGRATION_RECOVERY_REQUIRED`
   until recovery commits.
+- `plan retire apply --manifest ... --dry-run`: require an active schema-v4
+  source, verify its ID, revision, SHA256 and exact index baseline, require an
+  explicit disposition for every unfinished Plan surface, and print the stable
+  proposal digest for `C-PLAN-RETIREMENT`.
+- `plan retire apply --manifest ...`: after digest-bound confirmation, preserve
+  the exact original bytes, write a distinct `status: retired` record, and
+  remove the active index last so authority becomes `UNMANAGED_EMPTY` rather
+  than falsely complete.
+- `plan retire recover --retirement-id ...`: authenticate the original,
+  staged retired Plan, journal, proposal, source and index state, then
+  idempotently converge an interrupted retirement. Ordinary work remains
+  frozen in `MIGRATION_RECOVERY_REQUIRED` until it commits.
 - `plan revise`: increment revision and change structure after confirmation
   when required. Activation, confirmation-bound exclusions, and terminal route
   transitions must use their own field-bound decision; an unrelated accepted
@@ -216,6 +237,18 @@ predecessor path, ID, revision and SHA256. An `AGENTS.md` or `CLAUDE.md` rule
 that explicitly names the predecessor path must be revised under its own
 authority before rollover; otherwise the controller rejects the proposal
 instead of activating a competing authority.
+
+A retirement manifest must name a `RET-YYYYMMDD-NNN` ID, exact active
+schema-v4 Plan path, ID, revision and SHA256, the active index ID and SHA256, a
+reason, and explicit dispositions for every unfinished obligation, task,
+validation, artifact, unknown, blocking exclusion, pending confirmation,
+delivery, activation, route, and handoff surface. `C-PLAN-RETIREMENT` must bind
+the dry-run proposal digest. The transaction archives the original bytes,
+records the decision without converting unfinished work to verified, writes
+the retired Plan, removes the index last, and ends at `UNMANAGED_EMPTY`. A new
+route is admitted separately through `plan admit apply`; retirement never
+silently resumes or invents a successor queue. Project rules that explicitly
+name the retiring Plan path must be revised under their own authority first.
 
 Validation standard: `plan validate` passes; archives hash to the recorded
 sources; historical paths are pointers; the index names only the canonical

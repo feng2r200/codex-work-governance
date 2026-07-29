@@ -66,6 +66,12 @@ and use the digest-bound `plan rollover apply` flow. The completed predecessor
 remains unchanged; the successor becomes authority only after index-last
 activation.
 
+Do not call an obsolete or user-withdrawn route complete. Use the
+digest-bound `plan retire apply` flow to preserve the original bytes, record
+every unfinished disposition, mark the Plan retired, and remove its index
+authority last. After retirement the project is `UNMANAGED_EMPTY`; admit any
+fresh route separately instead of reusing the retired queue.
+
 Verified obligations and validations, final artifacts, and complete delivery
 must be produced by their dedicated evidence-bound transitions. A declined
 activation decision may resolve only its bound activation, exclusion, route,

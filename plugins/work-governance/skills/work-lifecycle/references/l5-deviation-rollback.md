@@ -19,6 +19,13 @@ attempt tuples and stop adding retries or tests until a changed hypothesis can
 produce discriminating evidence. Explicit monitoring or wait requests are not
 loops merely because the observed state is unchanged.
 
+Enter L5 immediately with reason `QUALITY_DRIFT_DETECTED` when a repeated-work
+checkpoint diverges from its confirmed pilot invariant. Freeze dependent
+downstream batches, preserve the first divergent and last accepted evidence,
+and do not continue amplifying the deviation. Bulk authorization supplies no
+override; recovery still requires a discriminating cause, a bounded repair
+slice, and the applicable confirmation.
+
 Before proposing a recovery, write a root-cause challenge:
 
 - exact symptom and boundary where it was observed;

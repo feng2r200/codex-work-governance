@@ -807,6 +807,115 @@ def bind_rollover_confirmation(cwd: Path, manifest_path: Path) -> dict[str, Any]
     return dry_run
 
 
+def retirement_disposition(
+    *,
+    item_id: str | None = None,
+    disposition: str = "superseded",
+) -> dict[str, str]:
+    """Build one exact retirement disposition bound to the approving user."""
+    record = {
+        "disposition": disposition,
+        "reason": "The user replaced the obsolete route.",
+        "resolution_ref": "user:approved-retirement",
+    }
+    if item_id is not None:
+        record["id"] = item_id
+    return record
+
+
+def write_retirement_fixture(cwd: Path) -> Path:
+    """Create one active schema-v4 Plan and its exact retirement proposal."""
+    run_workctl(cwd, "layout", "migrate")
+    plan_id = "PLAN-20260728-009"
+    frontmatter = schema_v4_admission_plan(plan_id)
+    frontmatter["obligations"] = [
+        {"id": "O-001", "description": "Deliver the obsolete route.", "status": "pending"}
+    ]
+    frontmatter["artifacts"] = [{"id": "A-001", "path": "obsolete.txt", "status": "pending"}]
+    prepared = cwd / "retirement-source.md"
+    write_markdown_plan(prepared, frontmatter, "# Obsolete route\n")
+    admission = {
+        "schema_version": 1,
+        "kind": "plan-admission",
+        "transaction_id": "ADM-20260728-009",
+        "prepared_plan": prepared.name,
+        "plan_id": plan_id,
+        "plan_sha256": sha256_path(prepared),
+        "confirmation_id": "C-ADMISSION",
+        "confirmation_ref": "user:observed-admission",
+    }
+    admission_path = cwd / "retirement-admission.yaml"
+    admission_path.write_text(
+        yaml.safe_dump(admission, sort_keys=False),
+        encoding="utf-8",
+    )
+    run_workctl(cwd, "plan", "admit", "apply", "--manifest", str(admission_path))
+    source = cwd / ".work-governance" / "_Plan" / f"{plan_id}.md"
+    index = cwd / ".work-governance" / "_Plan" / "index.yaml"
+    manifest = {
+        "schema_version": 1,
+        "kind": "plan-retirement",
+        "retirement_id": "RET-20260729-001",
+        "source_plan": {
+            "path": f".work-governance/_Plan/{plan_id}.md",
+            "plan_id": plan_id,
+            "revision": 1,
+            "sha256": sha256_path(source),
+        },
+        "index_baseline": {
+            "active_plan_id": plan_id,
+            "sha256": sha256_path(index),
+        },
+        "reason": "The user replaced the obsolete route with a fresh analysis.",
+        "dispositions": {
+            "obligations": [retirement_disposition(item_id="O-001")],
+            "tasks": [retirement_disposition(item_id="T-001")],
+            "validations": [retirement_disposition(item_id="V-001")],
+            "artifacts": [retirement_disposition(item_id="A-001", disposition="preserved")],
+            "delivery": retirement_disposition(),
+            "route": retirement_disposition(),
+            "handoff": retirement_disposition(),
+        },
+        "confirmations": {},
+    }
+    manifest_path = cwd / "retirement.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
+def bind_retirement_confirmation(cwd: Path, manifest_path: Path) -> dict[str, Any]:
+    """Bind C-PLAN-RETIREMENT to the exact dry-run proposal digest."""
+    dry_run = cast(
+        dict[str, Any],
+        json.loads(
+            run_workctl(
+                cwd,
+                "plan",
+                "retire",
+                "apply",
+                "--manifest",
+                str(manifest_path),
+                "--dry-run",
+            ).stdout
+        ),
+    )
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["confirmations"]["retirement"] = {
+        "id": "C-PLAN-RETIREMENT",
+        "ref": "user:approved-retirement",
+        "accepted_at": "2026-07-29T10:00:00+00:00",
+        "evidence_sha256": dry_run["proposal_sha256"],
+    }
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    return dry_run
+
+
 def test_layout_not_applicable_commits_contract_without_plan(tmp_path: Path) -> None:
     """No-Plan bootstrap commits only the layout contract and local lock."""
     before = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
@@ -5038,6 +5147,342 @@ def test_committed_source_reversion_requires_authority_review(tmp_path: Path) ->
     assert before["authority_state"] == "AUTHORITY_REVIEW_REQUIRED"
     assert recovered.returncode == 2
     assert "NO_INCOMPLETE_MIGRATION" in recovered.stderr
+
+
+def test_retirement_dry_run_is_stable_and_requires_complete_dispositions(
+    tmp_path: Path,
+) -> None:
+    """Retirement exposes one stable digest and covers every unfinished blocker."""
+    manifest_path = write_retirement_fixture(tmp_path)
+
+    first = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "retire",
+            "apply",
+            "--manifest",
+            str(manifest_path),
+            "--dry-run",
+        ).stdout
+    )
+    second = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "retire",
+            "apply",
+            "--manifest",
+            str(manifest_path),
+            "--dry-run",
+        ).stdout
+    )
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["dispositions"]["obligations"] = []
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    incomplete = run_workctl(
+        tmp_path,
+        "plan",
+        "retire",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--dry-run",
+        check=False,
+    )
+
+    assert first == second
+    assert first["confirmations_required"] == ["C-PLAN-RETIREMENT"]
+    assert first["source_plan"]["plan_id"] == "PLAN-20260728-009"
+    assert first["index_outcome"] == "NO_PLAN"
+    assert incomplete.returncode == 2
+    assert "RETIREMENT_DISPOSITION_MISSING: obligations O-001" in incomplete.stderr
+
+
+def test_retirement_requires_digest_bound_confirmation(tmp_path: Path) -> None:
+    """Apply rejects missing or mismatched retirement confirmation evidence."""
+    manifest_path = write_retirement_fixture(tmp_path)
+    missing = run_workctl(
+        tmp_path,
+        "plan",
+        "retire",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+    )
+    bind_retirement_confirmation(tmp_path, manifest_path)
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["confirmations"]["retirement"]["evidence_sha256"] = "0" * 64
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    mismatch = run_workctl(
+        tmp_path,
+        "plan",
+        "retire",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+    )
+
+    assert missing.returncode == 2
+    assert "MANIFEST_CONFIRMATION_REQUIRED: retirement" in missing.stderr
+    assert mismatch.returncode == 2
+    assert "CONFIRMATION_EVIDENCE_MISMATCH: retirement" in mismatch.stderr
+    assert not (tmp_path / ".work-governance" / "_Plan" / ".retirements").exists()
+
+
+def test_retirement_preserves_original_and_leaves_admission_ready_no_plan(
+    tmp_path: Path,
+) -> None:
+    """A confirmed retirement archives truth and removes active authority last."""
+    manifest_path = write_retirement_fixture(tmp_path)
+    bind_retirement_confirmation(tmp_path, manifest_path)
+    source = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260728-009.md"
+    original_bytes = source.read_bytes()
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "retire",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+    )
+    retired, _ = read_plan_by_id(tmp_path, "PLAN-20260728-009")
+    authority = json.loads(run_workctl(tmp_path, "plan", "authority", "check").stdout)
+    archive = (
+        tmp_path
+        / ".work-governance"
+        / "_Plan"
+        / ".retirements"
+        / "RET-20260729-001"
+        / "original.md"
+    )
+
+    assert "PLAN_RETIREMENT_COMMITTED RET-20260729-001" in result.stdout
+    assert retired["status"] == "retired"
+    assert retired["retirement"]["proposal_sha256"]
+    assert retired["retirement"]["dispositions"]["obligations"][0]["id"] == "O-001"
+    assert archive.read_bytes() == original_bytes
+    assert not (tmp_path / ".work-governance" / "_Plan" / "index.yaml").exists()
+    assert authority["authority_state"] == "UNMANAGED_EMPTY"
+    assert run_workctl(tmp_path, "plan", "validate").stdout.strip() == "PLAN_VALID"
+
+
+def test_interrupted_retirement_freezes_work_then_recovers_idempotently(
+    tmp_path: Path,
+) -> None:
+    """A source-written/index-present interruption requires named recovery."""
+    manifest_path = write_retirement_fixture(tmp_path)
+    bind_retirement_confirmation(tmp_path, manifest_path)
+
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "retire",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={"WORKCTL_TEST_INTERRUPT_AFTER": "retirement-source-plan"},
+    )
+    during = json.loads(run_workctl(tmp_path, "plan", "authority", "check").stdout)
+    blocked = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-revision",
+        "2",
+        check=False,
+    )
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "retire",
+        "recover",
+        "--retirement-id",
+        "RET-20260729-001",
+    )
+    repeated = run_workctl(
+        tmp_path,
+        "plan",
+        "retire",
+        "recover",
+        "--retirement-id",
+        "RET-20260729-001",
+    )
+    after = json.loads(run_workctl(tmp_path, "plan", "authority", "check").stdout)
+
+    assert interrupted.returncode == 2
+    assert "SIMULATED_MIGRATION_INTERRUPT: retirement-source-plan" in interrupted.stderr
+    assert during["authority_state"] == "MIGRATION_RECOVERY_REQUIRED"
+    assert blocked.returncode == 2
+    assert "AUTHORITY_BLOCKED: MIGRATION_RECOVERY_REQUIRED" in blocked.stderr
+    assert "PLAN_RETIREMENT_COMMITTED" in recovered.stdout
+    assert "PLAN_RETIREMENT_ALREADY_COMMITTED" in repeated.stdout
+    assert after["authority_state"] == "UNMANAGED_EMPTY"
+
+
+def test_retirement_recovery_rejects_confirmation_journal_tampering(
+    tmp_path: Path,
+) -> None:
+    """Recovery authenticates the complete confirmation provenance."""
+    manifest_path = write_retirement_fixture(tmp_path)
+    bind_retirement_confirmation(tmp_path, manifest_path)
+    run_workctl(
+        tmp_path,
+        "plan",
+        "retire",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={"WORKCTL_TEST_INTERRUPT_AFTER": "retirement-source-plan"},
+    )
+    journal_path = (
+        tmp_path / ".work-governance" / "_Plan" / ".retirements" / "RET-20260729-001.yaml"
+    )
+    journal = yaml.safe_load(journal_path.read_text(encoding="utf-8"))
+    journal["retirement_confirmation"]["ref"] = "user:tampered-retirement-ref"
+    journal_path.write_text(
+        yaml.safe_dump(journal, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    recovery = run_workctl(
+        tmp_path,
+        "plan",
+        "retire",
+        "recover",
+        "--retirement-id",
+        "RET-20260729-001",
+        check=False,
+    )
+
+    assert recovery.returncode == 2
+    assert "RETIREMENT_CONFIRMATION_MISMATCH" in recovery.stderr
+    assert (tmp_path / ".work-governance" / "_Plan" / "index.yaml").is_file()
+
+
+def test_incomplete_retirement_blocks_competing_plan_recovery_routes(
+    tmp_path: Path,
+) -> None:
+    """Only retirement recovery may run while retirement is incomplete."""
+    manifest_path = write_retirement_fixture(tmp_path)
+    bind_retirement_confirmation(tmp_path, manifest_path)
+    run_workctl(
+        tmp_path,
+        "plan",
+        "retire",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={"WORKCTL_TEST_INTERRUPT_AFTER": "retirement-source-plan"},
+    )
+
+    rollover = run_workctl(
+        tmp_path,
+        "plan",
+        "rollover",
+        "recover",
+        "--rollover-id",
+        "ROL-20260729-001",
+        check=False,
+    )
+    reconciliation = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile",
+        "recover",
+        check=False,
+    )
+
+    assert rollover.returncode == 2
+    assert "RETIREMENT_RECOVERY_REQUIRED" in rollover.stderr
+    assert reconciliation.returncode == 2
+    assert "RETIREMENT_RECOVERY_REQUIRED" in reconciliation.stderr
+
+
+def test_retirement_rejects_source_index_and_project_rule_drift(
+    tmp_path: Path,
+) -> None:
+    """Retirement never guesses across source, index, or explicit-rule drift."""
+    source_case = tmp_path / "source-case"
+    source_case.mkdir()
+    manifest_path = write_retirement_fixture(source_case)
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["source_plan"]["sha256"] = "0" * 64
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    source_drift = run_workctl(
+        source_case,
+        "plan",
+        "retire",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--dry-run",
+        check=False,
+    )
+
+    index_case = tmp_path / "index-case"
+    index_case.mkdir()
+    manifest_path = write_retirement_fixture(index_case)
+    bind_retirement_confirmation(index_case, manifest_path)
+    index_path = index_case / ".work-governance" / "_Plan" / "index.yaml"
+    index = yaml.safe_load(index_path.read_text(encoding="utf-8"))
+    index["review_marker"] = "drift"
+    index_path.write_text(
+        yaml.safe_dump(index, sort_keys=False),
+        encoding="utf-8",
+    )
+    index_drift = run_workctl(
+        index_case,
+        "plan",
+        "retire",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+    )
+
+    rules_case = tmp_path / "rules-case"
+    rules_case.mkdir()
+    manifest_path = write_retirement_fixture(rules_case)
+    (rules_case / "AGENTS.md").write_text(
+        "`.work-governance/_Plan/PLAN-20260728-009.md` is the authoritative "
+        "current execution Plan.\n",
+        encoding="utf-8",
+    )
+    rule_drift = run_workctl(
+        rules_case,
+        "plan",
+        "retire",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--dry-run",
+        check=False,
+    )
+
+    assert source_drift.returncode == 2
+    assert "RETIREMENT_SOURCE_HASH_MISMATCH" in source_drift.stderr
+    assert index_drift.returncode == 2
+    assert "INDEX_BASELINE_DRIFT" in index_drift.stderr
+    assert rule_drift.returncode == 2
+    assert "RETIREMENT_PROJECT_RULE_REWRITE_REQUIRED" in rule_drift.stderr
 
 
 def test_rollover_dry_run_is_stable_and_requires_fixed_confirmation(

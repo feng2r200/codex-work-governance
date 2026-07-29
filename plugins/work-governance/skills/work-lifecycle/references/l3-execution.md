@@ -27,6 +27,13 @@ During execution:
 - never promote `.work-governance/logs` content into Plan facts without
   confirmation.
 
+For an authorized repeated-work route, execute and verify the explicit pilot
+dependency before any dependent batch. At each planned batch boundary, compare
+fresh evidence with the confirmed pilot invariant. If quality drift is
+observed, emit `QUALITY_DRIFT_DETECTED`, freeze all dependent downstream batch
+work, preserve the first divergent evidence, and enter L5. Blanket
+authorization does not permit the agent to continue through that freeze.
+
 After the smallest viable vertical slice, prefer the cheapest safe
 reality-bound probe at the actual filesystem, process, API, UI, data, or
 installation boundary when feasible. A mocked or synthetic test may precede
