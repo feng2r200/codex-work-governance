@@ -5276,6 +5276,36 @@ def test_retirement_preserves_original_and_leaves_admission_ready_no_plan(
     assert run_workctl(tmp_path, "plan", "validate").stdout.strip() == "PLAN_VALID"
 
 
+def test_retirement_allows_non_authoritative_migration_pointer(
+    tmp_path: Path,
+) -> None:
+    """Retirement leaves a valid migration pointer outside Plan validation."""
+    manifest_path = write_retirement_fixture(tmp_path)
+    bind_retirement_confirmation(tmp_path, manifest_path)
+    pointer = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260724-001.md"
+    pointer_bytes = (
+        b"# Non-authoritative migration pointer\n\n"
+        b"This path no longer controls current or future execution.\n\n"
+        b"- Canonical Plan: [PLAN-20260728-009.md](PLAN-20260728-009.md)\n"
+        b"- Migration: `MIG-20260724-001`\n"
+        b"- Marker: `WORK_GOVERNANCE_NON_AUTHORITY_POINTER`\n"
+    )
+    pointer.write_bytes(pointer_bytes)
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "retire",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+    )
+
+    assert "PLAN_RETIREMENT_COMMITTED RET-20260729-001" in result.stdout
+    assert pointer.read_bytes() == pointer_bytes
+    assert run_workctl(tmp_path, "plan", "validate").stdout.strip() == "PLAN_VALID"
+
+
 def test_interrupted_retirement_freezes_work_then_recovers_idempotently(
     tmp_path: Path,
 ) -> None:
