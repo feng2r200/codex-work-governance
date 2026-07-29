@@ -41,6 +41,13 @@ can finish before a runtime, production, publication, or live-plugin change,
 define delivery and activation separately and preserve the activation decision
 as a route-level gate.
 
+Bulk or blanket authorization waives only repeated confirmation prompts; it
+does not waive acceptance evidence. When repeated work can amplify a shared
+defect, the pilot task and validation remain explicit dependencies of every
+downstream batch. The authorization cannot satisfy or bypass the pilot gate.
+Name the confirmed pilot evidence, the invariant checked at later batch
+boundaries, and the downstream freeze condition before bulk execution starts.
+
 Do not treat examples, candidate designs, logs, or memory as confirmed facts.
 If a future agent must obey the contract, write it into the Plan frontmatter.
 If the contract is still a proposal, keep it in the reply or logs and ask for

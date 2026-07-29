@@ -42,6 +42,13 @@ component, and the recovery condition.
   excludes only local runtime content.
 - High-impact, destructive, remote, production, data, structure-revision, and
   substantive rollback decisions require confirmation before action.
+- Bulk or blanket authorization waives only repeated confirmation prompts. When
+  repeated work can amplify a shared defect, keep the pilot task and validation
+  as explicit dependencies; authorization cannot satisfy the pilot gate. Freeze
+  downstream batches on observed quality drift and enter L5 before resuming.
+- When a current user decision becomes future authority, prefer
+  `user:session/<SessionId>/turn/<TurnId>/sha256/<digest>` over a date-only
+  reference. Preserve existing typed references for backward compatibility.
 - A SubAgent may execute only within an explicit delegation contract. The parent
   agent owns the Plan, confirmation gates, and logs.
 - Completion, fix, test-pass, commit-ready, or merge-ready claims require fresh

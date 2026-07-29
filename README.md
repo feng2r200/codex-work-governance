@@ -162,7 +162,8 @@ mutable execution authority. The
 controller enforces one active execution authority, expected revisions,
 dependency and confirmation gates, migration lineage, artifact quarantine
 states, atomic Plan writes, recoverable Plan admission, reconciliation and
-terminal Plan rollover, terminal closeout, and immutable evidence records.
+terminal Plan rollover, explicit active-Plan retirement, terminal closeout,
+and immutable evidence records.
 
 Confirmations are created through `plan confirmation add`; decisions are made
 through `plan confirm` and may be
@@ -349,6 +350,32 @@ work in `MIGRATION_RECOVERY_REQUIRED` until the named recovery converges. If
 `AGENTS.md` or `CLAUDE.md` explicitly names the predecessor path as authority,
 that routing must be separately revised before rollover so it cannot recreate
 competing authority after activation.
+
+An obsolete active Plan is retired rather than falsely completed:
+
+```sh
+<receipt-bound-workctl> plan retire apply \
+  --manifest /path/to/retirement.yaml --dry-run
+<receipt-bound-workctl> plan retire apply \
+  --manifest /path/to/retirement.yaml
+<receipt-bound-workctl> plan retire recover \
+  --retirement-id RET-YYYYMMDD-NNN
+```
+
+The manifest fixes the active Plan and index hashes, records a reason and an
+explicit disposition for every unfinished Plan surface, and binds
+`C-PLAN-RETIREMENT` to the dry-run proposal digest. Apply archives the exact
+original bytes, records `status: retired` without promoting unfinished work,
+and removes the index last. The result is `UNMANAGED_EMPTY`; a fresh route uses
+normal Plan admission. Explicit project-rule routing to the retired path must
+be revised before retirement.
+
+For repeated work that can amplify a shared defect, bulk authorization waives
+only repeated prompts. A pilot task and validation remain dependencies, and
+observed quality drift freezes every dependent batch through
+`QUALITY_DRIFT_DETECTED`. New user-decision authority references should prefer
+`user:session/<SessionId>/turn/<TurnId>/sha256/<digest>`; existing typed
+references remain valid.
 
 ## Validate
 

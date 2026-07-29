@@ -7,6 +7,7 @@ LIFECYCLE_ROOT = REPOSITORY_ROOT / "plugins" / "work-governance" / "skills" / "w
 SKILL_PATH = LIFECYCLE_ROOT / "SKILL.md"
 L0_PATH = LIFECYCLE_ROOT / "references" / "l0-intake.md"
 L1_PATH = LIFECYCLE_ROOT / "references" / "l1-demand-contract.md"
+L2_PATH = LIFECYCLE_ROOT / "references" / "l2-plan-control.md"
 L3_PATH = LIFECYCLE_ROOT / "references" / "l3-execution.md"
 L4_PATH = LIFECYCLE_ROOT / "references" / "l4-validation.md"
 L5_PATH = LIFECYCLE_ROOT / "references" / "l5-deviation-rollback.md"
@@ -223,3 +224,52 @@ def test_root_cause_and_solution_challenge_precede_fix_claims() -> None:
     assert "`causal-challenge`" in independent
     assert "Keep symptoms, hypotheses, probes, and confirmed causes distinct" in truth
     assert "successful workaround does not promote a root-cause hypothesis" in truth
+
+
+def test_bulk_authorization_preserves_pilot_and_quality_drift_stop_loss() -> None:
+    """Blanket approval never certifies a pilot or permits drift amplification."""
+    demand = L1_PATH.read_text(encoding="utf-8")
+    execution = L3_PATH.read_text(encoding="utf-8")
+    deviation = L5_PATH.read_text(encoding="utf-8")
+    normalized_demand = " ".join(demand.split())
+    normalized_execution = " ".join(execution.split())
+    normalized_deviation = " ".join(deviation.split())
+
+    assert "Bulk or blanket authorization waives only repeated confirmation prompts" in (
+        normalized_demand
+    )
+    assert "pilot task and validation remain explicit dependencies" in normalized_demand
+    assert "cannot satisfy or bypass the pilot gate" in normalized_demand
+    assert "QUALITY_DRIFT_DETECTED" in normalized_execution
+    assert "freeze all dependent downstream batch work" in normalized_execution
+    assert "do not continue amplifying the deviation" in normalized_deviation
+
+
+def test_user_decision_refs_prefer_session_turn_and_evidence_hash() -> None:
+    """New decision authority is strongly attributable without breaking history."""
+    intake = L0_PATH.read_text(encoding="utf-8")
+    control = L2_PATH.read_text(encoding="utf-8")
+    normalized_control = " ".join(control.split())
+    reference = "user:session/<SessionId>/turn/<TurnId>/sha256/<digest>"
+
+    assert reference in intake
+    assert reference in control
+    assert "Prefer this exact form for new user decisions" in normalized_control
+    assert "Existing typed references remain valid" in normalized_control
+
+
+def test_retirement_is_distinct_from_completion_and_excluded_routes_stay_out() -> None:
+    """Document the general retirement path without task-specific main-flow scope."""
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+    control = L2_PATH.read_text(encoding="utf-8")
+    closeout = L6_PATH.read_text(encoding="utf-8")
+    readme = README_PATH.read_text(encoding="utf-8")
+    public_contract = "\n".join((skill, control, closeout, readme))
+
+    assert "plan retire apply" in control
+    assert "C-PLAN-RETIREMENT" in control
+    assert "status: retired" in control
+    assert "Do not call an obsolete or user-withdrawn route complete" in closeout
+    assert "The result is `UNMANAGED_EMPTY`" in readme
+    assert "modality-specific" not in public_contract
+    assert "large-session rollover" not in public_contract

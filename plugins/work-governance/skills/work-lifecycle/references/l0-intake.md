@@ -21,6 +21,13 @@ Build a compact cognition map:
 Prefer exploration over questions when the answer is discoverable locally.
 Ask only the path-changing question when user choice is required.
 
+When a current user instruction or decision will become future execution
+authority, capture its strongest available provenance. Prefer
+`user:session/<SessionId>/turn/<TurnId>/sha256/<digest>`, where the digest binds
+the exact user message bytes or an immutable evidence manifest, instead of a
+date-only label. Do not invalidate a historical typed reference merely because
+it predates this preferred form.
+
 Decide the entry route:
 
 - answer directly for low-risk single-step work;

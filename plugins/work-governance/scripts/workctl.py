@@ -34,6 +34,7 @@ import yaml
 PLAN_ID_RE = re.compile(r"^PLAN-\d{8}-\d{3}$")
 MIGRATION_ID_RE = re.compile(r"^MIG-\d{8}-\d{3}$")
 ROLLOVER_ID_RE = re.compile(r"^ROL-\d{8}-\d{3}$")
+RETIREMENT_ID_RE = re.compile(r"^RET-\d{8}-\d{3}$")
 ADMISSION_ID_RE = re.compile(r"^ADM-\d{8}-\d{3}$")
 CONTRACT_UPGRADE_ID_RE = re.compile(r"^UPG-\d{8}-\d{3}$")
 UNKNOWN_ID_RE = re.compile(r"^U-\d{3}$")
@@ -66,6 +67,7 @@ PLAN_STATES = {
     "validating",
     "publishing",
     "complete",
+    "retired",
     "blocked",
 }
 WORK_ITEM_STATES = {"pending", "in_progress", "blocked", "verified", "skipped"}
@@ -108,6 +110,13 @@ REVISION_KINDS = {
     "unknown-added",
     "unknown-resolved",
     "controlled-transition",
+    "retirement",
+}
+RETIREMENT_DISPOSITIONS = {
+    "superseded",
+    "not_required",
+    "transferred",
+    "preserved",
 }
 EVIDENCE_MANIFEST_MAX_BYTES = 64 * 1024
 EVIDENCE_MANIFEST_MAX_ITEMS = 64
@@ -146,6 +155,8 @@ AUTHORITY_BLOCKED_COMMANDS = [
     "plan reconcile recover",
     "plan rollover apply",
     "plan rollover recover",
+    "plan retire apply",
+    "plan retire recover",
 ]
 GOVERNANCE_DIR_NAME = ".work-governance"
 PLAN_DIR_NAME = "_Plan"
@@ -2473,8 +2484,8 @@ def classify_candidate(
     if "migration-pointer" in signals:
         return "NON_AUTHORITY", signals
     _, _, status = optional_plan_metadata(path)
-    if status == "complete":
-        signals.append("completed-plan")
+    if status in {"complete", "retired"}:
+        signals.append("completed-plan" if status == "complete" else "retired-plan")
         return "NON_AUTHORITY", signals
     control_signal_count = sum(signal.startswith("controls-") for signal in signals)
     if "self-claims-authority" in signals and control_signal_count >= 2:
@@ -2608,6 +2619,25 @@ def incomplete_rollover_journals(root: Path) -> list[Path]:
     return journals
 
 
+def incomplete_retirement_journals(root: Path) -> list[Path]:
+    """Return retirement journals that have not reached committed state."""
+    retirements_dir = plan_dir(root) / ".retirements"
+    if retirements_dir.is_symlink():
+        raise WorkctlError(f"RETIREMENT_PATH_SYMLINK: {plan_relative_path('.retirements')}")
+    if not retirements_dir.is_dir():
+        return []
+    journals: list[Path] = []
+    for path in sorted(retirements_dir.glob("RET-*.yaml")):
+        try:
+            payload = load_yaml_file(path)
+        except WorkctlError:
+            journals.append(path)
+            continue
+        if payload.get("status") != "committed":
+            journals.append(path)
+    return journals
+
+
 def rollover_transaction_paths(
     root: Path,
     rollover_id: str,
@@ -2636,6 +2666,45 @@ def rollover_transaction_paths(
         plan_relative_path(".rollovers", f"{rollover_id}.yaml"),
     )
     return rollover_dir, staging_dir, journal_path
+
+
+def retirement_transaction_paths(
+    root: Path,
+    retirement_id: str,
+) -> tuple[Path, Path, Path, Path]:
+    """Resolve retirement paths and reject every symlink before file access."""
+    raw_retirements_dir = plan_dir(root) / ".retirements"
+    raw_retirement_dir = raw_retirements_dir / retirement_id
+    raw_staging_dir = raw_retirement_dir / "staging"
+    raw_archive_path = raw_retirement_dir / "original.md"
+    raw_journal_path = raw_retirements_dir / f"{retirement_id}.yaml"
+    for raw_path in (
+        plan_dir(root),
+        raw_retirements_dir,
+        raw_retirement_dir,
+        raw_staging_dir,
+        raw_archive_path,
+        raw_journal_path,
+    ):
+        if raw_path.is_symlink():
+            raise WorkctlError(f"RETIREMENT_PATH_SYMLINK: {raw_path.relative_to(root).as_posix()}")
+    retirement_dir = checked_project_path(
+        root,
+        plan_relative_path(".retirements", retirement_id),
+    )
+    staging_dir = checked_project_path(
+        root,
+        plan_relative_path(".retirements", retirement_id, "staging"),
+    )
+    archive_path = checked_project_path(
+        root,
+        plan_relative_path(".retirements", retirement_id, "original.md"),
+    )
+    journal_path = checked_project_path(
+        root,
+        plan_relative_path(".retirements", f"{retirement_id}.yaml"),
+    )
+    return retirement_dir, staging_dir, archive_path, journal_path
 
 
 def reconciliation_transaction_paths(
@@ -2899,7 +2968,12 @@ def inspect_authority(
         for journal in incomplete_rollover_journals(root)
         if ignore_journal is None or journal.resolve() != ignore_journal.resolve()
     ]
-    if migration_journals or rollover_journals:
+    retirement_journals = [
+        journal
+        for journal in incomplete_retirement_journals(root)
+        if ignore_journal is None or journal.resolve() != ignore_journal.resolve()
+    ]
+    if migration_journals or rollover_journals or retirement_journals:
         blockers.extend(
             f"incomplete migration journal: {relative_project_path(root, journal)}"
             for journal in migration_journals
@@ -2907,6 +2981,10 @@ def inspect_authority(
         blockers.extend(
             f"incomplete rollover journal: {relative_project_path(root, journal)}"
             for journal in rollover_journals
+        )
+        blockers.extend(
+            f"incomplete retirement journal: {relative_project_path(root, journal)}"
+            for journal in retirement_journals
         )
         state = "MIGRATION_RECOVERY_REQUIRED"
         return AuthorityReport(state, candidates, blockers, allowed_commands_for_state(state))
@@ -3239,7 +3317,7 @@ def contract_state(frontmatter: dict[str, Any]) -> str:
     schema_version = frontmatter.get("schema_version")
     if schema_version == 4:
         return "PLAN_CONTRACT_READY"
-    if schema_version == 3 and frontmatter.get("status") != "complete":
+    if schema_version == 3 and frontmatter.get("status") not in {"complete", "retired"}:
         return "PLAN_CONTRACT_UPGRADE_REQUIRED"
     return "PLAN_CONTRACT_LEGACY_READABLE"
 
@@ -3421,6 +3499,43 @@ def set_task_status(args: argparse.Namespace, status: str) -> None:
         print(f"TASK_UPDATED {args.task_id} {status} revision={doc.frontmatter['revision']}")
 
 
+def retirement_metadata_errors(frontmatter: dict[str, Any]) -> list[str]:
+    """Validate the immutable retirement record on a retired Plan."""
+    status = frontmatter.get("status")
+    retirement = frontmatter.get("retirement")
+    if status != "retired":
+        return [] if retirement is None else ["only a retired Plan may carry retirement metadata"]
+    if not isinstance(retirement, dict):
+        return ["retired Plan requires retirement metadata"]
+    errors: list[str] = []
+    retirement_id = retirement.get("retirement_id")
+    if not isinstance(retirement_id, str) or RETIREMENT_ID_RE.fullmatch(retirement_id) is None:
+        errors.append("retirement.retirement_id must match RET-YYYYMMDD-NNN")
+    if not isinstance(retirement.get("reason"), str) or not retirement.get("reason"):
+        errors.append("retirement.reason is required")
+    for field in ("proposal_sha256", "original_sha256"):
+        value = retirement.get(field)
+        if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+            errors.append(f"retirement.{field} must be a SHA256 digest")
+    original_path = retirement.get("original_path")
+    if not isinstance(original_path, str) or not original_path:
+        errors.append("retirement.original_path is required")
+    confirmation = retirement.get("confirmation")
+    if not isinstance(confirmation, dict):
+        errors.append("retirement.confirmation must be a mapping")
+    else:
+        if confirmation.get("id") != "C-PLAN-RETIREMENT":
+            errors.append("retirement confirmation must be C-PLAN-RETIREMENT")
+        if not valid_reference(confirmation.get("ref")):
+            errors.append("retirement confirmation ref must be typed")
+        evidence_sha256 = confirmation.get("evidence_sha256")
+        if not isinstance(evidence_sha256, str) or SHA256_RE.fullmatch(evidence_sha256) is None:
+            errors.append("retirement confirmation evidence_sha256 is required")
+    if not isinstance(retirement.get("dispositions"), dict):
+        errors.append("retirement.dispositions must be a mapping")
+    return errors
+
+
 def validate_frontmatter(
     frontmatter: dict[str, Any],
     *,
@@ -3438,6 +3553,7 @@ def validate_frontmatter(
         errors.append("revision must be a positive integer")
     if frontmatter.get("status") not in PLAN_STATES:
         errors.append("status must be a supported Plan state")
+    errors.extend(retirement_metadata_errors(frontmatter))
     if frontmatter.get("mode") not in {"autonomous", "strict"}:
         errors.append("mode must be autonomous or strict")
     for field in ("title", "created_at", "updated_at"):
@@ -4037,6 +4153,37 @@ def validate_plan(
     require_governed: bool = True,
 ) -> list[str]:
     """Validate Plan structure and optionally require governed authority."""
+    if not index_path(root).is_file():
+        report = inspect_authority(root, ignore_journal=ignore_journal)
+        errors: list[str] = []
+        if report.state != "UNMANAGED_EMPTY":
+            errors.append(f"authority state is {report.state}")
+            errors.extend(report.blockers)
+            return errors
+        if plan_dir(root).is_dir():
+            for path in sorted(plan_dir(root).glob("PLAN-*.md")):
+                try:
+                    historical = load_plan(path)
+                except WorkctlError as exc:
+                    errors.append(str(exc))
+                    continue
+                if historical.frontmatter.get("status") not in {"complete", "retired"}:
+                    errors.append(
+                        f"unindexed Plan must be complete or retired: "
+                        f"{relative_project_path(root, path)}"
+                    )
+                errors.extend(
+                    f"{relative_project_path(root, path)}: {error}"
+                    for error in validate_frontmatter(
+                        historical.frontmatter,
+                        reject_blocking_artifacts=False,
+                    )
+                )
+                if not historical.body.strip():
+                    errors.append(
+                        f"{relative_project_path(root, path)}: Plan body must not be empty"
+                    )
+        return errors
     try:
         index = load_yaml_file(index_path(root))
         doc = load_plan(active_plan_path(root))
@@ -9550,6 +9697,577 @@ def resume_migration(
     print(f"MIGRATION_COMMITTED {journal['migration_id']} plan={journal['target_plan_id']}")
 
 
+def retirement_requirements(
+    frontmatter: dict[str, Any],
+) -> tuple[dict[str, set[str]], set[str]]:
+    """Return every unfinished collection item and singleton retirement blocker."""
+    collections: dict[str, set[str]] = {}
+    terminal_statuses = {
+        "obligations": {"verified", "skipped"},
+        "tasks": VERIFIED_TASK_STATES,
+        "validations": {"verified", "skipped"},
+        "artifacts": {"final"},
+        "unknowns": {"resolved"},
+    }
+    for field, terminal in terminal_statuses.items():
+        collections[field] = {
+            str(item["id"])
+            for item in frontmatter.get(field, [])
+            if isinstance(item, dict)
+            and isinstance(item.get("id"), str)
+            and item.get("status") not in terminal
+        }
+    scope = frontmatter.get("scope", {})
+    exclusions = scope.get("exclude", []) if isinstance(scope, dict) else []
+    collections["exclusions"] = {
+        str(item["description"])
+        for item in exclusions
+        if isinstance(item, dict)
+        and isinstance(item.get("description"), str)
+        and item.get("disposition") in BLOCKING_EXCLUSION_DISPOSITIONS
+    }
+    collections["confirmations"] = {
+        str(item["id"])
+        for item in confirmations(frontmatter).values()
+        if item.get("status") == "pending"
+    }
+
+    singletons: set[str] = set()
+    delivery = frontmatter.get("delivery")
+    if not isinstance(delivery, dict) or delivery.get("status") != "complete":
+        singletons.add("delivery")
+    activation = frontmatter.get("activation")
+    if not isinstance(activation, dict) or activation.get("status") not in {
+        "not_required",
+        "declined",
+    }:
+        singletons.add("activation")
+    for field in ("route", "handoff"):
+        value = frontmatter.get(field)
+        if not isinstance(value, dict) or value.get("route_status") != "terminal":
+            singletons.add(field)
+    return collections, singletons
+
+
+def validate_retirement_disposition(
+    record: object,
+    *,
+    label: str,
+    confirmation_ref: str | None,
+) -> dict[str, Any]:
+    """Validate one explicit retirement disposition and its authority reference."""
+    if not isinstance(record, dict):
+        raise WorkctlError(f"INVALID_RETIREMENT_DISPOSITION: {label}")
+    disposition = record.get("disposition")
+    reason = record.get("reason")
+    resolution_ref = record.get("resolution_ref")
+    if disposition not in RETIREMENT_DISPOSITIONS:
+        raise WorkctlError(f"INVALID_RETIREMENT_DISPOSITION: {label}")
+    if not isinstance(reason, str) or not reason:
+        raise WorkctlError(f"RETIREMENT_DISPOSITION_REASON_REQUIRED: {label}")
+    if not valid_reference(resolution_ref):
+        raise WorkctlError(f"RETIREMENT_DISPOSITION_REF_REQUIRED: {label}")
+    if confirmation_ref is not None and resolution_ref != confirmation_ref:
+        raise WorkctlError(f"RETIREMENT_DISPOSITION_REF_MISMATCH: {label}")
+    return copy.deepcopy(record)
+
+
+def normalize_retirement_dispositions(
+    frontmatter: dict[str, Any],
+    raw_dispositions: object,
+    *,
+    confirmation_ref: str | None,
+) -> dict[str, Any]:
+    """Require an exact disposition for every unfinished Plan surface."""
+    if not isinstance(raw_dispositions, dict):
+        raise WorkctlError("RETIREMENT_DISPOSITIONS_REQUIRED")
+    collection_requirements, singleton_requirements = retirement_requirements(frontmatter)
+    normalized: dict[str, Any] = {}
+    identity_fields = {
+        "exclusions": "description",
+        "obligations": "id",
+        "tasks": "id",
+        "validations": "id",
+        "artifacts": "id",
+        "unknowns": "id",
+        "confirmations": "id",
+    }
+    for field, identity_field in identity_fields.items():
+        raw_records = raw_dispositions.get(field, [])
+        if not isinstance(raw_records, list):
+            raise WorkctlError(f"INVALID_RETIREMENT_DISPOSITIONS: {field}")
+        by_identity: dict[str, dict[str, Any]] = {}
+        for raw_record in raw_records:
+            if not isinstance(raw_record, dict):
+                raise WorkctlError(f"INVALID_RETIREMENT_DISPOSITION: {field}")
+            identity = raw_record.get(identity_field)
+            if not isinstance(identity, str) or not identity:
+                raise WorkctlError(f"RETIREMENT_DISPOSITION_ID_REQUIRED: {field} {identity_field}")
+            if identity in by_identity:
+                raise WorkctlError(f"RETIREMENT_DISPOSITION_DUPLICATE: {field} {identity}")
+            by_identity[identity] = validate_retirement_disposition(
+                raw_record,
+                label=f"{field} {identity}",
+                confirmation_ref=confirmation_ref,
+            )
+        required = collection_requirements[field]
+        missing = sorted(required - set(by_identity))
+        unexpected = sorted(set(by_identity) - required)
+        if missing:
+            raise WorkctlError(f"RETIREMENT_DISPOSITION_MISSING: {field} {missing[0]}")
+        if unexpected:
+            raise WorkctlError(f"RETIREMENT_DISPOSITION_UNEXPECTED: {field} {unexpected[0]}")
+        if by_identity:
+            normalized[field] = [by_identity[key] for key in sorted(by_identity)]
+
+    for field in ("delivery", "activation", "route", "handoff"):
+        raw_record = raw_dispositions.get(field)
+        if field in singleton_requirements:
+            if raw_record is None:
+                raise WorkctlError(f"RETIREMENT_DISPOSITION_MISSING: {field}")
+            normalized[field] = validate_retirement_disposition(
+                raw_record,
+                label=field,
+                confirmation_ref=confirmation_ref,
+            )
+        elif raw_record is not None:
+            raise WorkctlError(f"RETIREMENT_DISPOSITION_UNEXPECTED: {field}")
+    return normalized
+
+
+def retirement_proposal_payload(
+    retirement_id: str,
+    source_plan: dict[str, Any],
+    index_baseline: dict[str, Any],
+    *,
+    reason: str,
+    dispositions: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the canonical payload authorized by ``C-PLAN-RETIREMENT``."""
+    return {
+        "retirement_id": retirement_id,
+        "source_plan": source_plan,
+        "index_baseline": index_baseline,
+        "reason": reason,
+        "dispositions": dispositions,
+        "index_outcome": "NO_PLAN",
+    }
+
+
+def prepare_retirement(
+    root: Path,
+    manifest_path: Path,
+    *,
+    require_confirmations: bool,
+) -> dict[str, Any]:
+    """Validate an active Plan retirement manifest and bind its exact proposal."""
+    manifest = load_yaml_file(manifest_path)
+    if manifest.get("schema_version") != 1 or manifest.get("kind") != "plan-retirement":
+        raise WorkctlError("INVALID_RETIREMENT_MANIFEST_SCHEMA")
+    retirement_id = manifest.get("retirement_id")
+    if not isinstance(retirement_id, str) or RETIREMENT_ID_RE.fullmatch(retirement_id) is None:
+        raise WorkctlError("INVALID_RETIREMENT_ID")
+    reason = manifest.get("reason")
+    if not isinstance(reason, str) or not reason:
+        raise WorkctlError("RETIREMENT_REASON_REQUIRED")
+
+    report = inspect_authority(root)
+    if report.state != "GOVERNED_ACTIVE":
+        raise WorkctlError(
+            f"AUTHORITY_BLOCKED: {report.state}; allowed={','.join(report.allowed_commands)}"
+        )
+    source_doc = load_plan(active_plan_path(root))
+    if source_doc.frontmatter.get("schema_version") != 4:
+        raise WorkctlError("RETIREMENT_SOURCE_MUST_USE_SCHEMA_VERSION_4")
+    if source_doc.frontmatter.get("status") != "active":
+        raise WorkctlError("RETIREMENT_SOURCE_NOT_ACTIVE")
+    source_relative = relative_project_path(root, source_doc.path)
+    source_candidate = next(
+        (candidate for candidate in report.candidates if candidate.path == source_relative),
+        None,
+    )
+    if source_candidate is not None and "project-rule-explicit" in source_candidate.signals:
+        raise WorkctlError(f"RETIREMENT_PROJECT_RULE_REWRITE_REQUIRED: {source_relative}")
+
+    source_value = manifest.get("source_plan")
+    if not isinstance(source_value, dict):
+        raise WorkctlError("MANIFEST_SOURCE_PLAN_REQUIRED")
+    if source_value.get("path") != source_relative:
+        raise WorkctlError(
+            f"RETIREMENT_SOURCE_PATH_MISMATCH: expected {source_relative}, "
+            f"found {source_value.get('path')}"
+        )
+    if source_value.get("plan_id") != source_doc.frontmatter.get("plan_id"):
+        raise WorkctlError("RETIREMENT_SOURCE_ID_MISMATCH")
+    if source_value.get("revision") != source_doc.frontmatter.get("revision"):
+        raise WorkctlError("RETIREMENT_SOURCE_REVISION_MISMATCH")
+    actual_source_sha256 = sha256_file(source_doc.path)
+    if source_value.get("sha256") != actual_source_sha256:
+        raise WorkctlError(
+            "RETIREMENT_SOURCE_HASH_MISMATCH: "
+            f"expected {actual_source_sha256}, found {source_value.get('sha256')}"
+        )
+    source_record = {
+        "path": source_relative,
+        "plan_id": str(source_doc.frontmatter["plan_id"]),
+        "revision": source_doc.frontmatter["revision"],
+        "sha256": actual_source_sha256,
+    }
+
+    index_value = manifest.get("index_baseline")
+    if not isinstance(index_value, dict):
+        raise WorkctlError("MANIFEST_INDEX_BASELINE_REQUIRED")
+    if index_value.get("active_plan_id") != source_doc.frontmatter.get("plan_id"):
+        raise WorkctlError("INDEX_ACTIVE_PLAN_MISMATCH")
+    actual_index_sha256 = sha256_file(index_path(root))
+    if index_value.get("sha256") != actual_index_sha256:
+        raise WorkctlError(
+            f"INDEX_BASELINE_DRIFT: expected {actual_index_sha256}, "
+            f"found {index_value.get('sha256')}"
+        )
+    index_baseline = {
+        "active_plan_id": str(source_doc.frontmatter["plan_id"]),
+        "sha256": actual_index_sha256,
+    }
+
+    confirmations_value = manifest.get("confirmations")
+    if not isinstance(confirmations_value, dict):
+        if require_confirmations:
+            raise WorkctlError("MANIFEST_CONFIRMATIONS_REQUIRED")
+        confirmations_value = {}
+    retirement_confirmation = confirmation_from_manifest(
+        confirmations_value,
+        "retirement",
+        required=require_confirmations,
+    )
+    confirmation_ref = retirement_confirmation[1] if retirement_confirmation else None
+    dispositions = normalize_retirement_dispositions(
+        source_doc.frontmatter,
+        manifest.get("dispositions"),
+        confirmation_ref=confirmation_ref,
+    )
+    proposal_payload = retirement_proposal_payload(
+        retirement_id,
+        source_record,
+        index_baseline,
+        reason=reason,
+        dispositions=dispositions,
+    )
+    proposal_sha256 = sha256_bytes(
+        json.dumps(proposal_payload, sort_keys=True, separators=(",", ":")).encode()
+    )
+    if retirement_confirmation is None:
+        retirement_confirmation = (
+            "C-PLAN-RETIREMENT",
+            "PENDING",
+            "PENDING",
+            proposal_sha256,
+        )
+    confirmation_id, confirmation_ref, accepted_at, evidence_sha256 = retirement_confirmation
+    if confirmation_id != "C-PLAN-RETIREMENT":
+        raise WorkctlError("RETIREMENT_CONFIRMATION_ID_MUST_BE_C-PLAN-RETIREMENT")
+    if require_confirmations and evidence_sha256 != proposal_sha256:
+        raise WorkctlError(f"CONFIRMATION_EVIDENCE_MISMATCH: retirement expected {proposal_sha256}")
+
+    manifest["retirement_id"] = retirement_id
+    manifest["source_plan"] = source_record
+    manifest["index_baseline"] = index_baseline
+    manifest["reason"] = reason
+    manifest["dispositions"] = dispositions
+    manifest["proposal_sha256"] = proposal_sha256
+    manifest["retirement_confirmation"] = accepted_confirmation(
+        confirmation_id,
+        confirmation_ref,
+        accepted_at,
+        evidence_sha256,
+        "Approve retirement of the exact obsolete Plan without claiming completion.",
+    )
+    return manifest
+
+
+def retired_plan_document(
+    root: Path,
+    source_doc: PlanDocument,
+    manifest: dict[str, Any],
+    archive_path: Path,
+) -> PlanDocument:
+    """Build the immutable, non-authoritative retired Plan representation."""
+    frontmatter = copy.deepcopy(source_doc.frontmatter)
+    confirmation = manifest.get("retirement_confirmation")
+    if not isinstance(confirmation, dict) or confirmation.get("status") != "accepted":
+        raise WorkctlError("RETIREMENT_CONFIRMATION_REQUIRED")
+    add_or_replace_confirmation(frontmatter, confirmation)
+    frontmatter["status"] = "retired"
+    frontmatter["retirement"] = {
+        "retirement_id": manifest["retirement_id"],
+        "reason": manifest["reason"],
+        "retired_at": confirmation["accepted_at"],
+        "proposal_sha256": manifest["proposal_sha256"],
+        "original_path": relative_project_path(root, archive_path),
+        "original_sha256": manifest["source_plan"]["sha256"],
+        "confirmation": {
+            "id": confirmation["id"],
+            "ref": confirmation["ref"],
+            "evidence_sha256": confirmation["evidence_sha256"],
+        },
+        "dispositions": copy.deepcopy(manifest["dispositions"]),
+    }
+    bump_revision(
+        frontmatter,
+        kind="retirement",
+        rationale=str(manifest["reason"]),
+        confirmation_id="C-PLAN-RETIREMENT",
+    )
+    retired = PlanDocument(source_doc.path, frontmatter, source_doc.body)
+    require_valid_candidate(retired)
+    return retired
+
+
+def stage_retirement(
+    root: Path,
+    manifest: dict[str, Any],
+) -> Path:
+    """Stage original and retired bytes, then create a recovery journal."""
+    retirement_id = str(manifest["retirement_id"])
+    _retirement_dir, staging_dir, archive_path, journal_path = retirement_transaction_paths(
+        root, retirement_id
+    )
+    if journal_path.exists():
+        raise WorkctlError(f"RETIREMENT_JOURNAL_EXISTS: {retirement_id}")
+    source = cast(dict[str, Any], manifest["source_plan"])
+    source_path = checked_project_path(root, str(source["path"]))
+    if sha256_file(source_path) != source["sha256"]:
+        raise WorkctlError(f"RETIREMENT_SOURCE_DRIFT: {source['path']}")
+    index_baseline = cast(dict[str, Any], manifest["index_baseline"])
+    if sha256_file(index_path(root)) != index_baseline["sha256"]:
+        raise WorkctlError("INDEX_BASELINE_DRIFT")
+
+    ensure_directory_durable(staging_dir)
+    write_atomic_bytes(archive_path, source_path.read_bytes())
+    source_doc = load_plan(source_path)
+    retired_doc = retired_plan_document(root, source_doc, manifest, archive_path)
+    staged_plan = staging_dir / "retired-plan.md"
+    write_atomic_bytes(staged_plan, dump_plan(retired_doc).encode())
+    journal = {
+        "schema_version": 1,
+        "kind": "plan-retirement-journal",
+        "retirement_id": retirement_id,
+        "status": "staged",
+        "created_at": utc_now(),
+        "updated_at": utc_now(),
+        "source_plan": source,
+        "index_baseline": index_baseline,
+        "reason": manifest["reason"],
+        "dispositions": manifest["dispositions"],
+        "proposal_sha256": manifest["proposal_sha256"],
+        "retirement_confirmation": manifest["retirement_confirmation"],
+        "archive_path": relative_project_path(root, archive_path),
+        "staged_plan": relative_project_path(root, staged_plan),
+        "retired_plan_sha256": sha256_file(staged_plan),
+        "completed_operations": [],
+    }
+    write_atomic(journal_path, yaml.safe_dump(journal, sort_keys=False))
+    return journal_path
+
+
+def validate_retirement_journal(
+    root: Path,
+    journal_path: Path,
+) -> tuple[dict[str, Any], PlanDocument]:
+    """Authenticate every retirement recovery input before writing."""
+    journal = load_yaml_file(journal_path)
+    retirement_id = journal.get("retirement_id")
+    if (
+        journal.get("schema_version") != 1
+        or journal.get("kind") != "plan-retirement-journal"
+        or not isinstance(retirement_id, str)
+        or RETIREMENT_ID_RE.fullmatch(retirement_id) is None
+    ):
+        raise WorkctlError("INVALID_RETIREMENT_JOURNAL")
+    expected_keys = {
+        "schema_version",
+        "kind",
+        "retirement_id",
+        "status",
+        "created_at",
+        "updated_at",
+        "source_plan",
+        "index_baseline",
+        "reason",
+        "dispositions",
+        "proposal_sha256",
+        "retirement_confirmation",
+        "archive_path",
+        "staged_plan",
+        "retired_plan_sha256",
+        "completed_operations",
+    }
+    if (
+        set(journal) != expected_keys
+        or journal.get("status") not in {"staged", "applying", "committed"}
+        or not isinstance(journal.get("completed_operations"), list)
+        or len(journal["completed_operations"]) != len(set(journal["completed_operations"]))
+        or not set(journal["completed_operations"])
+        <= {"retirement-source-plan", "retirement-index-removal"}
+    ):
+        raise WorkctlError("INVALID_RETIREMENT_JOURNAL")
+    _retirement_dir, staging_dir, archive_path, expected_journal_path = (
+        retirement_transaction_paths(root, retirement_id)
+    )
+    if journal_path.resolve() != expected_journal_path.resolve() or journal.get(
+        "archive_path"
+    ) != relative_project_path(root, archive_path):
+        raise WorkctlError("INVALID_RETIREMENT_JOURNAL")
+    source = journal.get("source_plan")
+    index_baseline = journal.get("index_baseline")
+    dispositions = journal.get("dispositions")
+    confirmation = journal.get("retirement_confirmation")
+    if (
+        not isinstance(source, dict)
+        or not isinstance(index_baseline, dict)
+        or not isinstance(dispositions, dict)
+        or not isinstance(confirmation, dict)
+    ):
+        raise WorkctlError("INVALID_RETIREMENT_JOURNAL")
+    if sha256_file(archive_path) != source.get("sha256"):
+        raise WorkctlError("RETIREMENT_ARCHIVE_HASH_MISMATCH")
+    staged_plan = checked_project_path(root, str(journal.get("staged_plan")))
+    if staged_plan != staging_dir / "retired-plan.md":
+        raise WorkctlError("INVALID_RETIREMENT_JOURNAL")
+    if sha256_file(staged_plan) != journal.get("retired_plan_sha256"):
+        raise WorkctlError("STAGED_RETIREMENT_PLAN_HASH_MISMATCH")
+    retired_doc = load_plan(staged_plan)
+    retirement = retired_doc.frontmatter.get("retirement")
+    retired_confirmation = retirement.get("confirmation") if isinstance(retirement, dict) else None
+    if (
+        retired_doc.frontmatter.get("status") != "retired"
+        or not isinstance(retirement, dict)
+        or not isinstance(retired_confirmation, dict)
+        or retirement.get("retirement_id") != retirement_id
+        or retirement.get("proposal_sha256") != journal.get("proposal_sha256")
+        or retirement.get("dispositions") != dispositions
+    ):
+        raise WorkctlError("INVALID_RETIREMENT_JOURNAL")
+    if (
+        retired_confirmation.get("id") != confirmation.get("id")
+        or retired_confirmation.get("ref") != confirmation.get("ref")
+        or retired_confirmation.get("evidence_sha256") != confirmation.get("evidence_sha256")
+        or retirement.get("retired_at") != confirmation.get("accepted_at")
+    ):
+        raise WorkctlError("RETIREMENT_CONFIRMATION_MISMATCH")
+    proposal = retirement_proposal_payload(
+        retirement_id,
+        source,
+        index_baseline,
+        reason=str(journal.get("reason")),
+        dispositions=dispositions,
+    )
+    proposal_sha256 = sha256_bytes(
+        json.dumps(proposal, sort_keys=True, separators=(",", ":")).encode()
+    )
+    if (
+        proposal_sha256 != journal.get("proposal_sha256")
+        or confirmation.get("id") != "C-PLAN-RETIREMENT"
+        or confirmation.get("status") != "accepted"
+        or confirmation.get("evidence_sha256") != proposal_sha256
+    ):
+        raise WorkctlError("RETIREMENT_PROPOSAL_HASH_MISMATCH")
+    require_valid_candidate(retired_doc)
+    return journal, retired_doc
+
+
+def resume_retirement(root: Path, journal_path: Path) -> None:
+    """Idempotently retire the source and remove its index authority last."""
+    journal, retired_doc = validate_retirement_journal(root, journal_path)
+    retirement_id = str(journal["retirement_id"])
+    if journal.get("status") == "committed":
+        print(f"PLAN_RETIREMENT_ALREADY_COMMITTED {retirement_id}")
+        return
+    source = cast(dict[str, Any], journal["source_plan"])
+    index_baseline = cast(dict[str, Any], journal["index_baseline"])
+    source_path = checked_project_path(root, str(source["path"]))
+    current_source_sha256 = sha256_file(source_path)
+    retired_sha256 = str(journal["retired_plan_sha256"])
+    if current_source_sha256 not in {source["sha256"], retired_sha256}:
+        raise WorkctlError(f"RETIREMENT_SOURCE_DRIFT: {source['path']}")
+    if index_path(root).is_file():
+        if sha256_file(index_path(root)) != index_baseline["sha256"]:
+            raise WorkctlError("INDEX_BASELINE_DRIFT")
+    elif current_source_sha256 != retired_sha256:
+        raise WorkctlError("RETIREMENT_INDEX_REMOVED_BEFORE_SOURCE")
+
+    if current_source_sha256 == source["sha256"]:
+        write_atomic_bytes(source_path, retired_doc.path.read_bytes())
+    record_operation(journal_path, journal, "retirement-source-plan")
+
+    if index_path(root).is_file():
+        durable_unlink(index_path(root))
+    record_operation(journal_path, journal, "retirement-index-removal")
+
+    report = inspect_authority(root, ignore_journal=journal_path)
+    validation_errors = validate_plan(root, ignore_journal=journal_path)
+    if report.state != "UNMANAGED_EMPTY" or validation_errors:
+        details = [*report.blockers, *validation_errors]
+        raise WorkctlError(f"RETIREMENT_APPLIED_BUT_INVALID: {report.state}; {'; '.join(details)}")
+    journal["status"] = "committed"
+    write_journal(journal_path, journal)
+    print(f"PLAN_RETIREMENT_COMMITTED {retirement_id} plan={source['plan_id']}")
+
+
+def cmd_plan_retire_apply(args: argparse.Namespace) -> None:
+    """Dry-run or apply a confirmed active Plan retirement."""
+    root = project_root()
+    manifest_path = Path(args.manifest).resolve()
+    if args.dry_run:
+        manifest = prepare_retirement(
+            root,
+            manifest_path,
+            require_confirmations=False,
+        )
+        payload = {
+            "retirement_id": manifest["retirement_id"],
+            "source_plan": manifest["source_plan"],
+            "index_baseline": manifest["index_baseline"],
+            "index_outcome": "NO_PLAN",
+            "dispositions": manifest["dispositions"],
+            "proposal_sha256": manifest["proposal_sha256"],
+            "confirmations_required": ["C-PLAN-RETIREMENT"],
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    with lock(root):
+        if (
+            incomplete_migration_journals(root)
+            or incomplete_rollover_journals(root)
+            or incomplete_retirement_journals(root)
+        ):
+            raise WorkctlError("MIGRATION_RECOVERY_REQUIRED")
+        manifest = prepare_retirement(
+            root,
+            manifest_path,
+            require_confirmations=True,
+        )
+        journal_path = stage_retirement(root, manifest)
+        resume_retirement(root, journal_path)
+
+
+def cmd_plan_retire_recover(args: argparse.Namespace) -> None:
+    """Recover one named retirement transaction idempotently."""
+    root = project_root()
+    retirement_id = args.retirement_id
+    if RETIREMENT_ID_RE.fullmatch(retirement_id) is None:
+        raise WorkctlError("INVALID_RETIREMENT_ID")
+    with lock(root):
+        if incomplete_migration_journals(root) or incomplete_rollover_journals(root):
+            raise WorkctlError("MIGRATION_RECOVERY_REQUIRED")
+        _retirement_dir, _staging_dir, _archive_path, journal_path = retirement_transaction_paths(
+            root, retirement_id
+        )
+        if not journal_path.is_file():
+            raise WorkctlError(f"RETIREMENT_JOURNAL_NOT_FOUND: {retirement_id}")
+        resume_retirement(root, journal_path)
+
+
 def require_terminal_rollover_source(
     root: Path,
     source_doc: PlanDocument,
@@ -10103,7 +10821,11 @@ def cmd_plan_rollover_apply(args: argparse.Namespace) -> None:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return
     with lock(root):
-        if incomplete_migration_journals(root) or incomplete_rollover_journals(root):
+        if (
+            incomplete_migration_journals(root)
+            or incomplete_rollover_journals(root)
+            or incomplete_retirement_journals(root)
+        ):
             raise WorkctlError("MIGRATION_RECOVERY_REQUIRED")
         manifest, target_doc = prepare_rollover(
             root,
@@ -10121,6 +10843,8 @@ def cmd_plan_rollover_recover(args: argparse.Namespace) -> None:
     if ROLLOVER_ID_RE.fullmatch(rollover_id) is None:
         raise WorkctlError("INVALID_ROLLOVER_ID")
     with lock(root):
+        if incomplete_retirement_journals(root):
+            raise WorkctlError("RETIREMENT_RECOVERY_REQUIRED")
         if incomplete_migration_journals(root):
             raise WorkctlError("MIGRATION_RECOVERY_REQUIRED")
         _rollover_dir, _staging_dir, journal_path = rollover_transaction_paths(
@@ -10159,7 +10883,11 @@ def cmd_plan_reconcile_apply(args: argparse.Namespace) -> None:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return
     with lock(root):
-        if incomplete_migration_journals(root) or incomplete_rollover_journals(root):
+        if (
+            incomplete_migration_journals(root)
+            or incomplete_rollover_journals(root)
+            or incomplete_retirement_journals(root)
+        ):
             raise WorkctlError("MIGRATION_RECOVERY_REQUIRED")
         manifest, target_doc, _diff_text = prepare_reconciliation(
             root,
@@ -10177,6 +10905,8 @@ def cmd_plan_reconcile_recover(args: argparse.Namespace) -> None:
     """Recover the only incomplete migration or a named migration."""
     root = project_root()
     with lock(root):
+        if incomplete_retirement_journals(root):
+            raise WorkctlError("RETIREMENT_RECOVERY_REQUIRED")
         if incomplete_rollover_journals(root):
             raise WorkctlError("ROLLOVER_RECOVERY_REQUIRED")
         report = inspect_authority(root)
@@ -10334,6 +11064,15 @@ def build_parser() -> argparse.ArgumentParser:
     rollover_recover = rollover_sub.add_parser("recover")
     rollover_recover.add_argument("--rollover-id", required=True)
     rollover_recover.set_defaults(func=cmd_plan_rollover_recover)
+    retire = plan_sub.add_parser("retire")
+    retire_sub = retire.add_subparsers(dest="retire_action", required=True)
+    retire_apply = retire_sub.add_parser("apply")
+    retire_apply.add_argument("--manifest", required=True)
+    retire_apply.add_argument("--dry-run", action="store_true")
+    retire_apply.set_defaults(func=cmd_plan_retire_apply)
+    retire_recover = retire_sub.add_parser("recover")
+    retire_recover.add_argument("--retirement-id", required=True)
+    retire_recover.set_defaults(func=cmd_plan_retire_recover)
     closeout_check = plan_sub.add_parser("closeout-check")
     closeout_check.add_argument("--evidence-manifest")
     closeout_check.set_defaults(func=cmd_plan_closeout_check)
