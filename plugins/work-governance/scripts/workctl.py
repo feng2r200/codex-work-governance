@@ -4162,6 +4162,9 @@ def validate_plan(
             return errors
         if plan_dir(root).is_dir():
             for path in sorted(plan_dir(root).glob("PLAN-*.md")):
+                text = path.read_text(encoding="utf-8", errors="replace")
+                if POINTER_MARKER in text:
+                    continue
                 try:
                     historical = load_plan(path)
                 except WorkctlError as exc:
