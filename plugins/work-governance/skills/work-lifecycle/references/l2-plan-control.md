@@ -96,7 +96,9 @@ Schema-v4 Plans carry:
 
 - a goal statement and measurable success conditions;
 - a revisioned, confirmation-bound demand contract;
-- first-class unknowns and task-level expected evidence deltas;
+- append-only intake protocol v1 records bound to trusted current turns;
+- first-class unknowns with owner, impact, exact blockers, expected evidence,
+  and task-level compatibility projection;
 - validation provenance;
 - structured `scope.exclude` dispositions;
 - `delivery.status`, boundary, and evidence;
@@ -107,7 +109,8 @@ Schema-v4 Plans carry:
 Schema version is immutable through ordinary Plan revision. An active
 schema-v3 Plan is readable but ordinary writes fail closed with
 `PLAN_CONTRACT_UPGRADE_REQUIRED`; use the recoverable
-`plan contract upgrade apply|recover` transaction. A completed inactive
+`plan contract upgrade apply|recover` transaction with an embedded
+current-turn intake proposal. A completed inactive
 schema-v3 Plan remains readable historical evidence.
 
 `deferred`, `pending_confirmation`, and `in_progress` activation block terminal
@@ -136,8 +139,9 @@ Allowed structural changes:
 - `plan authority inspect|check`: inspect candidates or return the current
   authority state.
 - `plan admit apply --manifest ...`: validate the exact prepared schema-v4 Plan
-  and accepted admission reference, stage a durable transaction, install the
-  Plan, and activate the index last.
+  and accepted admission reference plus embedded current-turn intake, inject
+  the first record in staging, bind request/turn/basis/record/target digests,
+  install the strict Plan, and activate the index last.
 - `plan admit recover`: deterministically roll an interrupted admission
   forward. `plan init` is not a normal public admission path.
 - `plan confirmation add`: create a pending or explicitly accepted gate before
@@ -194,6 +198,13 @@ Allowed structural changes:
   authority only through its explicit confirmation binding.
 - `plan unknown add|resolve`: make an unresolved question explicit, then close
   it only with a subject-matching immutable evidence manifest.
+- `plan unknown classify --manifest ...`: repair owner, impact, authoritative
+  blockers, expected evidence, and exact task projection on a readable legacy
+  schema-v4 unknown.
+- `intake receipt`: produce a normalized read-only proposal for the current
+  trusted turn and exact target set.
+- `plan intake record`: append the proposal idempotently; conflicting content
+  for the same request reference is rejected.
 - `plan evidence record --manifest ...`: canonicalize bounded typed evidence
   metadata under the active Plan and return its exact path and SHA256.
 - `plan confirm`: resolve a pending gate as `accepted` or `declined` with a
@@ -229,10 +240,11 @@ becomes `committed` only after post-activation authority validation succeeds.
 
 A rollover manifest must name a new target Plan and a `ROL-YYYYMMDD-NNN` ID;
 record the current Plan path, ID, revision and SHA256; record the index active
-ID and SHA256; hash the prepared schema-v4 target contract; and bind an accepted
+ID and SHA256; embed a current-turn intake proposal; hash the prepared
+schema-v4 target contract; and bind an accepted
 `C-PLAN-ROLLOVER` record to the dry-run proposal digest. The completed
 predecessor remains unchanged and becomes non-authoritative by classification;
-the successor becomes the sole indexed authority and recursively preserves the
+the strict successor becomes the sole indexed authority and recursively preserves the
 predecessor path, ID, revision and SHA256. An `AGENTS.md` or `CLAUDE.md` rule
 that explicitly names the predecessor path must be revised under its own
 authority before rollover; otherwise the controller rejects the proposal

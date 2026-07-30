@@ -324,7 +324,7 @@ wheels = [
 
 [[package]]
 name = "work-governance"
-version = "1.0.3"
+version = "1.0.4"
 source = { virtual = "." }
 dependencies = [
     { name = "pyyaml" },

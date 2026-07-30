@@ -148,6 +148,15 @@ by `--evidence-manifest`; `.work-governance/logs/` is local process detail only.
 All mutations still use the stable `.work-governance/workctl.lock`, expected
 revision checks, candidate validation, and atomic writes.
 
+`UserPromptSubmit` separately injects the current `turn_receipt_sha256`.
+For Plan-controlled work, run controller `intake receipt`, state an explicit
+`proceed|explore|ask` decision, then append it with `plan intake record`.
+Non-simple No-Plan work shows the reply-level `INTAKE_RECEIPT` but does not call
+the Plan controller or persist an intake record. Advancing task, obligation,
+validation, artifact, delivery, activation, adaptation, and closeout commands
+require that turn digest plus the latest `expected_intake_sha256`. Never reuse
+a prior turn decision.
+
 ## SubAgent Delegation
 
 Before delegating, write a delegation contract with:

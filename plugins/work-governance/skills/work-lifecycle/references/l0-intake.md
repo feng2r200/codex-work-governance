@@ -21,6 +21,23 @@ Build a compact cognition map:
 Prefer exploration over questions when the answer is discoverable locally.
 Ask only the path-changing question when user choice is required.
 
+The trusted `UserPromptSubmit` context binds this intake to one current-turn
+receipt. Except for a simple low-risk No-Plan answer, explicitly choose:
+
+- `proceed` when no open blocker covers the next exact target;
+- `explore` for an open agent-owned unknown that blocks the target; local or
+  safe discoverability is the reason to explore, not a reason to call it
+  proceed;
+- `ask` for an open user-owned unknown that blocks the target.
+
+Show one `INTAKE_RECEIPT` when first classifying the request. Show
+`INTAKE_REVISION` only when the demand contract materially changes. A later
+turn or structural contract, unknown, task, or route change invalidates the
+prior decision.
+
+Keep rationale minimal. Never copy raw prompt content, credentials, tokens, or
+other secrets into a Plan intake record.
+
 When a current user instruction or decision will become future execution
 authority, capture its strongest available provenance. Prefer
 `user:session/<SessionId>/turn/<TurnId>/sha256/<digest>`, where the digest binds
@@ -37,4 +54,5 @@ Decide the entry route:
   must be tracked.
 
 Validation standard: intake is sufficient only when the next action, evidence
-source, and confirmation gates are clear.
+source, confirmation gates, target references, and current-turn receipt are
+clear.
