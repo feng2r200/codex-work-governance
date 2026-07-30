@@ -1,0 +1,193 @@
+---
+schema_version: 4
+plan_id: PLAN-20260730-001
+title: Composed reconciliation and schema-v4 contract upgrade controller
+status: active
+mode: autonomous
+revision: 1
+created_at: '2026-07-30T07:34:42Z'
+updated_at: '2026-07-30T07:34:42Z'
+goal:
+  statement: Deliver a locally committed controller change that lets one user-facing command complete a schema-v3 authority reconciliation followed by a schema-v4 contract upgrade while preserving two independently recoverable transactions.
+  success_conditions:
+  - One composed controller entry validates the full workflow before mutation and executes reconciliation before contract upgrade.
+  - The reconciliation child transaction activates only a schema-v3 canonical Plan; the contract-upgrade child transaction alone produces schema v4.
+  - Interruption before, during, or between child transactions has a deterministic fail-closed recovery route that never skips or reorders a child transaction.
+  - Source, target, confirmation, evidence, journal, and Git-baseline drift are rejected before unauthorized advancement.
+  - Focused transaction tests, the full repository validation suite, static checks, plugin and skill validators, and independent review pass before one bounded local commit.
+contract:
+  revision: 1
+  confirmation_id: C-COMPOSED-RECONCILIATION-UPGRADE
+  confirmed_ref: user:session/019fb1f0-387c-7d73-890e-c1a5f570d0cd/turn/019fb1f2-632b-71e1-9152-ba1d914ebfda/sha256/ad014e38f3c7c64852b3f8d9f6969778eaec2e897a95899034e43c942134776e
+scope:
+  include:
+  - Add one composed controller entry that orchestrates schema-v3 reconciliation and schema-v4 contract upgrade without collapsing their transaction boundaries.
+  - Add a durable parent workflow state or equivalent cross-boundary binding so recovery can determine the only legal next child transaction.
+  - Reuse the existing reconciliation and contract-upgrade validation, staging, locking, hash binding, and recovery primitives where their contracts remain sufficient.
+  - Add evidence-derived tests for success, interruption at each boundary, idempotent recovery, and drift refusal.
+  - Update the lifecycle/controller command contract and public command documentation needed to operate the new entry.
+  - Validate and create one local feature-branch commit without changing remote or live-plugin state.
+  exclude:
+  - description: Run the composed workflow against a real external project or mutate real project Plan authorities during validation.
+    disposition: forbidden
+    resolution_ref: user:session/019fb1f0-387c-7d73-890e-c1a5f570d0cd/turn/019fb1f2-632b-71e1-9152-ba1d914ebfda/sha256/ad014e38f3c7c64852b3f8d9f6969778eaec2e897a95899034e43c942134776e
+  - description: Reinstall, enable, or live-activate a new plugin build.
+    disposition: not_required
+    resolution_ref: user:session/019fb1f0-387c-7d73-890e-c1a5f570d0cd/turn/019fb1f2-632b-71e1-9152-ba1d914ebfda/sha256/ad014e38f3c7c64852b3f8d9f6969778eaec2e897a95899034e43c942134776e
+  - description: Push, publish, create a remote branch, or open a pull request.
+    disposition: forbidden
+    resolution_ref: project:root-AGENTS-push-boundary
+  - description: Remove retained worktrees, delete branches, or clean unrelated files.
+    disposition: forbidden
+    resolution_ref: project:root-AGENTS-change-protection
+  - description: Replace the two child transactions with one falsely atomic schema-v4 reconciliation write.
+    disposition: forbidden
+    resolution_ref: user:session/019fb1f0-387c-7d73-890e-c1a5f570d0cd/turn/019fb1f2-632b-71e1-9152-ba1d914ebfda/sha256/ad014e38f3c7c64852b3f8d9f6969778eaec2e897a95899034e43c942134776e
+  - description: Add hypothetical exhaustive tests not derived from the confirmed workflow, an observed failure, a code invariant, or a supported integration boundary.
+    disposition: not_required
+    resolution_ref: project:work-lifecycle-test-provenance
+confirmations:
+  required:
+  - id: C-COMPOSED-RECONCILIATION-UPGRADE
+    description: Authorize the bounded local implementation of the composed two-transaction controller workflow.
+    status: accepted
+    ref: user:session/019fb1f0-387c-7d73-890e-c1a5f570d0cd/turn/019fb1f2-632b-71e1-9152-ba1d914ebfda/sha256/ad014e38f3c7c64852b3f8d9f6969778eaec2e897a95899034e43c942134776e
+    accepted_at: '2026-07-30T07:34:42Z'
+unknowns: []
+obligations:
+- id: O-001
+  description: The controller exposes one user-facing composed entry whose legal order is schema-v3 reconciliation followed by schema-v4 contract upgrade.
+  status: pending
+- id: O-002
+  description: Each child remains an independently authenticated, journaled, recoverable transaction with its existing authority and contract invariants intact.
+  status: pending
+- id: O-003
+  description: A durable cross-transaction binding makes interruption between child transactions deterministic and fail-closed, including idempotent recovery.
+  status: pending
+- id: O-004
+  description: The composed route rejects manifest, confirmation, evidence, source, target, index, journal, and Git-baseline drift before unauthorized advancement.
+  status: pending
+- id: O-005
+  description: Operator guidance and controller help accurately describe the composed entry, child transaction boundaries, recovery route, and residual confirmation gates.
+  status: pending
+- id: O-006
+  description: The bounded local candidate passes provenance-backed focused and full validation plus independent review before one exact-path local commit.
+  status: pending
+tasks:
+- id: T-001
+  description: Activate this successor Plan, create an isolated feature worktree from the exact reviewed main baseline, and record the smallest fixture that proves the current controller cannot complete the two-stage route through one entry.
+  status: pending
+  unknowns: []
+  expected_evidence_delta: A governed isolated branch exists and a focused red probe demonstrates the missing composed entry without mutating real Plan authorities.
+- id: T-002
+  description: Implement the composed command, durable workflow binding, ordered child execution, and deterministic recovery by reusing the existing transaction primitives.
+  status: pending
+  depends_on:
+  - T-001
+  unknowns: []
+  expected_evidence_delta: Focused tests prove schema v3 is authoritative before schema v4, each child journal remains valid, and the normal route completes in one invocation.
+- id: T-003
+  description: Add interruption, idempotent recovery, and drift-refusal tests at every material child boundary; update controller and lifecycle documentation.
+  status: pending
+  depends_on:
+  - T-002
+  unknowns: []
+  expected_evidence_delta: Negative tests discriminate parent-binding drift, child drift, wrong order, incomplete recovery, and stale confirmation or baseline inputs.
+- id: T-004
+  description: Run focused and full validation, static checks, plugin and skill validators, and independent artifact/evidence review; correct every blocker-level finding.
+  status: pending
+  depends_on:
+  - T-003
+  unknowns: []
+  expected_evidence_delta: Fresh evidence covers every obligation and independent review reports no unresolved blocker-level finding.
+- id: T-005
+  description: Create one exact-path local feature-branch commit containing only the validated controller workflow, direct tests, and required documentation.
+  status: pending
+  depends_on:
+  - T-004
+  unknowns: []
+  expected_evidence_delta: One local commit contains the complete validated delivery boundary; main, remote, live plugin, and unrelated worktrees remain unchanged.
+validations:
+- id: V-001
+  description: A focused fixture first proves the current missing composed route and then proves ordered schema-v3 reconciliation followed by schema-v4 upgrade in one invocation.
+  status: pending
+  provenance:
+    kind: observed-failure
+    source_ref: user:session/019fb1f0-387c-7d73-890e-c1a5f570d0cd/turn/019fb1f2-632b-71e1-9152-ba1d914ebfda/sha256/ad014e38f3c7c64852b3f8d9f6969778eaec2e897a95899034e43c942134776e
+- id: V-002
+  description: Transaction-boundary tests prove interruption and idempotent recovery before, during, and between child transactions without order inversion or authority escape.
+  status: pending
+  provenance:
+    kind: code-invariant
+    source_ref: project:index-last-two-transaction-recovery
+- id: V-003
+  description: Drift tests prove the composed route rejects changed child manifests, confirmations, evidence, source and target Plans, index baseline, journals, and Git baseline.
+  status: pending
+  provenance:
+    kind: code-invariant
+    source_ref: project:transaction-input-and-journal-binding
+- id: V-004
+  description: Full pytest, Ruff format and check, strict mypy, plugin validation, and affected skill validation pass on the exact candidate bytes.
+  status: pending
+  provenance:
+    kind: supported-integration-boundary
+    source_ref: project:repository-validation-toolchain
+- id: V-005
+  description: An independent read-only context reviews the raw diff, child transaction boundaries, recovery state machine, test provenance, and completion evidence with no unresolved blocker-level finding.
+  status: pending
+  provenance:
+    kind: confirmed-obligation
+    source_ref: project:root-AGENTS-independent-validation
+artifacts:
+- id: A-001
+  path: plugins/work-governance/scripts/workctl.py
+  status: pending
+- id: A-002
+  path: tests/test_workctl.py
+  status: pending
+- id: A-003
+  path: plugins/work-governance/skills/work-lifecycle
+  status: pending
+- id: A-004
+  path: README.md
+  status: pending
+authority:
+  model: single-active
+  state: governed
+  canonical_plan_id: PLAN-20260730-001
+  sources: []
+  confirmations: {}
+delivery:
+  status: pending
+  boundary: local feature-branch commit
+  evidence_ref: project:not-yet-delivered
+activation:
+  status: not_required
+  current_ref: plugin:work-governance@1.0.4+codex.20260730081627
+  target_ref: project:local-source-only
+  decision_ref: user:session/019fb1f0-387c-7d73-890e-c1a5f570d0cd/turn/019fb1f2-632b-71e1-9152-ba1d914ebfda/sha256/ad014e38f3c7c64852b3f8d9f6969778eaec2e897a95899034e43c942134776e
+route:
+  route_status: active
+  slice_status: admission-pending
+  next_phase: Activate the successor and establish T-001 isolation and failing-probe evidence.
+  validation_standard: Exact rollover baseline, GOVERNED_ACTIVE successor, isolated worktree, and a focused red probe.
+  confirmation_gate: none
+handoff:
+  route_status: active
+  next_step: Confirm and apply the digest-bound rollover, then execute T-001.
+revision_history:
+- revision: 1
+  kind: admission
+  changed_at: '2026-07-30T07:34:42Z'
+  rationale: Start the bounded composed reconciliation and contract-upgrade controller route.
+  confirmation_id: C-COMPOSED-RECONCILIATION-UPGRADE
+---
+# Composed reconciliation and contract-upgrade controller
+
+This route preserves two child transactions. The composed entry may validate,
+sequence, bind, and recover them, but it must never represent schema-v4
+reconciliation as one atomic authority write.
+
+Validation uses disposable project fixtures only. Live plugin activation,
+remote state, unrelated worktrees, and real external project authorities remain
+outside this delivery boundary.
