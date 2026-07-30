@@ -200,11 +200,17 @@ through `plan confirm` and may be
 `accepted` or `declined`. Activation, confirmation-bound exclusions, and
 terminal-route transitions are bound to their own decision ID; another
 accepted gate cannot authorize them. Activation declared `active` also
-requires typed, current runtime evidence. Generic Plan patches cannot rebind an
-activation gate, remove an existing task, change an existing task's status, or
-assign Plan status `complete`; existing task gates and resolved exclusion
-decisions are stable, while delivery/evidence/route mutations bind to the
-current slice gate. Completion uses the dedicated closeout command.
+requires typed, current runtime evidence whose `observed_ref` exactly matches
+the frozen target. For schema-v4 Plans, when an accepted activation still names
+its matching `plugin:<name>@<version>+codex.pending` placeholder,
+`plan activation-promote --state in_progress --target-ref <exact-ref>` binds
+the same plugin/version prefix to one non-pending cachebuster under the
+activation gate. Generic Plan patches and the later `active` transition cannot
+rebind that target. Generic Plan patches also cannot rebind an activation gate,
+remove an existing task, change an existing task's status, or assign Plan
+status `complete`; existing task gates and resolved exclusion decisions are
+stable, while delivery/evidence/route mutations bind to the current slice
+gate. Completion uses the dedicated closeout command.
 
 Schema v4 cannot be downgraded through ordinary revision. Verified
 obligations/validations, final artifacts, and completed delivery use dedicated
