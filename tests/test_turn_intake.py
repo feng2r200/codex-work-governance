@@ -1140,8 +1140,115 @@ def test_rollover_successor_is_strict_and_transaction_bound(tmp_path: Path) -> N
     assert records[0]["record_sha256"] == journal["intake_binding"]["intake_record_sha256"]
     assert journal["proposal_sha256"] == dry_run["proposal_sha256"]
     assert journal["status"] == "committed"
+    assert journal["confirmation_payload_version"] == 2
     assert isinstance(journal["target_contract_sha256"], str)
     assert isinstance(journal["transaction_binding_sha256"], str)
+
+
+def test_rollover_rejects_stale_intake_after_confirmation_turn(
+    tmp_path: Path,
+) -> None:
+    """A confirmation turn cannot replay the superseded proposal intake."""
+    project, session_id = prepare_admitted_project(tmp_path)
+    manifest, _dry_run = prepare_strict_rollover(
+        project,
+        session_id=session_id,
+    )
+    run_turn_hook(
+        project,
+        session_id=session_id,
+        turn_id="turn-rollover-confirmation",
+        prompt="confirm the exact rollover digest",
+    )
+
+    blocked = run_controller(
+        project,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest),
+        check=False,
+    )
+
+    assert blocked.returncode == 2
+    assert "TURN_RECEIPT_SUPERSEDED" in blocked.stderr
+    assert not (
+        project / ".work-governance" / "_Plan" / ".rollovers" / "ROL-20260730-001.yaml"
+    ).exists()
+
+
+def test_rollover_confirmation_digest_survives_current_turn_intake_refresh(
+    tmp_path: Path,
+) -> None:
+    """The stable contract confirmation permits a fresh execution intake."""
+    project, session_id = prepare_admitted_project(tmp_path)
+    manifest_path, initial_dry_run = prepare_strict_rollover(
+        project,
+        session_id=session_id,
+    )
+    run_turn_hook(
+        project,
+        session_id=session_id,
+        turn_id="turn-rollover-confirmation",
+        prompt="confirm the exact rollover digest",
+    )
+    turn_path = project / ".work-governance" / "runtime" / "current-turn-receipt.json"
+    turn_sha256 = cast(str, read_json_object(turn_path)["receipt_sha256"])
+    refreshed_intake = json.loads(
+        run_controller(
+            project,
+            "intake",
+            "receipt",
+            "--turn-receipt-sha256",
+            turn_sha256,
+            "--classification",
+            "plan_controlled",
+            "--decision",
+            "proceed",
+            "--rationale",
+            "The confirmed successor contract is ready to activate.",
+            "--targets",
+            "route",
+            "--candidate-plan",
+            str(project / "successor.md"),
+        ).stdout
+    )
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["intake"] = refreshed_intake
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    refreshed_dry_run = json.loads(
+        run_controller(
+            project,
+            "plan",
+            "rollover",
+            "apply",
+            "--manifest",
+            str(manifest_path),
+            "--dry-run",
+        ).stdout
+    )
+    applied = run_controller(
+        project,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+    )
+    successor = read_plan_frontmatter(project, "PLAN-20260730-001")
+    records = cast(
+        list[dict[str, object]],
+        cast(dict[str, object], successor["intake"])["records"],
+    )
+
+    assert refreshed_dry_run["proposal_sha256"] == initial_dry_run["proposal_sha256"]
+    assert "ROLLOVER_COMMITTED" in applied.stdout
+    assert "turn-rollover-confirmation" in cast(str, records[0]["request_ref"])
 
 
 def test_rollover_recovery_replays_bound_successor_across_turns(
@@ -1185,6 +1292,108 @@ def test_rollover_recovery_replays_bound_successor_across_turns(
         (project / ".work-governance" / "_Plan" / "index.yaml").read_text(encoding="utf-8")
     )
     assert index["active_plan_id"] == "PLAN-20260730-001"
+
+
+def test_rollover_recovery_accepts_legacy_confirmation_payload_journal(
+    tmp_path: Path,
+) -> None:
+    """A versionless pre-fix journal remains recoverable after controller upgrade."""
+    project, session_id = prepare_admitted_project(tmp_path)
+    manifest, _dry_run = prepare_strict_rollover(
+        project,
+        session_id=session_id,
+    )
+    interrupted = run_controller(
+        project,
+        "plan",
+        "rollover",
+        "apply",
+        "--manifest",
+        str(manifest),
+        check=False,
+        env={"WORKCTL_TEST_INTERRUPT_AFTER": "rollover-target-plan"},
+    )
+    assert "SIMULATED_MIGRATION_INTERRUPT" in interrupted.stderr
+    journal_path = project / ".work-governance" / "_Plan" / ".rollovers" / "ROL-20260730-001.yaml"
+    journal = yaml.safe_load(journal_path.read_text(encoding="utf-8"))
+    journal.pop("confirmation_payload_version", None)
+    legacy_payload = {
+        "rollover_id": journal["rollover_id"],
+        "source_plan": journal["source_plan"],
+        "index_baseline": journal["index_baseline"],
+        "target_plan": {
+            "path": journal["target_path"],
+            "plan_id": journal["target_plan_id"],
+            "revision": 1,
+            "prepared_plan_sha256": journal["prepared_plan_sha256"],
+            "target_contract_sha256": journal["target_contract_sha256"],
+        },
+        "intake_binding": journal["intake_binding"],
+    }
+    legacy_proposal_sha256 = sha256_bytes(
+        json.dumps(
+            legacy_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    staged_plan = project / cast(str, journal["staged_plan"])
+    _, raw_frontmatter, body = staged_plan.read_text(encoding="utf-8").split(
+        "---\n",
+        2,
+    )
+    staged_frontmatter = yaml.safe_load(raw_frontmatter)
+    confirmations = cast(
+        list[dict[str, object]],
+        cast(dict[str, object], staged_frontmatter["confirmations"])["required"],
+    )
+    rollover_confirmation = next(item for item in confirmations if item["id"] == "C-PLAN-ROLLOVER")
+    rollover_confirmation["evidence_sha256"] = legacy_proposal_sha256
+    staged_plan.write_text(
+        f"---\n{yaml.safe_dump(staged_frontmatter, sort_keys=False)}---\n{body}",
+        encoding="utf-8",
+    )
+    target_plan_sha256 = sha256_bytes(staged_plan.read_bytes())
+    journal["proposal_sha256"] = legacy_proposal_sha256
+    journal["target_sha256"] = target_plan_sha256
+    cast(dict[str, object], journal["rollover_confirmation"])["evidence_sha256"] = (
+        legacy_proposal_sha256
+    )
+    transaction_binding = {
+        "transaction_kind": "plan-rollover",
+        "transaction_id": journal["rollover_id"],
+        "plan_id": journal["target_plan_id"],
+        "prepared_plan_sha256": journal["prepared_plan_sha256"],
+        "target_plan_sha256": target_plan_sha256,
+        "intake_binding": journal["intake_binding"],
+    }
+    journal["transaction_binding_sha256"] = sha256_bytes(
+        json.dumps(
+            transaction_binding,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    )
+    target_plan = project / cast(str, journal["target_path"])
+    target_plan.write_bytes(staged_plan.read_bytes())
+    journal_path.write_text(
+        yaml.safe_dump(journal, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    recovered = run_controller(
+        project,
+        "plan",
+        "rollover",
+        "recover",
+        "--rollover-id",
+        "ROL-20260730-001",
+        check=False,
+    )
+
+    assert recovered.returncode == 0
+    assert "ROLLOVER_COMMITTED" in recovered.stdout
 
 
 def test_schema_v3_upgrade_injects_strict_initial_intake(tmp_path: Path) -> None:

@@ -37,6 +37,7 @@ ROLLOVER_ID_RE = re.compile(r"^ROL-\d{8}-\d{3}$")
 RETIREMENT_ID_RE = re.compile(r"^RET-\d{8}-\d{3}$")
 ADMISSION_ID_RE = re.compile(r"^ADM-\d{8}-\d{3}$")
 CONTRACT_UPGRADE_ID_RE = re.compile(r"^UPG-\d{8}-\d{3}$")
+ROLLOVER_CONFIRMATION_PAYLOAD_VERSION = 2
 UNKNOWN_ID_RE = re.compile(r"^U-\d{3}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 STRICT_INITIAL_INTAKE_REQUIRED = True
@@ -11688,11 +11689,9 @@ def rollover_proposal_payload(
     target_plan_id: str,
     target_revision: object,
     prepared_plan_sha256: str,
-    intake_binding: Mapping[str, object] | None = None,
-    target_contract_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Build the canonical payload authorized by ``C-PLAN-ROLLOVER``."""
-    payload: dict[str, Any] = {
+    """Build the stable successor contract authorized by ``C-PLAN-ROLLOVER``."""
+    return {
         "rollover_id": rollover_id,
         "source_plan": source_plan,
         "index_baseline": index_baseline,
@@ -11703,11 +11702,6 @@ def rollover_proposal_payload(
             "prepared_plan_sha256": prepared_plan_sha256,
         },
     }
-    if intake_binding is not None:
-        payload["intake_binding"] = dict(intake_binding)
-    if target_contract_sha256 is not None:
-        payload["target_plan"]["target_contract_sha256"] = target_contract_sha256
-    return payload
 
 
 def prepare_rollover(
@@ -11867,8 +11861,6 @@ def prepare_rollover(
         target_plan_id=target_plan_id,
         target_revision=target_revision,
         prepared_plan_sha256=prepared_sha256,
-        intake_binding=intake_binding,
-        target_contract_sha256=target_contract_sha256,
     )
     proposal_sha256 = sha256_bytes(
         json.dumps(proposal_payload, sort_keys=True, separators=(",", ":")).encode()
@@ -11982,6 +11974,7 @@ def stage_rollover(
         "target_index_sha256": sha256_file(staged_index),
         "prepared_plan_sha256": manifest["prepared_plan_sha256"],
         "proposal_sha256": manifest["proposal_sha256"],
+        "confirmation_payload_version": ROLLOVER_CONFIRMATION_PAYLOAD_VERSION,
         "rollover_confirmation": confirmations(target_doc.frontmatter)["C-PLAN-ROLLOVER"],
         "completed_operations": [],
     }
@@ -12070,6 +12063,12 @@ def validate_rollover_journal(
         value = journal.get(field)
         if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
             raise WorkctlError("INVALID_ROLLOVER_JOURNAL")
+    confirmation_payload_version = journal.get("confirmation_payload_version", 1)
+    if type(confirmation_payload_version) is not int or confirmation_payload_version not in {
+        1,
+        ROLLOVER_CONFIRMATION_PAYLOAD_VERSION,
+    }:
+        raise WorkctlError("INVALID_ROLLOVER_JOURNAL")
     intake_binding: dict[str, object] | None = None
     target_contract_sha256: str | None = None
     if STRICT_INITIAL_INTAKE_REQUIRED:
@@ -12125,9 +12124,14 @@ def validate_rollover_journal(
         target_plan_id=target_plan_id,
         target_revision=prepared_doc.frontmatter.get("revision"),
         prepared_plan_sha256=str(journal["prepared_plan_sha256"]),
-        intake_binding=intake_binding,
-        target_contract_sha256=target_contract_sha256,
     )
+    if confirmation_payload_version == 1:
+        if intake_binding is None or target_contract_sha256 is None:
+            raise WorkctlError("INVALID_ROLLOVER_JOURNAL")
+        expected_proposal["intake_binding"] = intake_binding
+        cast(dict[str, Any], expected_proposal["target_plan"])["target_contract_sha256"] = (
+            target_contract_sha256
+        )
     expected_proposal_sha256 = sha256_bytes(
         json.dumps(expected_proposal, sort_keys=True, separators=(",", ":")).encode()
     )
