@@ -222,6 +222,11 @@ Allowed structural changes:
   recovery confirmation, and stronger states cannot jump directly to final.
 - `plan delivery-complete`: complete delivery only after its boundary is known
   and evidence reference/digest are recorded under an accepted slice gate.
+- `plan activation-promote`: for schema-v4, enter activation under its accepted
+  gate and optionally replace the matching `+codex.pending` plugin placeholder
+  with an exact cachebuster while entering `in_progress`; promotion to `active`
+  requires canonical evidence whose `observed_ref` equals the frozen target.
+  Generic Plan patches and the active transition cannot rebind that target.
 - `task start|block|verify|skip`: update task state.
 - `log append`: preserve local process detail without granting it completion
   authority.

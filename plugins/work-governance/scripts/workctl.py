@@ -44,6 +44,10 @@ TARGET_REF_RE = re.compile(
     r"^(route|delivery|activation|task:T-\d{3}|obligation:O-\d{3}|"
     r"validation:V-\d{3}|artifact:A-\d{3})$"
 )
+ACTIVATION_TARGET_PLACEHOLDER_RE = re.compile(
+    r"^(plugin:[A-Za-z0-9][A-Za-z0-9._-]*@[^@\s+]+\+codex\.)pending$"
+)
+ACTIVATION_CACHEBUSTER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 REFERENCE_RE = re.compile(r"^(user|project|git|runtime|evidence|handoff|codex-plugin-list):\S+$")
 EVIDENCE_REFERENCE_FIELDS = {"evidence_ref", "state_evidence_ref"}
 ENTRY_ID_PATTERNS = {
@@ -4612,6 +4616,31 @@ def valid_target_ref(value: object) -> bool:
     return isinstance(value, str) and TARGET_REF_RE.fullmatch(value) is not None
 
 
+def exact_activation_target_from_placeholder(
+    current_target: object,
+    requested_target: object,
+) -> str:
+    """Bind one exact Codex build only to its matching plugin placeholder."""
+    if not isinstance(current_target, str):
+        raise WorkctlError("ACTIVATION_TARGET_NOT_PLACEHOLDER")
+    placeholder = ACTIVATION_TARGET_PLACEHOLDER_RE.fullmatch(current_target)
+    if placeholder is None:
+        raise WorkctlError("ACTIVATION_TARGET_NOT_PLACEHOLDER")
+    if (
+        not isinstance(requested_target, str)
+        or requested_target != requested_target.strip()
+        or any(character.isspace() for character in requested_target)
+    ):
+        raise WorkctlError("ACTIVATION_TARGET_EXACT_REF_REQUIRED")
+    prefix = placeholder.group(1)
+    if not requested_target.startswith(prefix):
+        raise WorkctlError("ACTIVATION_TARGET_EXACT_REF_REQUIRED")
+    cachebuster = requested_target[len(prefix) :]
+    if cachebuster == "pending" or ACTIVATION_CACHEBUSTER_RE.fullmatch(cachebuster) is None:
+        raise WorkctlError("ACTIVATION_TARGET_EXACT_REF_REQUIRED")
+    return requested_target
+
+
 def decision_basis_projection(frontmatter: Mapping[str, Any]) -> dict[str, object]:
     """Project only contract and execution-structure fields that invalidate intake."""
 
@@ -8520,11 +8549,6 @@ def validate_authorized_plan_patch(
             and activation_confirmation != old_activation_confirmation
         ):
             raise WorkctlError("ACTIVATION_CONFIRMATION_ID_IMMUTABLE")
-        activation_decision = (
-            confirmations(before).get(old_activation_confirmation)
-            if isinstance(old_activation_confirmation, str)
-            else None
-        )
         if new_status in {"in_progress", "active"} and old_status != new_status:
             require_matching_decision(
                 after,
@@ -8559,15 +8583,9 @@ def validate_authorized_plan_patch(
         evidence_changed = isinstance(old_activation, dict) and old_activation.get(
             "evidence"
         ) != new_activation.get("evidence")
-        if isinstance(old_activation_confirmation, str) and (
-            current_changed
-            or evidence_changed
-            or (
-                target_changed
-                and activation_decision is not None
-                and activation_decision.get("status") != "pending"
-            )
-        ):
+        if target_changed:
+            raise WorkctlError("ACTIVATION_TARGET_REQUIRES_DEDICATED_COMMAND")
+        if isinstance(old_activation_confirmation, str) and (current_changed or evidence_changed):
             require_matching_decision(
                 after,
                 old_activation_confirmation,
@@ -9310,7 +9328,8 @@ def validate_evidence_payload(
     expected_subject: str | None = None,
 ) -> None:
     """Validate bounded evidence metadata without accepting process output blobs."""
-    if set(payload) != {
+    subject = payload.get("subject")
+    required_fields = {
         "schema_version",
         "kind",
         "plan_id",
@@ -9318,18 +9337,20 @@ def validate_evidence_payload(
         "created_at",
         "producer_ref",
         "items",
-    }:
+    }
+    if subject == "activation":
+        required_fields.add("observed_ref")
+    if set(payload) != required_fields:
         raise WorkctlError("INVALID_EVIDENCE_MANIFEST_FIELDS")
     if payload.get("schema_version") != 1 or payload.get("kind") != "work-governance-evidence":
         raise WorkctlError("INVALID_EVIDENCE_MANIFEST_SCHEMA")
     if payload.get("plan_id") != expected_plan_id:
         raise WorkctlError("EVIDENCE_MANIFEST_PLAN_MISMATCH")
-    subject = payload.get("subject")
     if (
         not isinstance(subject, str)
         or re.fullmatch(
             r"(?:[a-z][a-z0-9-]*:[A-Za-z0-9._-]+|closeout|delivery|"
-            r"plan-validation|contract-upgrade)",
+            r"activation|plan-validation|contract-upgrade)",
             subject,
         )
         is None
@@ -9343,6 +9364,15 @@ def validate_evidence_payload(
         raise WorkctlError("INVALID_EVIDENCE_MANIFEST_CREATED_AT")
     if not valid_reference(payload.get("producer_ref")):
         raise WorkctlError("INVALID_EVIDENCE_MANIFEST_PRODUCER")
+    if subject == "activation":
+        observed_ref = payload.get("observed_ref")
+        if (
+            not isinstance(observed_ref, str)
+            or not observed_ref
+            or observed_ref != observed_ref.strip()
+            or any(character.isspace() for character in observed_ref)
+        ):
+            raise WorkctlError("INVALID_ACTIVATION_EVIDENCE_OBSERVED_REF")
     items = payload.get("items")
     if not isinstance(items, list) or not items or len(items) > EVIDENCE_MANIFEST_MAX_ITEMS:
         raise WorkctlError("INVALID_EVIDENCE_MANIFEST_ITEMS")
@@ -9368,6 +9398,7 @@ def verify_evidence_manifest(
     *,
     plan_id: str,
     subject: str,
+    expected_observed_ref: str | None = None,
 ) -> tuple[str, str]:
     """Verify canonical path, digest, payload and subject for one evidence record."""
     relative = Path(raw_path)
@@ -9393,6 +9424,8 @@ def verify_evidence_manifest(
     if not isinstance(payload, dict):
         raise WorkctlError("EVIDENCE_MANIFEST_INVALID_JSON")
     validate_evidence_payload(payload, expected_plan_id=plan_id, expected_subject=subject)
+    if expected_observed_ref is not None and payload.get("observed_ref") != expected_observed_ref:
+        raise WorkctlError("EVIDENCE_MANIFEST_OBSERVED_REF_MISMATCH")
     if canonical_evidence_bytes(payload) != content:
         raise WorkctlError("EVIDENCE_MANIFEST_NON_CANONICAL")
     return f"evidence:{relative.as_posix()}", digest
@@ -9406,6 +9439,7 @@ def transition_evidence(
     evidence_ref: str | None,
     evidence_sha256: str | None,
     subject: str,
+    expected_observed_ref: str | None = None,
 ) -> tuple[str, str]:
     """Use immutable schema-v4 evidence and retain schema-v3 compatibility."""
     if doc.frontmatter.get("schema_version") == 4:
@@ -9416,6 +9450,7 @@ def transition_evidence(
             evidence_manifest,
             plan_id=str(doc.frontmatter["plan_id"]),
             subject=subject,
+            expected_observed_ref=expected_observed_ref,
         )
     if not isinstance(evidence_ref, str) or not isinstance(evidence_sha256, str):
         raise WorkctlError("EVIDENCE_REFERENCE_REQUIRED")
@@ -9716,14 +9751,27 @@ def cmd_plan_activation_promote(args: argparse.Namespace) -> None:
             args.confirmation,
             {"accepted"},
         )
+        target_ref = args.target_ref
         current = activation.get("status")
         if args.state == "in_progress":
             if current not in {"pending_confirmation", "deferred"}:
                 raise WorkctlError(f"INVALID_ACTIVATION_TRANSITION: {current} -> in_progress")
+            if target_ref is not None:
+                if doc.frontmatter.get("schema_version") != 4:
+                    raise WorkctlError("ACTIVATION_TARGET_REQUIRES_SCHEMA_V4")
+                activation["target_ref"] = exact_activation_target_from_placeholder(
+                    activation.get("target_ref"),
+                    target_ref,
+                )
             activation["status"] = "in_progress"
         else:
+            if target_ref is not None:
+                raise WorkctlError("ACTIVATION_TARGET_REBIND_INVALID_STATE")
             if current != "in_progress":
                 raise WorkctlError(f"INVALID_ACTIVATION_TRANSITION: {current} -> active")
+            frozen_target = activation.get("target_ref")
+            if not isinstance(frozen_target, str) or not frozen_target:
+                raise WorkctlError("INVALID_ACTIVATION_TARGET")
             evidence_ref, evidence_sha256 = transition_evidence(
                 root,
                 doc,
@@ -9731,11 +9779,14 @@ def cmd_plan_activation_promote(args: argparse.Namespace) -> None:
                 evidence_ref=args.evidence_ref,
                 evidence_sha256=args.evidence_sha256,
                 subject="activation",
+                expected_observed_ref=(
+                    frozen_target if doc.frontmatter.get("schema_version") == 4 else None
+                ),
             )
             activation["status"] = "active"
-            activation["current_ref"] = activation.get("target_ref")
+            activation["current_ref"] = frozen_target
             activation["evidence"] = {
-                "observed_ref": activation.get("current_ref"),
+                "observed_ref": frozen_target,
                 "source_ref": evidence_ref,
                 "checked_at": utc_now(),
                 "sha256": evidence_sha256,
@@ -12638,6 +12689,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["in_progress", "active"],
         required=True,
     )
+    activation_promote.add_argument("--target-ref")
     activation_promote.add_argument("--confirmation", required=True)
     activation_promote.add_argument("--evidence-manifest")
     activation_promote.add_argument("--evidence-ref")

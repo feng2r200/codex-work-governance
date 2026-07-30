@@ -6495,6 +6495,89 @@ activation:
     assert "ACTIVATION_CONFIRMATION_ID_IMMUTABLE" in result.stderr
 
 
+def test_schema_v3_activation_promote_rejects_target_binding(tmp_path: Path) -> None:
+    """Legacy Plans must upgrade before using intake-bound exact target repair."""
+    init_plan(tmp_path)
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["confirmations"] = {
+        "required": [
+            {
+                "id": "C-LIVE-SWITCH",
+                "description": "Activate candidate",
+                "status": "accepted",
+                "ref": "user:live",
+                "accepted_at": "2026-07-25T00:00:00+00:00",
+            }
+        ]
+    }
+    frontmatter["activation"] = {
+        "status": "pending_confirmation",
+        "current_ref": "plugin:work-governance@1.0.3",
+        "target_ref": "plugin:work-governance@1.0.4+codex.pending",
+        "confirmation_id": "C-LIVE-SWITCH",
+    }
+    write_plan(tmp_path, frontmatter, body)
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "activation-promote",
+        "--state",
+        "in_progress",
+        "--target-ref",
+        "plugin:work-governance@1.0.4+codex.exact",
+        "--confirmation",
+        "C-LIVE-SWITCH",
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "ACTIVATION_TARGET_REQUIRES_SCHEMA_V4" in result.stderr
+
+
+def test_schema_v3_activation_promote_without_target_remains_supported(tmp_path: Path) -> None:
+    """The optional target repair does not break the legacy promotion call."""
+    init_plan(tmp_path)
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["confirmations"] = {
+        "required": [
+            {
+                "id": "C-LIVE-SWITCH",
+                "description": "Activate candidate",
+                "status": "accepted",
+                "ref": "user:live",
+                "accepted_at": "2026-07-25T00:00:00+00:00",
+            }
+        ]
+    }
+    frontmatter["activation"] = {
+        "status": "pending_confirmation",
+        "current_ref": "work-governance@old",
+        "target_ref": "work-governance@candidate",
+        "confirmation_id": "C-LIVE-SWITCH",
+    }
+    write_plan(tmp_path, frontmatter, body)
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "activation-promote",
+        "--state",
+        "in_progress",
+        "--confirmation",
+        "C-LIVE-SWITCH",
+        "--expected-revision",
+        "1",
+    )
+    revised, _ = read_plan(tmp_path)
+
+    assert "ACTIVATION_PROMOTED in_progress revision=2" in result.stdout
+    assert revised["activation"]["status"] == "in_progress"
+    assert revised["activation"]["target_ref"] == "work-governance@candidate"
+
+
 @pytest.mark.parametrize(
     ("tasks_yaml", "error"),
     [
@@ -6695,8 +6778,8 @@ def test_closeout_affecting_patch_uses_current_slice_gate(
     assert expected_error in result.stderr
 
 
-def test_activation_metadata_update_uses_current_slice_gate(tmp_path: Path) -> None:
-    """A target/reference rewrite cannot use an unrelated accepted gate."""
+def test_generic_patch_cannot_change_activation_target(tmp_path: Path) -> None:
+    """Activation target changes require the dedicated intake-bound command."""
     init_plan(tmp_path)
     frontmatter, body = read_plan(tmp_path)
     frontmatter["confirmations"] = {
@@ -6752,11 +6835,13 @@ activation:
     )
 
     assert result.returncode == 2
-    assert "CONFIRMATION_BINDING_MISMATCH" in result.stderr
+    assert "ACTIVATION_TARGET_REQUIRES_DEDICATED_COMMAND" in result.stderr
 
 
-def test_accepted_activation_target_cannot_drift_under_slice_gate(tmp_path: Path) -> None:
-    """Once accepted, the activation object may change only under its own gate."""
+def test_accepted_activation_target_cannot_drift_through_generic_patch(
+    tmp_path: Path,
+) -> None:
+    """An accepted gate does not restore the removed generic target mutation path."""
     init_plan(tmp_path)
     frontmatter, body = read_plan(tmp_path)
     frontmatter["confirmations"] = {
@@ -6811,7 +6896,7 @@ activation:
     )
 
     assert result.returncode == 2
-    assert "CONFIRMATION_BINDING_MISMATCH" in result.stderr
+    assert "ACTIVATION_TARGET_REQUIRES_DEDICATED_COMMAND" in result.stderr
 
 
 def test_resolved_exclusion_cannot_be_removed_or_rewritten(tmp_path: Path) -> None:

@@ -1644,6 +1644,287 @@ def test_non_task_advancement_commands_enforce_their_exact_targets(tmp_path: Pat
         assert "INTAKE_TARGET_MISMATCH" in result.stderr, label
 
 
+def test_activation_start_binds_exact_target_before_runtime_evidence(tmp_path: Path) -> None:
+    """An accepted activation gate may replace a placeholder only before activation."""
+    project, session_id = prepare_admitted_project(tmp_path)
+    plan_id = "PLAN-20260729-001"
+    frontmatter = read_plan_frontmatter(project, plan_id)
+    confirmations = cast(
+        list[dict[str, object]],
+        cast(dict[str, object], frontmatter["confirmations"])["required"],
+    )
+    confirmations.append(
+        {
+            "id": "C-LIVE-SWITCH",
+            "description": "Activate the exact installed build.",
+            "status": "accepted",
+            "ref": "user:test-live-switch",
+            "accepted_at": "2026-07-29T01:00:00Z",
+        }
+    )
+    frontmatter["activation"] = {
+        "status": "pending_confirmation",
+        "current_ref": "plugin:work-governance@1.0.3",
+        "target_ref": "plugin:work-governance@1.0.4+codex.pending",
+        "confirmation_id": "C-LIVE-SWITCH",
+        "decision_ref": "confirmation:C-LIVE-SWITCH",
+    }
+    write_plan_frontmatter(project, plan_id, frontmatter)
+    _proposal, _manifest, turn_sha256 = issue_intake(
+        project,
+        session_id=session_id,
+        turn_id="turn-bind-activation-target",
+        decision="proceed",
+        targets=["activation"],
+        expected_revision=1,
+    )
+    recorded = read_plan_frontmatter(project, plan_id)
+    intake = cast(dict[str, object], recorded["intake"])
+    record = cast(dict[str, object], cast(list[object], intake["records"])[-1])
+    intake_sha256 = cast(str, record["record_sha256"])
+    exact_target = "plugin:work-governance@1.0.4+codex.20260730014019"
+
+    promoted = run_controller(
+        project,
+        "plan",
+        "activation-promote",
+        "--state",
+        "in_progress",
+        "--target-ref",
+        exact_target,
+        "--confirmation",
+        "C-LIVE-SWITCH",
+        "--expected-revision",
+        "2",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+    )
+    after_start = read_plan_frontmatter(project, plan_id)
+    activation = cast(dict[str, object], after_start["activation"])
+
+    assert "ACTIVATION_PROMOTED in_progress revision=3" in promoted.stdout
+    assert activation["status"] == "in_progress"
+    assert activation["current_ref"] == "plugin:work-governance@1.0.3"
+    assert activation["target_ref"] == exact_target
+
+    rejected_rebind = run_controller(
+        project,
+        "plan",
+        "activation-promote",
+        "--state",
+        "active",
+        "--target-ref",
+        "plugin:work-governance@different",
+        "--confirmation",
+        "C-LIVE-SWITCH",
+        "--evidence-ref",
+        "runtime:fresh-session",
+        "--evidence-sha256",
+        "a" * 64,
+        "--expected-revision",
+        "3",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+        check=False,
+    )
+
+    assert rejected_rebind.returncode == 2
+    assert "ACTIVATION_TARGET_REBIND_INVALID_STATE" in rejected_rebind.stderr
+
+    mismatched_evidence_input = project / "mismatched-activation-evidence.json"
+    mismatched_evidence_input.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "work-governance-evidence",
+                "plan_id": plan_id,
+                "subject": "activation",
+                "observed_ref": "plugin:work-governance@1.0.4+codex.different",
+                "created_at": "2026-07-29T01:01:00Z",
+                "producer_ref": "runtime:test-fresh-session",
+                "items": [{"ref": "codex-plugin-list:work-governance", "sha256": "b" * 64}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    mismatched_record = json.loads(
+        run_controller(
+            project,
+            "plan",
+            "evidence",
+            "record",
+            "--manifest",
+            str(mismatched_evidence_input),
+        ).stdout
+    )
+    mismatched_activation = run_controller(
+        project,
+        "plan",
+        "activation-promote",
+        "--state",
+        "active",
+        "--confirmation",
+        "C-LIVE-SWITCH",
+        "--evidence-manifest",
+        mismatched_record["path"],
+        "--expected-revision",
+        "3",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+        check=False,
+    )
+
+    assert mismatched_activation.returncode == 2
+    assert "EVIDENCE_MANIFEST_OBSERVED_REF_MISMATCH" in mismatched_activation.stderr
+
+    matching_evidence_input = project / "matching-activation-evidence.json"
+    matching_evidence_input.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "work-governance-evidence",
+                "plan_id": plan_id,
+                "subject": "activation",
+                "observed_ref": exact_target,
+                "created_at": "2026-07-29T01:02:00Z",
+                "producer_ref": "runtime:test-fresh-session",
+                "items": [{"ref": "codex-plugin-list:work-governance", "sha256": "c" * 64}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    matching_record = json.loads(
+        run_controller(
+            project,
+            "plan",
+            "evidence",
+            "record",
+            "--manifest",
+            str(matching_evidence_input),
+        ).stdout
+    )
+    activated = run_controller(
+        project,
+        "plan",
+        "activation-promote",
+        "--state",
+        "active",
+        "--confirmation",
+        "C-LIVE-SWITCH",
+        "--evidence-manifest",
+        matching_record["path"],
+        "--expected-revision",
+        "3",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+    )
+    active_plan = read_plan_frontmatter(project, plan_id)
+    active = cast(dict[str, object], active_plan["activation"])
+    evidence = cast(dict[str, object], active["evidence"])
+
+    assert "ACTIVATION_PROMOTED active revision=4" in activated.stdout
+    assert active["status"] == "active"
+    assert active["current_ref"] == exact_target
+    assert active["target_ref"] == exact_target
+    assert evidence["observed_ref"] == exact_target
+    assert evidence["source_ref"] == f"evidence:{matching_record['path']}"
+
+
+@pytest.mark.parametrize(
+    ("existing_target", "requested_target", "expected_error"),
+    [
+        (
+            "plugin:work-governance@1.0.4+codex.exact",
+            "plugin:work-governance@1.0.4+codex.different",
+            "ACTIVATION_TARGET_NOT_PLACEHOLDER",
+        ),
+        (
+            "plugin:work-governance@1.0.4+codex.pending",
+            "plugin:other@1.0.4+codex.exact",
+            "ACTIVATION_TARGET_EXACT_REF_REQUIRED",
+        ),
+        (
+            "plugin:work-governance@1.0.4+codex.pending",
+            "plugin:work-governance@1.0.4+codex.pending",
+            "ACTIVATION_TARGET_EXACT_REF_REQUIRED",
+        ),
+    ],
+)
+def test_activation_target_binding_rejects_drift(
+    tmp_path: Path,
+    existing_target: str,
+    requested_target: str,
+    expected_error: str,
+) -> None:
+    """Target binding rejects non-placeholder origins and non-exact replacements."""
+    project, session_id = prepare_admitted_project(tmp_path)
+    plan_id = "PLAN-20260729-001"
+    frontmatter = read_plan_frontmatter(project, plan_id)
+    confirmations = cast(
+        list[dict[str, object]],
+        cast(dict[str, object], frontmatter["confirmations"])["required"],
+    )
+    confirmations.append(
+        {
+            "id": "C-LIVE-SWITCH",
+            "description": "Activate the exact installed build.",
+            "status": "accepted",
+            "ref": "user:test-live-switch",
+            "accepted_at": "2026-07-29T01:00:00Z",
+        }
+    )
+    frontmatter["activation"] = {
+        "status": "pending_confirmation",
+        "current_ref": "plugin:work-governance@1.0.3",
+        "target_ref": existing_target,
+        "confirmation_id": "C-LIVE-SWITCH",
+        "decision_ref": "confirmation:C-LIVE-SWITCH",
+    }
+    write_plan_frontmatter(project, plan_id, frontmatter)
+    _proposal, _manifest, turn_sha256 = issue_intake(
+        project,
+        session_id=session_id,
+        turn_id="turn-reject-activation-target-drift",
+        decision="proceed",
+        targets=["activation"],
+        expected_revision=1,
+    )
+    recorded = read_plan_frontmatter(project, plan_id)
+    intake = cast(dict[str, object], recorded["intake"])
+    record = cast(dict[str, object], cast(list[object], intake["records"])[-1])
+    intake_sha256 = cast(str, record["record_sha256"])
+
+    result = run_controller(
+        project,
+        "plan",
+        "activation-promote",
+        "--state",
+        "in_progress",
+        "--target-ref",
+        requested_target,
+        "--confirmation",
+        "C-LIVE-SWITCH",
+        "--expected-revision",
+        "2",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert expected_error in result.stderr
+
+
 def test_route_blocker_covers_artifact_delivery_and_activation(tmp_path: Path) -> None:
     """A route blocker covers every target without adding implicit layer mappings."""
     unknown: dict[str, object] = {
