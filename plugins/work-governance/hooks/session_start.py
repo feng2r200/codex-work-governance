@@ -1434,9 +1434,7 @@ def runtime_bundle_payload(
         "plugin_manifest_sha256": manifest_digest,
         "controller_ref": (bundle / "workctl.py").relative_to(project_root).as_posix(),
         "controller_sha256": controller_sha256,
-        "lifecycle_ref": (bundle / "work-lifecycle.SKILL.md")
-        .relative_to(project_root)
-        .as_posix(),
+        "lifecycle_ref": (bundle / "work-lifecycle.SKILL.md").relative_to(project_root).as_posix(),
         "lifecycle_sha256": lifecycle_sha256,
     }
 
@@ -1521,10 +1519,7 @@ def install_runtime_bundle(
             ("work-lifecycle.SKILL.md", source_lifecycle.read_bytes()),
             (
                 "manifest.json",
-                (
-                    json.dumps(expected, indent=2, sort_keys=True, ensure_ascii=True)
-                    + "\n"
-                ).encode(),
+                (json.dumps(expected, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode(),
             ),
         )
         for name, content in files:

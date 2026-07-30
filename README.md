@@ -138,6 +138,15 @@ prefix is valid only for layout commands and is not a READY receipt. Do not
 reinterpret such output as a hook-trust failure. Restore the reported
 precondition and obtain a current `READY` receipt in a fresh session.
 
+Every trusted `UserPromptSubmit` atomically replaces
+`.work-governance/runtime/current-turn-receipt.json`. The ignored receipt binds
+the installed build, current SessionStart receipt hash, official `session_id`
+and `turn_id`, exact UTF-8 prompt SHA256, project root, and
+`request_ref=user:session/<session>/turn/<turn>/sha256/<prompt-sha256>`. A new
+turn supersedes the old receipt without creating a project history log.
+Missing, disabled, mismatched, or stale hooks block Plan advancement; simple
+No-Plan answers remain ephemeral and create no Plan, index, or project log.
+
 ## Controller
 
 Run only the exact `intake_command` emitted by the current SessionStart. It uses
@@ -155,6 +164,27 @@ Every write is bound to the newest receipt; after another SessionStart, an old
 session receives `BOOTSTRAP_RECEIPT_SUPERSEDED`. The bootstrap-only capability
 described above is a separate fail-closed channel for SessionStart layout
 mutation and never satisfies this READY requirement.
+
+For each non-simple request, show a fresh `proceed`, `explore`, or `ask`
+decision. Plan-controlled work also generates and records it:
+
+```sh
+<receipt-bound-workctl> intake receipt \
+  --turn-receipt-sha256 <turn-receipt-sha256> \
+  --classification plan_controlled --decision proceed \
+  --rationale "<decision basis>" --targets task:T-001
+<receipt-bound-workctl> plan intake record \
+  --manifest /path/to/intake.json --expected-revision <revision>
+```
+
+Advancing commands also require `--turn-receipt-sha256` and
+`--expected-intake-sha256`. The latest record must match the current request,
+decision basis, and every exact command target. `route` covers all targets;
+other target types do not imply cross-layer coverage.
+Non-simple No-Plan work keeps only the current runtime receipt and visible
+reply; it does not call the Plan controller or persist an intake record.
+Intake rationale records only a minimal decision summary; never copy raw prompt
+content, credentials, tokens, or other secrets into the Plan.
 
 The controller uses `.work-governance/_Plan/index.yaml` only to locate the
 active Plan. `.work-governance/_Plan/<plan-id>.md` frontmatter is the sole
@@ -193,7 +223,9 @@ New Plans use schema v4 to make these concerns first-class:
 
 - a stable goal statement and measurable success conditions;
 - a revisioned demand contract bound to an accepted confirmation;
-- open or resolved unknowns and their expected evidence;
+- append-only, hash-chained intake records for trusted user turns;
+- open or resolved unknowns with `owner`, `impact`, authoritative `blocks`,
+  and non-empty expected evidence;
 - task-level expected evidence deltas;
 - validation provenance from a confirmed obligation, observed failure, code
   invariant, or supported integration boundary;
@@ -207,10 +239,14 @@ An active schema-v3 Plan is readable but reports
 `PLAN_CONTRACT_UPGRADE_REQUIRED`; ordinary writes remain blocked until
 `plan contract upgrade apply --manifest <upgrade.yaml>` completes or
 `plan contract upgrade recover` deterministically rolls the transaction
-forward. Completed inactive schema-v3 Plans remain readable historical
+forward. The upgrade manifest embeds the current-turn intake proposal, and the
+staged schema-v4 target binds its first record in the recovery journal.
+Completed inactive schema-v3 Plans remain readable historical
 records. Goal or contract changes use `plan contract revise`; evidence-backed
 method changes that preserve the goal use `plan adapt`. Unknowns are managed
-through `plan unknown add` and `plan unknown resolve`.
+through `plan unknown add`, `plan unknown classify`, and
+`plan unknown resolve`. `plan status` reports independent contract, intake,
+and unknown-contract state axes.
 
 Missing authority for a live action creates a pending confirmation and keeps
 the project route open. It cannot be converted into an absolute no-next claim
@@ -293,10 +329,13 @@ normal admission path:
 <receipt-bound-workctl> plan admit recover
 ```
 
-Admission validates the prepared schema-v4 Plan, its exact hash and accepted
-confirmation, stages a durable transaction, installs the Plan, and activates
-`.work-governance/_Plan/index.yaml` last. Once activation begins, recovery only
-rolls forward.
+Admission validates the prepared schema-v4 Plan, its exact hash, accepted
+confirmation, and embedded current-turn intake proposal. It injects the first
+record only in staging, binds request, turn receipt, decision basis, intake
+record and target Plan hashes in the durable journal, installs the strict Plan,
+and activates `.work-governance/_Plan/index.yaml` last. Recovery authenticates
+the bound journal without pretending that the recovery turn is the original
+request.
 
 Completion evidence is recorded separately before it is consumed:
 
@@ -341,11 +380,15 @@ rollover instead of reopening or overwriting the predecessor:
 ```
 
 The manifest fixes the predecessor ID, revision, path and SHA256, the exact
-`.work-governance/_Plan/index.yaml` baseline, and a prepared schema-v4 successor
-contract. Apply requires `C-PLAN-ROLLOVER` to carry the dry-run proposal digest.
+`.work-governance/_Plan/index.yaml` baseline, a prepared schema-v4 successor
+contract, and its embedded current-turn intake. Apply requires
+`C-PLAN-ROLLOVER` to carry the dry-run proposal digest.
 The transaction preserves the completed predecessor bytes, records recursive
-predecessor lineage in the successor, stages the successor and replacement
-index, and activates the index last. An incomplete rollover freezes ordinary
+predecessor lineage in the successor, binds the first intake and unsigned
+target contract hash, stages the strict successor and replacement index, and
+activates the index last. Historical terminal predecessors use their
+completion-time contract; only the successor must satisfy the new strict
+intake contract. An incomplete rollover freezes ordinary
 work in `MIGRATION_RECOVERY_REQUIRED` until the named recovery converges. If
 `AGENTS.md` or `CLAUDE.md` explicitly names the predecessor path as authority,
 that routing must be separately revised before rollover so it cannot recreate

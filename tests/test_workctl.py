@@ -19,12 +19,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "plugins" / "work-governance" / "scripts" / "workctl.py"
 LIFECYCLE_SKILL = (
-    REPO_ROOT
-    / "plugins"
-    / "work-governance"
-    / "skills"
-    / "work-lifecycle"
-    / "SKILL.md"
+    REPO_ROOT / "plugins" / "work-governance" / "skills" / "work-lifecycle" / "SKILL.md"
 )
 
 
@@ -48,16 +43,18 @@ def ensure_test_ready_receipt(
     if root is None:
         return None
     plugin_manifest_sha256 = ("1" if allow_legacy_contract else "2") * 64
-    bundle = (
-        root
-        / ".work-governance"
-        / "runtime"
-        / "plugin-builds"
-        / plugin_manifest_sha256
-    )
+    bundle = root / ".work-governance" / "runtime" / "plugin-builds" / plugin_manifest_sha256
     bundle.mkdir(parents=True, exist_ok=True)
     controller_source = SCRIPT.read_text(encoding="utf-8")
     if allow_legacy_contract:
+        strict_marker = "STRICT_INITIAL_INTAKE_REQUIRED = True\n"
+        if controller_source.count(strict_marker) != 1:
+            raise AssertionError("strict initial intake test marker drifted")
+        controller_source = controller_source.replace(
+            strict_marker,
+            "STRICT_INITIAL_INTAKE_REQUIRED = False\n",
+            1,
+        )
         marker = (
             "def enforce_active_contract_gate(args: argparse.Namespace, root: Path) -> None:\n"
             '    """Allow only upgrade preparation/recovery writes for an active '
@@ -66,6 +63,25 @@ def ensure_test_ready_receipt(
         if marker not in controller_source:
             raise AssertionError("test controller patch marker drifted")
         controller_source = controller_source.replace(marker, marker + "    return\n", 1)
+        intake_marker = (
+            "def require_current_intake(\n"
+            "    root: Path,\n"
+            "    frontmatter: Mapping[str, Any],\n"
+            "    *,\n"
+            "    turn_receipt_sha256: str | None,\n"
+            "    expected_intake_sha256: str | None,\n"
+            "    targets: list[str],\n"
+            ") -> None:\n"
+            '    """Require a current-turn, current-basis intake record covering '
+            'all targets."""\n'
+        )
+        if intake_marker not in controller_source:
+            raise AssertionError("test intake patch marker drifted")
+        controller_source = controller_source.replace(
+            intake_marker,
+            intake_marker + "    return\n",
+            1,
+        )
     lock_marker = '    with lock_path.open("a+", encoding="utf-8") as handle:\n'
     lock_instrumentation = (
         lock_marker
@@ -174,9 +190,7 @@ def run_workctl(
     supplied_environment = env or {}
     receipt = None
     layout_mutation = (
-        len(args) >= 2
-        and args[0] == "layout"
-        and args[1] not in {"status", "validate"}
+        len(args) >= 2 and args[0] == "layout" and args[1] not in {"status", "validate"}
     )
     if args and (args[0] != "layout" or layout_mutation):
         receipt = ensure_test_ready_receipt(
@@ -303,9 +317,7 @@ def read_plan(cwd: Path) -> tuple[dict[str, Any], str]:
 
 
 def read_plan_by_id(cwd: Path, plan_id: str) -> tuple[dict[str, Any], str]:
-    text = (
-        cwd / ".work-governance" / "_Plan" / f"{plan_id}.md"
-    ).read_text(encoding="utf-8")
+    text = (cwd / ".work-governance" / "_Plan" / f"{plan_id}.md").read_text(encoding="utf-8")
     _, raw, body = text.split("---\n", 2)
     payload = yaml.safe_load(raw)
     assert isinstance(payload, dict)
@@ -724,9 +736,7 @@ def rollover_target_frontmatter(plan_id: str) -> dict[str, Any]:
             },
         }
     ]
-    frontmatter["artifacts"] = [
-        {"id": "A-001", "path": "successor.txt", "status": "pending"}
-    ]
+    frontmatter["artifacts"] = [{"id": "A-001", "path": "successor.txt", "status": "pending"}]
     frontmatter["delivery"] = {
         "status": "pending",
         "boundary": "successor-delivery",
@@ -1554,9 +1564,10 @@ def test_current_controller_honors_supported_prior_adoption_receipt(
 
     assert status["legacy"]["classification"] == "MIGRATABLE"
     assert migrated.stdout.startswith("LAYOUT_COMMITTED LAY-")
-    assert json.loads(run_workctl(tmp_path, "layout", "status").stdout)[
-        "layout_state"
-    ] == "LAYOUT_READY"
+    assert (
+        json.loads(run_workctl(tmp_path, "layout", "status").stdout)["layout_state"]
+        == "LAYOUT_READY"
+    )
 
 
 def test_layout_migrates_schema_one_confirmation_without_inventing_timestamp(
@@ -3067,9 +3078,7 @@ def test_old_committed_layout_corrects_exact_scope_root_with_version_last(
     version = yaml.safe_load(
         (tmp_path / ".work-governance" / "version.yaml").read_text(encoding="utf-8")
     )
-    proofs = sorted(
-        (tmp_path / ".work-governance" / "_Plan" / ".migrations").glob("LAY-*.yaml")
-    )
+    proofs = sorted((tmp_path / ".work-governance" / "_Plan" / ".migrations").glob("LAY-*.yaml"))
     correction_proof = next(path for path in proofs if path != original_proof)
     proof_payload = yaml.safe_load(correction_proof.read_text(encoding="utf-8"))
     transaction = next(
@@ -7820,9 +7829,7 @@ def test_bootstrap_capability_requires_current_action_revision(
         bootstrapping=True,
     )
     assert receipt is not None
-    capability_path = (
-        tmp_path / ".work-governance" / "runtime" / "bootstrap-capability.json"
-    )
+    capability_path = tmp_path / ".work-governance" / "runtime" / "bootstrap-capability.json"
     payload = json.loads(capability_path.read_text(encoding="utf-8"))
     payload["action_revision"] = 4
     capability_path.write_text(
@@ -7910,13 +7917,7 @@ def test_plan_admission_recovery_rejects_noncanonical_target_before_write(
     run_workctl(tmp_path, "layout", "migrate")
     plan_id = "PLAN-20260728-008"
     transaction_id = "ADM-20260728-008"
-    transaction = (
-        tmp_path
-        / ".work-governance"
-        / "runtime"
-        / "plan-admissions"
-        / transaction_id
-    )
+    transaction = tmp_path / ".work-governance" / "runtime" / "plan-admissions" / transaction_id
     staged = transaction / "staging" / f"{plan_id}.md"
     write_markdown_plan(staged, schema_v4_admission_plan(plan_id), "# Forged Recovery\n")
     journal = {
@@ -8049,7 +8050,7 @@ def test_active_schema_v3_requires_recoverable_contract_upgrade(tmp_path: Path) 
         str(manifest_path),
         check=False,
         env={
-            "TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0",
+            "TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1",
             "WORKCTL_TEST_UPGRADE_INTERRUPT_AFTER": "plan-replaced",
         },
     )
@@ -8063,7 +8064,7 @@ def test_active_schema_v3_requires_recoverable_contract_upgrade(tmp_path: Path) 
         "recover",
         "--transaction-id",
         "UPG-20260728-001",
-        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
     )
     upgraded, _ = read_plan(tmp_path)
 
@@ -8080,13 +8081,7 @@ def test_contract_upgrade_recovery_rejects_noncanonical_target_before_write(
     init_plan(tmp_path)
     plan_id = "PLAN-20260723-001"
     transaction_id = "UPG-20260728-009"
-    transaction = (
-        tmp_path
-        / ".work-governance"
-        / "runtime"
-        / "contract-upgrades"
-        / transaction_id
-    )
+    transaction = tmp_path / ".work-governance" / "runtime" / "contract-upgrades" / transaction_id
     staged = transaction / "staging" / f"{plan_id}.md"
     write_markdown_plan(staged, schema_v4_admission_plan(plan_id), "# Forged Upgrade\n")
     journal = {
@@ -8233,6 +8228,10 @@ def test_unknown_resolution_and_plan_adaptation_preserve_confirmed_goal(
         "U-001",
         "--question",
         "Which runtime path is authoritative?",
+        "--owner",
+        "agent",
+        "--impact",
+        "non_blocking",
         "--expected-evidence",
         "A receipt-bound controller path.",
         "--expected-revision",

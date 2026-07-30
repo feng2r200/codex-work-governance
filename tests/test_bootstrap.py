@@ -444,9 +444,7 @@ def adopt_legacy(project: Path) -> dict[str, Any]:
     )
     status = json.loads(status_result.stdout)
     legacy = status["legacy"]
-    capability_path = (
-        project / ".work-governance" / "runtime" / "bootstrap-capability.json"
-    )
+    capability_path = project / ".work-governance" / "runtime" / "bootstrap-capability.json"
     capability = json.loads(capability_path.read_text(encoding="utf-8"))
     controller = project / capability["controller_ref"]
     capability_sha256 = hashlib.sha256(capability_path.read_bytes()).hexdigest()
@@ -1008,9 +1006,7 @@ def test_action_four_sessionstart_upgrades_action_three_scope_residual(
     corrected = yaml.safe_load(corrected_raw)
     proofs = list((governance / "_Plan" / ".migrations").glob("LAY-*.yaml"))
 
-    assert "WORK_GOVERNANCE_BOOTSTRAP READY" in (
-        resumed["hookSpecificOutput"]["additionalContext"]
-    )
+    assert "WORK_GOVERNANCE_BOOTSTRAP READY" in (resumed["hookSpecificOutput"]["additionalContext"])
     assert len(resumed_commands) == 4
     assert resumed_commands[0][-1] == "--help"
     assert all("--offline" in command for command in resumed_commands)
