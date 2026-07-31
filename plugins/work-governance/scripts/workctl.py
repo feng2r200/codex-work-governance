@@ -37,6 +37,7 @@ ROLLOVER_ID_RE = re.compile(r"^ROL-\d{8}-\d{3}$")
 RETIREMENT_ID_RE = re.compile(r"^RET-\d{8}-\d{3}$")
 ADMISSION_ID_RE = re.compile(r"^ADM-\d{8}-\d{3}$")
 CONTRACT_UPGRADE_ID_RE = re.compile(r"^UPG-\d{8}-\d{3}$")
+RECONCILE_UPGRADE_ID_RE = re.compile(r"^RCU-\d{8}-\d{3}$")
 ROLLOVER_CONFIRMATION_PAYLOAD_VERSION = 2
 UNKNOWN_ID_RE = re.compile(r"^U-\d{3}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -169,6 +170,10 @@ AUTHORITY_BLOCKED_COMMANDS = [
     "plan status",
     "plan reconcile apply",
     "plan reconcile recover",
+    "plan reconcile-upgrade apply",
+    "plan reconcile-upgrade recover",
+    "plan contract upgrade status",
+    "plan contract upgrade recover",
     "plan rollover apply",
     "plan rollover recover",
     "plan retire apply",
@@ -460,6 +465,16 @@ class ReconciliationRecoveryInventory:
     target: Path
     sources: list[dict[str, Any]]
     agents_record: dict[str, Any] | None
+
+
+@dataclass(frozen=True)
+class ContractUpgradePreparation:
+    """Hold an authenticated schema-v3 source and its prepared schema-v4 target."""
+
+    manifest: dict[str, Any]
+    upgraded: PlanDocument
+    source_sha256: str
+    intake_binding: dict[str, object] | None
 
 
 def utc_now() -> str:
@@ -2647,6 +2662,101 @@ def incomplete_retirement_journals(root: Path) -> list[Path]:
     return journals
 
 
+def runtime_transaction_journals(
+    root: Path,
+    directory_name: str,
+    id_pattern: re.Pattern[str],
+    *,
+    error: str,
+) -> list[Path]:
+    """Return canonical runtime journals after rejecting unsafe inventory entries."""
+    base = governance_root(root) / "runtime" / directory_name
+    if base.is_symlink():
+        raise WorkctlError(error)
+    if not base.is_dir():
+        return []
+    journals: list[Path] = []
+    for transaction in sorted(base.iterdir(), key=lambda path: path.name):
+        if (
+            transaction.is_symlink()
+            or not transaction.is_dir()
+            or id_pattern.fullmatch(transaction.name) is None
+        ):
+            raise WorkctlError(error)
+        journal = transaction / "journal.json"
+        if journal.is_symlink():
+            raise WorkctlError(error)
+        if journal.exists():
+            if not journal.is_file():
+                raise WorkctlError(error)
+            journals.append(journal)
+    return journals
+
+
+def incomplete_contract_upgrade_journals(root: Path) -> list[Path]:
+    """Return contract-upgrade journals that have not reached committed state."""
+    journals: list[Path] = []
+    for path in runtime_transaction_journals(
+        root,
+        "contract-upgrades",
+        CONTRACT_UPGRADE_ID_RE,
+        error="INVALID_CONTRACT_UPGRADE_TRANSACTION_INVENTORY",
+    ):
+        try:
+            payload = load_yaml_file(path)
+        except WorkctlError:
+            journals.append(path)
+            continue
+        if payload.get("status") != "committed":
+            journals.append(path)
+    return journals
+
+
+def incomplete_reconcile_upgrade_journals(root: Path) -> list[Path]:
+    """Return composed parent journals that have not reached committed state."""
+    journals: list[Path] = []
+    for path in runtime_transaction_journals(
+        root,
+        "reconcile-upgrades",
+        RECONCILE_UPGRADE_ID_RE,
+        error="INVALID_RECONCILE_UPGRADE_TRANSACTION_INVENTORY",
+    ):
+        try:
+            payload = load_yaml_file(path)
+        except WorkctlError:
+            journals.append(path)
+            continue
+        if payload.get("status") != "committed":
+            journals.append(path)
+    return journals
+
+
+def ignored_transaction_journals(
+    root: Path,
+    ignore_journal: Path | None,
+) -> set[Path]:
+    """Expand an authenticated child journal exemption to its parent workflow."""
+    if ignore_journal is None:
+        return set()
+    ignored = {ignore_journal.resolve()}
+    for parent_path in runtime_transaction_journals(
+        root,
+        "reconcile-upgrades",
+        RECONCILE_UPGRADE_ID_RE,
+        error="INVALID_RECONCILE_UPGRADE_TRANSACTION_INVENTORY",
+    ):
+        try:
+            parent = load_reconcile_upgrade_journal(root, parent_path)
+            migration = checked_project_path(root, str(parent["migration_journal"]))
+            upgrade = checked_project_path(root, str(parent["contract_upgrade_journal"]))
+        except WorkctlError:
+            continue
+        related = {parent_path.resolve(), migration.resolve(), upgrade.resolve()}
+        if ignored & related:
+            ignored.update(related)
+    return ignored
+
+
 def rollover_transaction_paths(
     root: Path,
     rollover_id: str,
@@ -2971,22 +3081,39 @@ def inspect_authority(
     """Resolve the deterministic authority state for a project."""
     candidates = discover_authority_candidates(root, explicit_candidates)
     blockers: list[str] = []
+    ignored_journals = ignored_transaction_journals(root, ignore_journal)
     migration_journals = [
         journal
         for journal in incomplete_migration_journals(root)
-        if ignore_journal is None or journal.resolve() != ignore_journal.resolve()
+        if journal.resolve() not in ignored_journals
     ]
     rollover_journals = [
         journal
         for journal in incomplete_rollover_journals(root)
-        if ignore_journal is None or journal.resolve() != ignore_journal.resolve()
+        if journal.resolve() not in ignored_journals
     ]
     retirement_journals = [
         journal
         for journal in incomplete_retirement_journals(root)
-        if ignore_journal is None or journal.resolve() != ignore_journal.resolve()
+        if journal.resolve() not in ignored_journals
     ]
-    if migration_journals or rollover_journals or retirement_journals:
+    contract_upgrade_journals = [
+        journal
+        for journal in incomplete_contract_upgrade_journals(root)
+        if journal.resolve() not in ignored_journals
+    ]
+    reconcile_upgrade_journals = [
+        journal
+        for journal in incomplete_reconcile_upgrade_journals(root)
+        if journal.resolve() not in ignored_journals
+    ]
+    if (
+        migration_journals
+        or rollover_journals
+        or retirement_journals
+        or contract_upgrade_journals
+        or reconcile_upgrade_journals
+    ):
         blockers.extend(
             f"incomplete migration journal: {relative_project_path(root, journal)}"
             for journal in migration_journals
@@ -2998,6 +3125,14 @@ def inspect_authority(
         blockers.extend(
             f"incomplete retirement journal: {relative_project_path(root, journal)}"
             for journal in retirement_journals
+        )
+        blockers.extend(
+            f"incomplete contract-upgrade journal: {relative_project_path(root, journal)}"
+            for journal in contract_upgrade_journals
+        )
+        blockers.extend(
+            f"incomplete reconcile-upgrade journal: {relative_project_path(root, journal)}"
+            for journal in reconcile_upgrade_journals
         )
         state = "MIGRATION_RECOVERY_REQUIRED"
         return AuthorityReport(state, candidates, blockers, allowed_commands_for_state(state))
@@ -7665,6 +7800,59 @@ def write_transaction_journal(path: Path, payload: Mapping[str, Any]) -> None:
     write_atomic(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
+def validate_partial_transaction_directory(
+    transaction: Path,
+    expected_files: set[str],
+    *,
+    error: str,
+) -> None:
+    """Require an existing partial staging tree to contain only expected entries."""
+    if not transaction.exists() and not transaction.is_symlink():
+        return
+    if transaction.is_symlink() or not transaction.is_dir():
+        raise WorkctlError(error)
+    expected_directories: set[str] = set()
+    for relative_file in expected_files:
+        parent = Path(relative_file).parent
+        while parent != Path("."):
+            expected_directories.add(parent.as_posix())
+            parent = parent.parent
+    for candidate in transaction.rglob("*"):
+        relative = candidate.relative_to(transaction).as_posix()
+        if candidate.is_symlink():
+            raise WorkctlError(error)
+        if candidate.is_dir():
+            if relative not in expected_directories:
+                raise WorkctlError(error)
+        elif candidate.is_file():
+            if relative not in expected_files:
+                raise WorkctlError(error)
+        else:
+            raise WorkctlError(error)
+
+
+def write_or_validate_staged_bytes(
+    path: Path,
+    content: bytes,
+    *,
+    error: str,
+) -> None:
+    """Write a missing staged file or require exact existing ordinary-file bytes."""
+    if path.is_symlink():
+        raise WorkctlError(error)
+    if path.exists():
+        if not path.is_file() or path.read_bytes() != content:
+            raise WorkctlError(error)
+        return
+    write_atomic_bytes(path, content)
+
+
+def maybe_interrupt_before_transaction_journal(kind: str) -> None:
+    """Inject a deterministic test-only interruption before journal publication."""
+    if os.environ.get("WORKCTL_TEST_STAGE_INTERRUPT_BEFORE_JOURNAL") == kind:
+        raise WorkctlError(f"TRANSACTION_STAGE_TEST_INTERRUPTED: {kind}")
+
+
 def load_admission_manifest(path: Path) -> dict[str, Any]:
     """Validate the closed public Plan-admission manifest."""
     manifest = load_yaml_file(path)
@@ -8015,6 +8203,176 @@ def load_contract_upgrade_manifest(path: Path) -> dict[str, Any]:
     return manifest
 
 
+def prepare_contract_upgrade(
+    root: Path,
+    manifest_path: Path,
+    source: PlanDocument,
+    *,
+    source_sha256: str,
+    session_receipt: Mapping[str, object] | None,
+) -> ContractUpgradePreparation:
+    """Authenticate and build one schema-v4 child target without writing it."""
+    manifest = load_contract_upgrade_manifest(manifest_path)
+    if contract_state(source.frontmatter) != "PLAN_CONTRACT_UPGRADE_REQUIRED":
+        raise WorkctlError("PLAN_CONTRACT_UPGRADE_NOT_REQUIRED")
+    if (
+        source.frontmatter.get("plan_id") != manifest["plan_id"]
+        or source.frontmatter.get("revision") != manifest["expected_revision"]
+        or source_sha256 != manifest["plan_sha256"]
+    ):
+        raise WorkctlError("PLAN_CONTRACT_UPGRADE_INPUT_DRIFT")
+    confirmation_id = str(manifest["confirmation_id"])
+    decision = confirmations(source.frontmatter).get(confirmation_id)
+    if (
+        decision is None
+        or decision.get("status") != "accepted"
+        or decision.get("ref") != manifest["confirmation_ref"]
+    ):
+        raise WorkctlError("PLAN_CONTRACT_UPGRADE_CONFIRMATION_MISMATCH")
+    evidence_ref, _ = verify_evidence_manifest(
+        root,
+        str(manifest["evidence_manifest"]),
+        plan_id=str(source.frontmatter["plan_id"]),
+        subject="contract-upgrade",
+    )
+    upgraded = PlanDocument(
+        path=source.path,
+        frontmatter=copy.deepcopy(source.frontmatter),
+        body=source.body,
+    )
+    upgraded.frontmatter["schema_version"] = 4
+    upgraded.frontmatter["goal"] = manifest["goal"]
+    upgraded.frontmatter["contract"] = {
+        "revision": 1,
+        "confirmation_id": confirmation_id,
+        "confirmed_ref": decision["ref"],
+    }
+    upgraded.frontmatter["unknowns"] = manifest["unknowns"]
+    task_metadata = cast(dict[str, Any], manifest["task_metadata"])
+    for task in upgraded.frontmatter.get("tasks", []):
+        if not isinstance(task, dict) or not isinstance(task.get("id"), str):
+            continue
+        metadata = task_metadata.get(task["id"])
+        if not isinstance(metadata, dict) or set(metadata) != {
+            "unknowns",
+            "expected_evidence_delta",
+        }:
+            raise WorkctlError(f"CONTRACT_UPGRADE_TASK_METADATA_MISSING: {task['id']}")
+        task.update(metadata)
+    if set(task_metadata) != {
+        str(task["id"])
+        for task in upgraded.frontmatter.get("tasks", [])
+        if isinstance(task, dict) and isinstance(task.get("id"), str)
+    }:
+        raise WorkctlError("CONTRACT_UPGRADE_TASK_METADATA_UNKNOWN")
+    validation_provenance = cast(dict[str, Any], manifest["validation_provenance"])
+    for validation in upgraded.frontmatter.get("validations", []):
+        if not isinstance(validation, dict) or not isinstance(validation.get("id"), str):
+            continue
+        provenance = validation_provenance.get(validation["id"])
+        if not isinstance(provenance, dict):
+            raise WorkctlError(
+                f"CONTRACT_UPGRADE_VALIDATION_PROVENANCE_MISSING: {validation['id']}"
+            )
+        validation["provenance"] = provenance
+    if set(validation_provenance) != {
+        str(validation["id"])
+        for validation in upgraded.frontmatter.get("validations", [])
+        if isinstance(validation, dict) and isinstance(validation.get("id"), str)
+    }:
+        raise WorkctlError("CONTRACT_UPGRADE_VALIDATION_PROVENANCE_UNKNOWN")
+    next_revision = int(upgraded.frontmatter["revision"]) + 1
+    changed_at = decision.get("accepted_at") or decision.get("decided_at")
+    if not isinstance(changed_at, str) or not changed_at:
+        raise WorkctlError("PLAN_CONTRACT_UPGRADE_CONFIRMATION_MISMATCH")
+    upgraded.frontmatter["revision"] = next_revision
+    upgraded.frontmatter["updated_at"] = changed_at
+    upgraded.frontmatter["revision_history"] = [
+        {
+            "revision": next_revision,
+            "kind": "contract-upgrade",
+            "changed_at": changed_at,
+            "rationale": "Upgrade the active legacy contract without trusting log hashes.",
+            "confirmation_id": confirmation_id,
+            "evidence_manifest": evidence_ref,
+        }
+    ]
+    intake_binding: dict[str, object] | None = None
+    if STRICT_INITIAL_INTAKE_REQUIRED:
+        if session_receipt is None:
+            raise WorkctlError("BOOTSTRAP_RECEIPT_REQUIRED")
+        proposal = embedded_initial_intake(manifest)
+        validate_current_intake_proposal(
+            root,
+            upgraded.frontmatter,
+            proposal,
+            session_receipt=session_receipt,
+        )
+        record = inject_initial_intake(upgraded.frontmatter, proposal)
+        intake_binding = initial_intake_binding(proposal, record)
+    require_valid_candidate(upgraded)
+    return ContractUpgradePreparation(
+        manifest=manifest,
+        upgraded=upgraded,
+        source_sha256=source_sha256,
+        intake_binding=intake_binding,
+    )
+
+
+def stage_contract_upgrade(
+    root: Path,
+    manifest_path: Path,
+    preparation: ContractUpgradePreparation,
+) -> Path:
+    """Stage one independently recoverable contract-upgrade child transaction."""
+    manifest = preparation.manifest
+    upgraded = preparation.upgraded
+    transaction_id = str(manifest["transaction_id"])
+    transaction = contract_upgrade_transaction_dir(root, transaction_id)
+    journal_path = transaction / "journal.json"
+    if journal_path.exists():
+        return journal_path
+    staged = transaction / "staging" / upgraded.path.name
+    staged_bytes = dump_plan(upgraded).encode("utf-8")
+    conflict_error = "CONTRACT_UPGRADE_TRANSACTION_CONFLICT"
+    validate_partial_transaction_directory(
+        transaction,
+        {relative_project_path(transaction, staged)},
+        error=conflict_error,
+    )
+    write_or_validate_staged_bytes(staged, staged_bytes, error=conflict_error)
+    journal: dict[str, Any] = {
+        "schema_version": 1,
+        "kind": "plan-contract-upgrade",
+        "transaction_id": transaction_id,
+        "status": "prepared",
+        "created_at": utc_now(),
+        "updated_at": utc_now(),
+        "plan_id": upgraded.frontmatter["plan_id"],
+        "source_sha256": preparation.source_sha256,
+        "target_sha256": sha256_bytes(staged_bytes),
+        "manifest_sha256": sha256_file(manifest_path),
+        "staged_path": relative_project_path(root, staged),
+        "target_path": relative_project_path(root, upgraded.path),
+    }
+    if STRICT_INITIAL_INTAKE_REQUIRED:
+        intake_binding = preparation.intake_binding
+        if intake_binding is None:
+            raise WorkctlError("INITIAL_INTAKE_REQUIRED")
+        journal["intake_binding"] = intake_binding
+        journal["transaction_binding_sha256"] = transaction_binding_digest(
+            transaction_kind="plan-contract-upgrade",
+            transaction_id=transaction_id,
+            plan_id=str(upgraded.frontmatter["plan_id"]),
+            prepared_plan_sha256=preparation.source_sha256,
+            target_plan_sha256=str(journal["target_sha256"]),
+            intake_binding=intake_binding,
+        )
+    maybe_interrupt_before_transaction_journal("contract-upgrade")
+    write_transaction_journal(journal_path, journal)
+    return journal_path
+
+
 def resume_contract_upgrade(root: Path, journal_path: Path) -> None:
     """Roll one staged active-Plan contract upgrade forward."""
     reject_symlink_components(root, journal_path)
@@ -8051,9 +8409,6 @@ def resume_contract_upgrade(root: Path, journal_path: Path) -> None:
         or journal_path != contract_upgrade_transaction_dir(root, transaction_id) / "journal.json"
     ):
         raise WorkctlError("INVALID_CONTRACT_UPGRADE_JOURNAL")
-    if journal.get("status") == "committed":
-        print(f"PLAN_CONTRACT_UPGRADE_ALREADY_COMMITTED {transaction_id}")
-        return
     target = checked_project_path(root, str(journal.get("target_path")))
     staged = checked_project_path(root, str(journal.get("staged_path")))
     expected_transaction = contract_upgrade_transaction_dir(root, transaction_id)
@@ -8109,6 +8464,16 @@ def resume_contract_upgrade(root: Path, journal_path: Path) -> None:
     if index.get("active_plan_id") != plan_id:
         raise WorkctlError("CONTRACT_UPGRADE_ACTIVE_PLAN_DRIFT")
     current_sha256 = sha256_file(target)
+    if journal.get("status") == "committed":
+        if current_sha256 != target_sha256:
+            raise WorkctlError("CONTRACT_UPGRADE_COMMITTED_STATE_DRIFT")
+        doc = load_plan(target)
+        require_valid_candidate(doc)
+        errors = validate_plan(root, ignore_journal=journal_path)
+        if errors:
+            raise WorkctlError(f"PLAN_CONTRACT_UPGRADE_INVALID: {'; '.join(errors)}")
+        print(f"PLAN_CONTRACT_UPGRADE_ALREADY_COMMITTED {transaction_id}")
+        return
     if current_sha256 == source_sha256:
         write_atomic_bytes(target, staged.read_bytes())
     elif current_sha256 != target_sha256:
@@ -8120,7 +8485,7 @@ def resume_contract_upgrade(root: Path, journal_path: Path) -> None:
         raise WorkctlError("PLAN_CONTRACT_UPGRADE_TEST_INTERRUPTED: plan-replaced")
     doc = load_plan(target)
     require_valid_candidate(doc)
-    errors = validate_plan(root)
+    errors = validate_plan(root, ignore_journal=journal_path)
     if errors:
         raise WorkctlError(f"PLAN_CONTRACT_UPGRADE_INVALID: {'; '.join(errors)}")
     journal["status"] = "committed"
@@ -8155,144 +8520,27 @@ def cmd_plan_contract_upgrade_apply(args: argparse.Namespace) -> None:
     """Stage and activate one exact active schema-v3-to-v4 contract upgrade."""
     root = project_root()
     manifest_path = Path(args.manifest).resolve()
-    manifest = load_contract_upgrade_manifest(manifest_path)
     with lock(root):
         require_governed_authority(root)
         source = load_plan(active_plan_path(root))
-        if contract_state(source.frontmatter) != "PLAN_CONTRACT_UPGRADE_REQUIRED":
-            raise WorkctlError("PLAN_CONTRACT_UPGRADE_NOT_REQUIRED")
-        if (
-            source.frontmatter.get("plan_id") != manifest["plan_id"]
-            or source.frontmatter.get("revision") != manifest["expected_revision"]
-            or sha256_file(source.path) != manifest["plan_sha256"]
-        ):
-            raise WorkctlError("PLAN_CONTRACT_UPGRADE_INPUT_DRIFT")
-        confirmation_id = str(manifest["confirmation_id"])
-        decision = confirmations(source.frontmatter).get(confirmation_id)
-        if (
-            decision is None
-            or decision.get("status") != "accepted"
-            or decision.get("ref") != manifest["confirmation_ref"]
-        ):
-            raise WorkctlError("PLAN_CONTRACT_UPGRADE_CONFIRMATION_MISMATCH")
-        evidence_ref, _ = verify_evidence_manifest(
+        session_receipt: Mapping[str, object] | None = None
+        if STRICT_INITIAL_INTAKE_REQUIRED:
+            session_receipt = cast(
+                Mapping[str, object],
+                validate_current_ready_receipt(
+                    root,
+                    args.receipt_sha256,
+                    require_current_controller=True,
+                ),
+            )
+        preparation = prepare_contract_upgrade(
             root,
-            str(manifest["evidence_manifest"]),
-            plan_id=str(source.frontmatter["plan_id"]),
-            subject="contract-upgrade",
+            manifest_path,
+            source,
+            source_sha256=sha256_file(source.path),
+            session_receipt=session_receipt,
         )
-        upgraded = PlanDocument(
-            path=source.path,
-            frontmatter=copy.deepcopy(source.frontmatter),
-            body=source.body,
-        )
-        upgraded.frontmatter["schema_version"] = 4
-        upgraded.frontmatter["goal"] = manifest["goal"]
-        upgraded.frontmatter["contract"] = {
-            "revision": 1,
-            "confirmation_id": confirmation_id,
-            "confirmed_ref": decision["ref"],
-        }
-        upgraded.frontmatter["unknowns"] = manifest["unknowns"]
-        task_metadata = cast(dict[str, Any], manifest["task_metadata"])
-        for task in upgraded.frontmatter.get("tasks", []):
-            if not isinstance(task, dict) or not isinstance(task.get("id"), str):
-                continue
-            metadata = task_metadata.get(task["id"])
-            if not isinstance(metadata, dict) or set(metadata) != {
-                "unknowns",
-                "expected_evidence_delta",
-            }:
-                raise WorkctlError(f"CONTRACT_UPGRADE_TASK_METADATA_MISSING: {task['id']}")
-            task.update(metadata)
-        if set(task_metadata) != {
-            str(task["id"])
-            for task in upgraded.frontmatter.get("tasks", [])
-            if isinstance(task, dict) and isinstance(task.get("id"), str)
-        }:
-            raise WorkctlError("CONTRACT_UPGRADE_TASK_METADATA_UNKNOWN")
-        validation_provenance = cast(dict[str, Any], manifest["validation_provenance"])
-        for validation in upgraded.frontmatter.get("validations", []):
-            if not isinstance(validation, dict) or not isinstance(validation.get("id"), str):
-                continue
-            provenance = validation_provenance.get(validation["id"])
-            if not isinstance(provenance, dict):
-                raise WorkctlError(
-                    f"CONTRACT_UPGRADE_VALIDATION_PROVENANCE_MISSING: {validation['id']}"
-                )
-            validation["provenance"] = provenance
-        if set(validation_provenance) != {
-            str(validation["id"])
-            for validation in upgraded.frontmatter.get("validations", [])
-            if isinstance(validation, dict) and isinstance(validation.get("id"), str)
-        }:
-            raise WorkctlError("CONTRACT_UPGRADE_VALIDATION_PROVENANCE_UNKNOWN")
-        next_revision = int(upgraded.frontmatter["revision"]) + 1
-        upgraded.frontmatter["revision"] = next_revision
-        upgraded.frontmatter["updated_at"] = utc_now()
-        upgraded.frontmatter["revision_history"] = [
-            {
-                "revision": next_revision,
-                "kind": "contract-upgrade",
-                "changed_at": utc_now(),
-                "rationale": "Upgrade the active legacy contract without trusting log hashes.",
-                "confirmation_id": confirmation_id,
-                "evidence_manifest": evidence_ref,
-            }
-        ]
-        intake_binding: dict[str, object] | None = None
-        if STRICT_INITIAL_INTAKE_REQUIRED:
-            session_receipt = validate_current_ready_receipt(
-                root,
-                args.receipt_sha256,
-                require_current_controller=True,
-            )
-            proposal = embedded_initial_intake(manifest)
-            validate_current_intake_proposal(
-                root,
-                upgraded.frontmatter,
-                proposal,
-                session_receipt=cast(Mapping[str, object], session_receipt),
-            )
-            record = inject_initial_intake(upgraded.frontmatter, proposal)
-            intake_binding = initial_intake_binding(proposal, record)
-        require_valid_candidate(upgraded)
-        transaction_id = str(manifest["transaction_id"])
-        transaction = contract_upgrade_transaction_dir(root, transaction_id)
-        journal_path = transaction / "journal.json"
-        if journal_path.exists():
-            resume_contract_upgrade(root, journal_path)
-            return
-        if transaction.exists():
-            raise WorkctlError("CONTRACT_UPGRADE_TRANSACTION_CONFLICT")
-        staged = transaction / "staging" / source.path.name
-        write_atomic(staged, dump_plan(upgraded))
-        journal = {
-            "schema_version": 1,
-            "kind": "plan-contract-upgrade",
-            "transaction_id": transaction_id,
-            "status": "prepared",
-            "created_at": utc_now(),
-            "updated_at": utc_now(),
-            "plan_id": source.frontmatter["plan_id"],
-            "source_sha256": manifest["plan_sha256"],
-            "target_sha256": sha256_file(staged),
-            "manifest_sha256": sha256_file(manifest_path),
-            "staged_path": relative_project_path(root, staged),
-            "target_path": relative_project_path(root, source.path),
-        }
-        if STRICT_INITIAL_INTAKE_REQUIRED:
-            assert intake_binding is not None
-            journal["intake_binding"] = intake_binding
-            journal["transaction_binding_sha256"] = transaction_binding_digest(
-                transaction_kind="plan-contract-upgrade",
-                transaction_id=transaction_id,
-                plan_id=str(source.frontmatter["plan_id"]),
-                prepared_plan_sha256=str(manifest["plan_sha256"]),
-                target_plan_sha256=str(journal["target_sha256"]),
-                intake_binding=intake_binding,
-            )
-        write_transaction_journal(journal_path, journal)
+        journal_path = stage_contract_upgrade(root, manifest_path, preparation)
         resume_contract_upgrade(root, journal_path)
 
 
@@ -8318,6 +8566,499 @@ def cmd_plan_contract_upgrade_recover(args: argparse.Namespace) -> None:
                 )
             journal = incomplete[0]
         resume_contract_upgrade(root, journal)
+
+
+def reconcile_upgrade_transaction_dir(root: Path, workflow_id: str) -> Path:
+    """Return one ignored parent workflow transaction directory."""
+    return governance_root(root) / "runtime" / "reconcile-upgrades" / workflow_id
+
+
+def load_reconcile_upgrade_manifest(root: Path, path: Path) -> dict[str, Any]:
+    """Validate and normalize one composed reconciliation-upgrade manifest."""
+    manifest = load_yaml_file(path)
+    required_fields = {
+        "schema_version",
+        "kind",
+        "workflow_id",
+        "reconciliation_manifest",
+        "reconciliation_manifest_sha256",
+        "contract_upgrade_manifest",
+        "contract_upgrade_manifest_sha256",
+    }
+    if set(manifest) != required_fields:
+        raise WorkctlError("INVALID_RECONCILE_UPGRADE_MANIFEST_FIELDS")
+    workflow_id = manifest.get("workflow_id")
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("kind") != "plan-reconcile-upgrade"
+        or not isinstance(workflow_id, str)
+        or RECONCILE_UPGRADE_ID_RE.fullmatch(workflow_id) is None
+    ):
+        raise WorkctlError("INVALID_RECONCILE_UPGRADE_MANIFEST")
+    normalized = copy.deepcopy(manifest)
+    for field in ("reconciliation_manifest", "contract_upgrade_manifest"):
+        raw_path = manifest.get(field)
+        expected_sha256 = manifest.get(f"{field}_sha256")
+        if (
+            not isinstance(raw_path, str)
+            or not isinstance(expected_sha256, str)
+            or SHA256_RE.fullmatch(expected_sha256) is None
+        ):
+            raise WorkctlError("INVALID_RECONCILE_UPGRADE_MANIFEST")
+        child_path = manifest_input_path(path, raw_path)
+        child_relative = relative_project_path(root, child_path)
+        reject_symlink_components(root, child_path)
+        if child_path.is_symlink() or not child_path.is_file():
+            raise WorkctlError(f"RECONCILE_UPGRADE_CHILD_MANIFEST_MISSING: {field}")
+        if sha256_file(child_path) != expected_sha256:
+            raise WorkctlError(f"RECONCILE_UPGRADE_CHILD_MANIFEST_DRIFT: {field}")
+        normalized[field] = child_relative
+    return normalized
+
+
+def reconcile_upgrade_binding_digest(journal: Mapping[str, Any]) -> str:
+    """Hash every field that fixes the parent workflow and its child order."""
+    payload = {
+        "workflow_id": journal["workflow_id"],
+        "manifest_sha256": journal["manifest_sha256"],
+        "reconciliation_manifest": journal["reconciliation_manifest"],
+        "reconciliation_manifest_sha256": journal["reconciliation_manifest_sha256"],
+        "migration_id": journal["migration_id"],
+        "migration_journal": journal["migration_journal"],
+        "schema3_plan_id": journal["schema3_plan_id"],
+        "schema3_target_path": journal["schema3_target_path"],
+        "schema3_plan_sha256": journal["schema3_plan_sha256"],
+        "schema3_staged_path": journal["schema3_staged_path"],
+        "contract_upgrade_manifest": journal["contract_upgrade_manifest"],
+        "contract_upgrade_manifest_sha256": journal["contract_upgrade_manifest_sha256"],
+        "contract_upgrade_id": journal["contract_upgrade_id"],
+        "contract_upgrade_journal": journal["contract_upgrade_journal"],
+        "schema4_plan_sha256": journal["schema4_plan_sha256"],
+        "schema4_staged_path": journal["schema4_staged_path"],
+        "intake_binding": journal["intake_binding"],
+        "child_order": ["reconciliation", "contract-upgrade"],
+    }
+    return sha256_bytes(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    )
+
+
+def stage_reconcile_upgrade(
+    root: Path,
+    manifest_path: Path,
+    manifest: Mapping[str, Any],
+    reconciliation: Mapping[str, Any],
+    target_doc: PlanDocument,
+    upgrade: ContractUpgradePreparation,
+) -> Path:
+    """Persist immutable parent bytes before either child mutates authority."""
+    workflow_id = str(manifest["workflow_id"])
+    transaction = reconcile_upgrade_transaction_dir(root, workflow_id)
+    journal_path = transaction / "journal.json"
+    if journal_path.exists():
+        return journal_path
+    staging = transaction / "staging"
+    schema3_staged = staging / "schema3-plan.md"
+    schema4_staged = staging / "schema4-plan.md"
+    schema3_bytes = dump_plan(target_doc).encode("utf-8")
+    schema4_bytes = dump_plan(upgrade.upgraded).encode("utf-8")
+    conflict_error = "RECONCILE_UPGRADE_TRANSACTION_CONFLICT"
+    validate_partial_transaction_directory(
+        transaction,
+        {
+            relative_project_path(transaction, schema3_staged),
+            relative_project_path(transaction, schema4_staged),
+        },
+        error=conflict_error,
+    )
+    write_or_validate_staged_bytes(
+        schema3_staged,
+        schema3_bytes,
+        error=conflict_error,
+    )
+    write_or_validate_staged_bytes(
+        schema4_staged,
+        schema4_bytes,
+        error=conflict_error,
+    )
+    migration_id = str(reconciliation["migration_id"])
+    contract_upgrade_id = str(upgrade.manifest["transaction_id"])
+    journal: dict[str, Any] = {
+        "schema_version": 1,
+        "kind": "plan-reconcile-upgrade",
+        "workflow_id": workflow_id,
+        "status": "prepared",
+        "created_at": utc_now(),
+        "updated_at": utc_now(),
+        "manifest_sha256": sha256_file(manifest_path),
+        "reconciliation_manifest": manifest["reconciliation_manifest"],
+        "reconciliation_manifest_sha256": manifest["reconciliation_manifest_sha256"],
+        "migration_id": migration_id,
+        "migration_journal": plan_relative_path(".migrations", f"{migration_id}.yaml"),
+        "schema3_plan_id": target_doc.frontmatter["plan_id"],
+        "schema3_target_path": relative_project_path(root, target_doc.path),
+        "schema3_plan_sha256": sha256_bytes(schema3_bytes),
+        "schema3_staged_path": relative_project_path(root, schema3_staged),
+        "contract_upgrade_manifest": manifest["contract_upgrade_manifest"],
+        "contract_upgrade_manifest_sha256": manifest["contract_upgrade_manifest_sha256"],
+        "contract_upgrade_id": contract_upgrade_id,
+        "contract_upgrade_journal": relative_project_path(
+            root,
+            contract_upgrade_transaction_dir(root, contract_upgrade_id) / "journal.json",
+        ),
+        "schema4_plan_sha256": sha256_bytes(schema4_bytes),
+        "schema4_staged_path": relative_project_path(root, schema4_staged),
+        "intake_binding": upgrade.intake_binding,
+    }
+    journal["workflow_binding_sha256"] = reconcile_upgrade_binding_digest(journal)
+    maybe_interrupt_before_transaction_journal("parent")
+    write_transaction_journal(journal_path, journal)
+    return journal_path
+
+
+def load_reconcile_upgrade_journal(root: Path, journal_path: Path) -> dict[str, Any]:
+    """Authenticate a parent journal and both immutable prepared Plan states."""
+    reject_symlink_components(root, journal_path)
+    if journal_path.is_symlink() or not journal_path.is_file():
+        raise WorkctlError("INVALID_RECONCILE_UPGRADE_JOURNAL")
+    journal = load_yaml_file(journal_path)
+    expected_keys = {
+        "schema_version",
+        "kind",
+        "workflow_id",
+        "status",
+        "created_at",
+        "updated_at",
+        "manifest_sha256",
+        "reconciliation_manifest",
+        "reconciliation_manifest_sha256",
+        "migration_id",
+        "migration_journal",
+        "schema3_plan_id",
+        "schema3_target_path",
+        "schema3_plan_sha256",
+        "schema3_staged_path",
+        "contract_upgrade_manifest",
+        "contract_upgrade_manifest_sha256",
+        "contract_upgrade_id",
+        "contract_upgrade_journal",
+        "schema4_plan_sha256",
+        "schema4_staged_path",
+        "intake_binding",
+        "workflow_binding_sha256",
+    }
+    workflow_id = journal.get("workflow_id")
+    migration_id = journal.get("migration_id")
+    contract_upgrade_id = journal.get("contract_upgrade_id")
+    plan_id = journal.get("schema3_plan_id")
+    if (
+        set(journal) != expected_keys
+        or journal.get("schema_version") != 1
+        or journal.get("kind") != "plan-reconcile-upgrade"
+        or journal.get("status")
+        not in {"prepared", "children-staged", "reconciliation-committed", "committed"}
+        or not isinstance(workflow_id, str)
+        or RECONCILE_UPGRADE_ID_RE.fullmatch(workflow_id) is None
+        or journal_path != reconcile_upgrade_transaction_dir(root, workflow_id) / "journal.json"
+        or not isinstance(migration_id, str)
+        or MIGRATION_ID_RE.fullmatch(migration_id) is None
+        or not isinstance(contract_upgrade_id, str)
+        or CONTRACT_UPGRADE_ID_RE.fullmatch(contract_upgrade_id) is None
+        or not isinstance(plan_id, str)
+        or PLAN_ID_RE.fullmatch(plan_id) is None
+    ):
+        raise WorkctlError("INVALID_RECONCILE_UPGRADE_JOURNAL")
+    for field in (
+        "manifest_sha256",
+        "reconciliation_manifest_sha256",
+        "schema3_plan_sha256",
+        "contract_upgrade_manifest_sha256",
+        "schema4_plan_sha256",
+        "workflow_binding_sha256",
+    ):
+        if (
+            not isinstance(journal.get(field), str)
+            or SHA256_RE.fullmatch(str(journal[field])) is None
+        ):
+            raise WorkctlError("INVALID_RECONCILE_UPGRADE_JOURNAL")
+    transaction = reconcile_upgrade_transaction_dir(root, workflow_id)
+    expected_schema3_staged = transaction / "staging" / "schema3-plan.md"
+    expected_schema4_staged = transaction / "staging" / "schema4-plan.md"
+    schema3_staged = checked_project_path(root, str(journal.get("schema3_staged_path")))
+    schema4_staged = checked_project_path(root, str(journal.get("schema4_staged_path")))
+    schema3_target = checked_project_path(root, str(journal.get("schema3_target_path")))
+    reconciliation_manifest = checked_project_path(
+        root,
+        str(journal.get("reconciliation_manifest")),
+    )
+    contract_upgrade_manifest = checked_project_path(
+        root,
+        str(journal.get("contract_upgrade_manifest")),
+    )
+    migration_journal = checked_project_path(root, str(journal.get("migration_journal")))
+    contract_upgrade_journal = checked_project_path(
+        root,
+        str(journal.get("contract_upgrade_journal")),
+    )
+    for path in (
+        schema3_staged,
+        schema4_staged,
+        schema3_target,
+        reconciliation_manifest,
+        contract_upgrade_manifest,
+        migration_journal,
+        contract_upgrade_journal,
+    ):
+        reject_symlink_components(root, path)
+    if (
+        schema3_staged != expected_schema3_staged
+        or schema4_staged != expected_schema4_staged
+        or schema3_target != plan_dir(root) / f"{plan_id}.md"
+        or migration_journal != plan_dir(root) / ".migrations" / f"{migration_id}.yaml"
+        or contract_upgrade_journal
+        != contract_upgrade_transaction_dir(root, contract_upgrade_id) / "journal.json"
+        or sha256_file(schema3_staged) != journal["schema3_plan_sha256"]
+        or sha256_file(schema4_staged) != journal["schema4_plan_sha256"]
+        or sha256_file(reconciliation_manifest) != journal["reconciliation_manifest_sha256"]
+        or sha256_file(contract_upgrade_manifest) != journal["contract_upgrade_manifest_sha256"]
+        or reconcile_upgrade_binding_digest(journal) != journal["workflow_binding_sha256"]
+    ):
+        raise WorkctlError("RECONCILE_UPGRADE_BINDING_DRIFT")
+    schema3_doc = load_plan(schema3_staged)
+    schema4_doc = load_plan(schema4_staged)
+    require_valid_candidate(schema3_doc)
+    require_valid_candidate(schema4_doc)
+    if (
+        schema3_doc.frontmatter.get("schema_version") != 3
+        or schema4_doc.frontmatter.get("schema_version") != 4
+        or schema3_doc.frontmatter.get("plan_id") != plan_id
+        or schema4_doc.frontmatter.get("plan_id") != plan_id
+    ):
+        raise WorkctlError("INVALID_RECONCILE_UPGRADE_JOURNAL")
+    return journal
+
+
+def write_reconcile_upgrade_journal(
+    journal_path: Path,
+    journal: dict[str, Any],
+    status: str,
+) -> None:
+    """Advance one authenticated parent state after a child boundary."""
+    journal["status"] = status
+    journal["updated_at"] = utc_now()
+    write_transaction_journal(journal_path, journal)
+
+
+def resume_reconcile_upgrade(root: Path, journal_path: Path) -> None:
+    """Recover the only legal next child without collapsing child journals."""
+    journal = load_reconcile_upgrade_journal(root, journal_path)
+    reconciliation_manifest_path = checked_project_path(
+        root,
+        str(journal["reconciliation_manifest"]),
+    )
+    migration_journal_path = checked_project_path(root, str(journal["migration_journal"]))
+    contract_upgrade_journal_path = checked_project_path(
+        root,
+        str(journal["contract_upgrade_journal"]),
+    )
+    if journal["status"] == "committed":
+        contract_upgrade_journal = load_yaml_file(contract_upgrade_journal_path)
+        if contract_upgrade_journal.get("status") != "committed":
+            raise WorkctlError("RECONCILE_UPGRADE_COMMITTED_STATE_INVALID")
+        validate_committed_migration(root, migration_journal_path)
+        resume_contract_upgrade(root, contract_upgrade_journal_path)
+        active = load_plan(active_plan_path(root))
+        if (
+            active.frontmatter.get("plan_id") != journal["schema3_plan_id"]
+            or sha256_file(active.path) != journal["schema4_plan_sha256"]
+            or active.frontmatter.get("schema_version") != 4
+        ):
+            raise WorkctlError("RECONCILE_UPGRADE_COMMITTED_STATE_INVALID")
+        print(f"RECONCILE_UPGRADE_ALREADY_COMMITTED {journal['workflow_id']}")
+        return
+    if not migration_journal_path.is_file():
+        reconciliation, target_doc, _ = prepare_reconciliation(
+            root,
+            reconciliation_manifest_path,
+            require_confirmations=True,
+        )
+        if (
+            reconciliation["migration_id"] != journal["migration_id"]
+            or target_doc.frontmatter.get("plan_id") != journal["schema3_plan_id"]
+            or sha256_bytes(dump_plan(target_doc).encode("utf-8")) != journal["schema3_plan_sha256"]
+        ):
+            raise WorkctlError("RECONCILE_UPGRADE_RECONCILIATION_DRIFT")
+        staged_journal = stage_reconciliation(root, reconciliation, target_doc)
+        if staged_journal != migration_journal_path:
+            raise WorkctlError("INVALID_RECONCILE_UPGRADE_JOURNAL")
+    contract_upgrade_manifest_path = checked_project_path(
+        root,
+        str(journal["contract_upgrade_manifest"]),
+    )
+    if not contract_upgrade_journal_path.is_file():
+        manifest = load_contract_upgrade_manifest(contract_upgrade_manifest_path)
+        schema4_staged = load_plan(checked_project_path(root, str(journal["schema4_staged_path"])))
+        upgraded = PlanDocument(
+            path=checked_project_path(root, str(journal["schema3_target_path"])),
+            frontmatter=schema4_staged.frontmatter,
+            body=schema4_staged.body,
+        )
+        intake_binding = journal["intake_binding"]
+        if STRICT_INITIAL_INTAKE_REQUIRED and not isinstance(intake_binding, dict):
+            raise WorkctlError("INVALID_RECONCILE_UPGRADE_JOURNAL")
+        preparation = ContractUpgradePreparation(
+            manifest=manifest,
+            upgraded=upgraded,
+            source_sha256=str(journal["schema3_plan_sha256"]),
+            intake_binding=(
+                cast(dict[str, object], intake_binding)
+                if isinstance(intake_binding, dict)
+                else None
+            ),
+        )
+        staged_journal = stage_contract_upgrade(
+            root,
+            contract_upgrade_manifest_path,
+            preparation,
+        )
+        if staged_journal != contract_upgrade_journal_path:
+            raise WorkctlError("INVALID_RECONCILE_UPGRADE_JOURNAL")
+    write_reconcile_upgrade_journal(journal_path, journal, "children-staged")
+    resume_migration(root, migration_journal_path)
+    validate_committed_migration(root, migration_journal_path)
+    write_reconcile_upgrade_journal(journal_path, journal, "reconciliation-committed")
+    if os.environ.get("WORKCTL_TEST_RECONCILE_UPGRADE_INTERRUPT_AFTER") == (
+        "reconciliation-committed"
+    ):
+        raise WorkctlError("RECONCILE_UPGRADE_TEST_INTERRUPTED: reconciliation-committed")
+    contract_upgrade_journal = load_yaml_file(contract_upgrade_journal_path)
+    contract_upgrade_status = contract_upgrade_journal.get("status")
+    if contract_upgrade_status not in {"prepared", "plan-replaced", "committed"}:
+        raise WorkctlError("INVALID_CONTRACT_UPGRADE_JOURNAL")
+    if contract_upgrade_status in {"prepared", "plan-replaced"}:
+        active = load_plan(active_plan_path(root))
+        expected_active_sha256 = (
+            journal["schema3_plan_sha256"]
+            if contract_upgrade_status == "prepared"
+            else journal["schema4_plan_sha256"]
+        )
+        expected_schema_version = 3 if contract_upgrade_status == "prepared" else 4
+        if (
+            active.frontmatter.get("plan_id") != journal["schema3_plan_id"]
+            or sha256_file(active.path) != expected_active_sha256
+            or active.frontmatter.get("schema_version") != expected_schema_version
+        ):
+            raise WorkctlError("RECONCILE_UPGRADE_CHILD_ORDER_VIOLATION")
+    resume_contract_upgrade(root, contract_upgrade_journal_path)
+    active = load_plan(active_plan_path(root))
+    if (
+        active.frontmatter.get("plan_id") != journal["schema3_plan_id"]
+        or sha256_file(active.path) != journal["schema4_plan_sha256"]
+        or active.frontmatter.get("schema_version") != 4
+    ):
+        raise WorkctlError("RECONCILE_UPGRADE_FINAL_STATE_DRIFT")
+    write_reconcile_upgrade_journal(journal_path, journal, "committed")
+    print(
+        "RECONCILE_UPGRADE_COMMITTED "
+        f"{journal['workflow_id']} migration={journal['migration_id']} "
+        f"upgrade={journal['contract_upgrade_id']}"
+    )
+
+
+def cmd_plan_reconcile_upgrade_apply(args: argparse.Namespace) -> None:
+    """Validate, stage, and execute the fixed two-child workflow."""
+    root = project_root()
+    manifest_path = Path(args.manifest).resolve()
+    manifest = load_reconcile_upgrade_manifest(root, manifest_path)
+    workflow_id = str(manifest["workflow_id"])
+    with lock(root):
+        journal_path = reconcile_upgrade_transaction_dir(root, workflow_id) / "journal.json"
+        if journal_path.is_file():
+            journal = load_reconcile_upgrade_journal(root, journal_path)
+            if journal["manifest_sha256"] != sha256_file(manifest_path):
+                raise WorkctlError("RECONCILE_UPGRADE_MANIFEST_DRIFT")
+            resume_reconcile_upgrade(root, journal_path)
+            return
+        if (
+            incomplete_migration_journals(root)
+            or incomplete_rollover_journals(root)
+            or incomplete_retirement_journals(root)
+            or incomplete_contract_upgrade_journals(root)
+            or incomplete_reconcile_upgrade_journals(root)
+        ):
+            raise WorkctlError("MIGRATION_RECOVERY_REQUIRED")
+        reconciliation_manifest_path = checked_project_path(
+            root,
+            str(manifest["reconciliation_manifest"]),
+        )
+        reconciliation, target_doc, _ = prepare_reconciliation(
+            root,
+            reconciliation_manifest_path,
+            require_confirmations=True,
+        )
+        report = inspect_authority(root)
+        if report.state == "GOVERNED_ACTIVE":
+            raise WorkctlError("RECONCILIATION_NOT_REQUIRED")
+        session_receipt: Mapping[str, object] | None = None
+        if STRICT_INITIAL_INTAKE_REQUIRED:
+            session_receipt = cast(
+                Mapping[str, object],
+                validate_current_ready_receipt(
+                    root,
+                    args.receipt_sha256,
+                    require_current_controller=True,
+                ),
+            )
+        contract_upgrade_manifest_path = checked_project_path(
+            root,
+            str(manifest["contract_upgrade_manifest"]),
+        )
+        source_sha256 = sha256_bytes(dump_plan(target_doc).encode("utf-8"))
+        upgrade = prepare_contract_upgrade(
+            root,
+            contract_upgrade_manifest_path,
+            target_doc,
+            source_sha256=source_sha256,
+            session_receipt=session_receipt,
+        )
+        journal_path = stage_reconcile_upgrade(
+            root,
+            manifest_path,
+            manifest,
+            reconciliation,
+            target_doc,
+            upgrade,
+        )
+        resume_reconcile_upgrade(root, journal_path)
+
+
+def cmd_plan_reconcile_upgrade_recover(args: argparse.Namespace) -> None:
+    """Recover one named or the sole incomplete composed workflow."""
+    root = project_root()
+    with lock(root):
+        base = governance_root(root) / "runtime" / "reconcile-upgrades"
+        if args.workflow_id:
+            journal = reconcile_upgrade_transaction_dir(root, args.workflow_id) / "journal.json"
+            if not journal.is_file():
+                raise WorkctlError("RECONCILE_UPGRADE_JOURNAL_NOT_FOUND")
+        else:
+            journals = sorted(base.glob("*/journal.json")) if base.is_dir() else []
+            incomplete = [
+                path for path in journals if load_yaml_file(path).get("status") != "committed"
+            ]
+            if len(incomplete) != 1:
+                raise WorkctlError(
+                    "RECONCILE_UPGRADE_RECOVERY_AMBIGUOUS"
+                    if incomplete
+                    else "RECONCILE_UPGRADE_RECOVERY_NOT_REQUIRED"
+                )
+            journal = incomplete[0]
+        resume_reconcile_upgrade(root, journal)
 
 
 def cmd_plan_init(args: argparse.Namespace) -> None:
@@ -10634,12 +11375,11 @@ def stage_reconciliation(
     )
     if journal_path.exists():
         raise WorkctlError(f"MIGRATION_JOURNAL_EXISTS: {migration_id}")
-    if migration_dir.exists():
-        raise WorkctlError(f"MIGRATION_STAGING_EXISTS: {migration_id}")
 
     staged_plan = staging_dir / "target-plan.md"
     reject_symlink_components(root, staged_plan)
     staged_plan_text = dump_plan(target_doc)
+    staged_plan_bytes = staged_plan_text.encode("utf-8")
     staged_sources: list[dict[str, Any]] = []
     staged_source_bytes: list[tuple[Path, bytes]] = []
     for source in manifest["sources"]:
@@ -10671,11 +11411,38 @@ def stage_reconciliation(
             "staged_path": relative_project_path(root, staged_agents_path),
         }
 
-    write_atomic(staged_plan, staged_plan_text)
-    for staged_path, source_bytes in staged_source_bytes:
-        write_atomic_bytes(staged_path, source_bytes)
+    expected_files = {
+        relative_project_path(migration_dir, staged_plan),
+        *(
+            relative_project_path(migration_dir, staged_path)
+            for staged_path, _ in staged_source_bytes
+        ),
+    }
     if staged_agents_write is not None:
-        write_atomic_bytes(*staged_agents_write)
+        expected_files.add(relative_project_path(migration_dir, staged_agents_write[0]))
+    conflict_error = f"MIGRATION_STAGING_EXISTS: {migration_id}"
+    validate_partial_transaction_directory(
+        migration_dir,
+        expected_files,
+        error=conflict_error,
+    )
+    write_or_validate_staged_bytes(
+        staged_plan,
+        staged_plan_bytes,
+        error=conflict_error,
+    )
+    for staged_path, source_bytes in staged_source_bytes:
+        write_or_validate_staged_bytes(
+            staged_path,
+            source_bytes,
+            error=conflict_error,
+        )
+    if staged_agents_write is not None:
+        write_or_validate_staged_bytes(
+            staged_agents_write[0],
+            staged_agents_write[1],
+            error=conflict_error,
+        )
 
     journal = {
         "schema_version": 1,
@@ -10686,7 +11453,7 @@ def stage_reconciliation(
         "target_plan_id": target_doc.frontmatter["plan_id"],
         "target_path": relative_project_path(root, target_doc.path),
         "staged_plan": relative_project_path(root, staged_plan),
-        "target_sha256": sha256_file(staged_plan),
+        "target_sha256": sha256_bytes(staged_plan_bytes),
         "prepared_plan_sha256": manifest["prepared_plan_sha256"],
         "proposal_sha256": manifest["proposal_sha256"],
         "agents_diff_sha256": manifest["agents_diff_sha256"],
@@ -10695,6 +11462,7 @@ def stage_reconciliation(
         "git_baseline": manifest.get("git_baseline"),
         "completed_operations": [],
     }
+    maybe_interrupt_before_transaction_journal("reconciliation")
     write_atomic(journal_path, yaml.safe_dump(journal, sort_keys=False))
     return journal_path
 
@@ -10999,6 +11767,173 @@ def activated_index(root: Path, target_doc: PlanDocument) -> dict[str, Any]:
     return {"schema_version": 1, "active_plan_id": plan_id, "plans": plans}
 
 
+def validate_committed_migration(root: Path, journal_path: Path) -> None:
+    """Authenticate a committed reconciliation without requiring schema-v3 bytes."""
+    journal = load_yaml_file(journal_path)
+    expected_keys = {
+        "schema_version",
+        "migration_id",
+        "status",
+        "created_at",
+        "updated_at",
+        "target_plan_id",
+        "target_path",
+        "staged_plan",
+        "target_sha256",
+        "prepared_plan_sha256",
+        "proposal_sha256",
+        "agents_diff_sha256",
+        "sources",
+        "agents_rewrite",
+        "git_baseline",
+        "completed_operations",
+    }
+    if (
+        set(journal) != expected_keys
+        or journal.get("schema_version") != 1
+        or journal.get("status") != "committed"
+        or not isinstance(journal.get("prepared_plan_sha256"), str)
+        or SHA256_RE.fullmatch(str(journal["prepared_plan_sha256"])) is None
+        or not isinstance(journal.get("proposal_sha256"), str)
+        or SHA256_RE.fullmatch(str(journal["proposal_sha256"])) is None
+        or (
+            journal.get("git_baseline") is not None
+            and not isinstance(journal.get("git_baseline"), str)
+        )
+    ):
+        raise WorkctlError("MIGRATION_COMMITTED_STATE_INVALID")
+    inventory = preflight_reconciliation_recovery_inventory(root, journal_path, journal)
+    if sha256_file(inventory.staged_plan) != journal["target_sha256"]:
+        raise WorkctlError("STAGED_PLAN_HASH_MISMATCH")
+    staged_doc = load_plan(inventory.staged_plan)
+    require_valid_candidate(staged_doc)
+    authority = staged_doc.frontmatter.get("authority")
+    if not isinstance(authority, dict):
+        raise WorkctlError("MIGRATION_COMMITTED_BINDING_DRIFT")
+
+    expected_operations: list[str] = []
+    proposal_sources: list[dict[str, Any]] = []
+    for source in inventory.sources:
+        source_path_value = str(source["path"])
+        expected_sha256 = str(source["sha256"])
+        staged = checked_project_path(root, str(source["staged_path"]))
+        archive = checked_project_path(root, str(source["archive_path"]))
+        original = checked_project_path(root, source_path_value)
+        pointer = pointer_text(
+            source_path=source_path_value,
+            canonical_path=str(journal["target_path"]),
+            migration_id=str(journal["migration_id"]),
+            archive_path=str(source["archive_path"]),
+        )
+        if sha256_file(staged) != expected_sha256:
+            raise WorkctlError(f"STAGED_SOURCE_HASH_MISMATCH: {source_path_value}")
+        if sha256_file(archive) != expected_sha256:
+            raise WorkctlError(f"ARCHIVE_HASH_MISMATCH: {source['archive_path']}")
+        if sha256_file(original) != sha256_bytes(pointer.encode()):
+            raise WorkctlError(f"SOURCE_DRIFT: {source_path_value}")
+        proposal_sources.append(
+            {key: value for key, value in source.items() if key != "staged_path"}
+        )
+        expected_operations.extend([f"archive:{source_path_value}", f"pointer:{source_path_value}"])
+    if authority.get("sources") != proposal_sources:
+        raise WorkctlError("MIGRATION_COMMITTED_BINDING_DRIFT")
+
+    agents_record = inventory.agents_record
+    agents_proposal: dict[str, Any] | None = None
+    if agents_record is not None:
+        if set(agents_record) != {
+            "path",
+            "sha256",
+            "replacement_file",
+            "replacement_sha256",
+            "staged_path",
+        }:
+            raise WorkctlError("MIGRATION_COMMITTED_STATE_INVALID")
+        agents_diff_sha256 = journal.get("agents_diff_sha256")
+        if (
+            not isinstance(agents_diff_sha256, str)
+            or SHA256_RE.fullmatch(agents_diff_sha256) is None
+        ):
+            raise WorkctlError("MIGRATION_COMMITTED_STATE_INVALID")
+        staged_agents = checked_project_path(root, str(agents_record["staged_path"]))
+        agents_path = checked_project_path(root, str(agents_record["path"]))
+        replacement_sha256 = str(agents_record["replacement_sha256"])
+        if sha256_file(staged_agents) != replacement_sha256:
+            raise WorkctlError("STAGED_AGENTS_REWRITE_HASH_MISMATCH")
+        if sha256_file(agents_path) != replacement_sha256:
+            raise WorkctlError(f"SOURCE_DRIFT: {agents_record['path']}")
+        agents_proposal = {
+            "path": agents_record["path"],
+            "sha256": agents_record["sha256"],
+            "replacement_sha256": replacement_sha256,
+            "diff_sha256": agents_diff_sha256,
+        }
+        expected_operations.append("agents-rewrite")
+    elif journal.get("agents_diff_sha256") is not None:
+        raise WorkctlError("MIGRATION_COMMITTED_STATE_INVALID")
+
+    proposal_payload = {
+        "migration_id": journal["migration_id"],
+        "target_path": journal["target_path"],
+        "prepared_plan_sha256": journal["prepared_plan_sha256"],
+        "git_baseline": journal["git_baseline"],
+        "sources": proposal_sources,
+        "agents_rewrite": agents_proposal,
+    }
+    proposal_sha256 = sha256_bytes(
+        json.dumps(proposal_payload, sort_keys=True, separators=(",", ":")).encode()
+    )
+    authority_confirmations = authority.get("confirmations")
+    if not isinstance(authority_confirmations, dict):
+        raise WorkctlError("MIGRATION_COMMITTED_BINDING_DRIFT")
+    staged_confirmations = confirmations(staged_doc.frontmatter)
+    baseline_id = authority_confirmations.get("baseline")
+    baseline_confirmation = (
+        staged_confirmations.get(baseline_id) if isinstance(baseline_id, str) else None
+    )
+    if (
+        proposal_sha256 != journal["proposal_sha256"]
+        or baseline_confirmation is None
+        or baseline_confirmation.get("status") != "accepted"
+        or baseline_confirmation.get("evidence_sha256") != proposal_sha256
+    ):
+        raise WorkctlError("MIGRATION_COMMITTED_BINDING_DRIFT")
+    if agents_record is not None:
+        agents_id = authority_confirmations.get("agents_rewrite")
+        agents_confirmation = (
+            staged_confirmations.get(agents_id) if isinstance(agents_id, str) else None
+        )
+        if (
+            agents_confirmation is None
+            or agents_confirmation.get("status") != "accepted"
+            or agents_confirmation.get("evidence_sha256") != journal["agents_diff_sha256"]
+        ):
+            raise WorkctlError("MIGRATION_COMMITTED_BINDING_DRIFT")
+
+    expected_operations.extend(["target-plan", "index-activation"])
+    if journal.get("completed_operations") != expected_operations:
+        raise WorkctlError("MIGRATION_COMMITTED_OPERATIONS_INVALID")
+
+    index = load_yaml_file(index_path(root))
+    if index.get("active_plan_id") != journal["target_plan_id"]:
+        raise WorkctlError("MIGRATION_COMMITTED_INDEX_DRIFT")
+    target = inventory.target
+    if target.is_symlink() or not target.is_file():
+        raise WorkctlError("MIGRATION_COMMITTED_TARGET_MISSING")
+    canonical_doc = load_plan(target)
+    require_valid_candidate(canonical_doc)
+    if canonical_doc.frontmatter.get("plan_id") != journal["target_plan_id"]:
+        raise WorkctlError("MIGRATION_COMMITTED_TARGET_DRIFT")
+    metadata_errors = authority_metadata_errors(root, canonical_doc)
+    if metadata_errors:
+        raise WorkctlError(f"INVALID_MIGRATION_LINEAGE: {'; '.join(metadata_errors)}")
+    report = inspect_authority(root, ignore_journal=journal_path)
+    if report.state != "GOVERNED_ACTIVE":
+        raise WorkctlError(
+            f"MIGRATION_COMMITTED_STATE_INVALID: {report.state}; {'; '.join(report.blockers)}"
+        )
+
+
 def resume_migration(
     root: Path,
     journal_path: Path,
@@ -11008,6 +11943,7 @@ def resume_migration(
     """Idempotently roll a staged migration forward to index activation."""
     journal = load_yaml_file(journal_path)
     if journal.get("status") == "committed" and not repair_committed:
+        validate_committed_migration(root, journal_path)
         print(f"MIGRATION_ALREADY_COMMITTED {journal['migration_id']}")
         return
     expected_git_baseline = journal.get("git_baseline")
@@ -11606,6 +12542,8 @@ def cmd_plan_retire_apply(args: argparse.Namespace) -> None:
             incomplete_migration_journals(root)
             or incomplete_rollover_journals(root)
             or incomplete_retirement_journals(root)
+            or incomplete_contract_upgrade_journals(root)
+            or incomplete_reconcile_upgrade_journals(root)
         ):
             raise WorkctlError("MIGRATION_RECOVERY_REQUIRED")
         manifest = prepare_retirement(
@@ -12316,6 +13254,8 @@ def cmd_plan_rollover_apply(args: argparse.Namespace) -> None:
             incomplete_migration_journals(root)
             or incomplete_rollover_journals(root)
             or incomplete_retirement_journals(root)
+            or incomplete_contract_upgrade_journals(root)
+            or incomplete_reconcile_upgrade_journals(root)
         ):
             raise WorkctlError("MIGRATION_RECOVERY_REQUIRED")
         manifest, target_doc = prepare_rollover(
@@ -12378,6 +13318,8 @@ def cmd_plan_reconcile_apply(args: argparse.Namespace) -> None:
             incomplete_migration_journals(root)
             or incomplete_rollover_journals(root)
             or incomplete_retirement_journals(root)
+            or incomplete_contract_upgrade_journals(root)
+            or incomplete_reconcile_upgrade_journals(root)
         ):
             raise WorkctlError("MIGRATION_RECOVERY_REQUIRED")
         manifest, target_doc, _diff_text = prepare_reconciliation(
@@ -12587,6 +13529,17 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile_recover = reconcile_sub.add_parser("recover")
     reconcile_recover.add_argument("--migration-id")
     reconcile_recover.set_defaults(func=cmd_plan_reconcile_recover)
+    reconcile_upgrade = plan_sub.add_parser("reconcile-upgrade")
+    reconcile_upgrade_sub = reconcile_upgrade.add_subparsers(
+        dest="reconcile_upgrade_action",
+        required=True,
+    )
+    reconcile_upgrade_apply = reconcile_upgrade_sub.add_parser("apply")
+    reconcile_upgrade_apply.add_argument("--manifest", required=True)
+    reconcile_upgrade_apply.set_defaults(func=cmd_plan_reconcile_upgrade_apply)
+    reconcile_upgrade_recover = reconcile_upgrade_sub.add_parser("recover")
+    reconcile_upgrade_recover.add_argument("--workflow-id")
+    reconcile_upgrade_recover.set_defaults(func=cmd_plan_reconcile_upgrade_recover)
     rollover = plan_sub.add_parser("rollover")
     rollover_sub = rollover.add_subparsers(dest="rollover_action", required=True)
     rollover_apply = rollover_sub.add_parser("apply")
@@ -12768,6 +13721,10 @@ def enforce_active_contract_gate(args: argparse.Namespace, root: Path) -> None:
         return
     allowed = args.domain == "plan" and (
         args.action in {"confirmation", "confirm", "evidence"}
+        or (
+            args.action == "reconcile-upgrade"
+            and args.reconcile_upgrade_action in {"apply", "recover"}
+        )
         or (
             args.action == "contract"
             and args.contract_action == "upgrade"
