@@ -159,6 +159,21 @@ Allowed structural changes:
   `AGENTS.md` rewrite, write the new Plan, and activate the index last.
 - `plan reconcile recover`: idempotently roll an interrupted staged migration
   forward. Recovery never resumes the old queue automatically.
+- `plan reconcile-upgrade apply --manifest ...`: fully prepare one parent
+  workflow, schema-v3 reconciliation target, schema-v4 upgrade target, and both
+  authenticated child transactions before mutation; execute only the fixed
+  reconciliation-then-contract-upgrade order. Re-run apply after exact parent
+  staging was interrupted before parent-journal publication; drifted partial
+  staging fails closed.
+- `plan reconcile-upgrade recover --workflow-id ...`: authenticate the parent
+  binding and existing child journals; validate and fill exact child staging
+  when interruption preceded a child journal; then resume only the incomplete
+  child and require the exact final schema-v4 authority. A committed call
+  performs read-only revalidation and never advances an incomplete child.
+  Until both parent and contract-upgrade journals commit, authority reports
+  `MIGRATION_RECOVERY_REQUIRED`; ordinary Plan or task writes and fresh
+  structural Plan transactions fail closed, while the same bound workflow may
+  resume through apply or recover.
 - `plan rollover apply --manifest ... --dry-run`: require the indexed source
   Plan to be complete, terminal, and closeout-ready; verify its ID, revision,
   SHA256 and exact index baseline; validate a new schema-v4 successor; and

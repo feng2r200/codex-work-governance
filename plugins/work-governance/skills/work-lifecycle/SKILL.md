@@ -141,8 +141,17 @@ for layout inspection/recovery. A blocked SessionStart may inject an exact
 capability-bound `layout_command_prefix`; use it only for the reported layout
 recovery, never for Plan writes. An active schema-v3 Plan reports
 `PLAN_CONTRACT_UPGRADE_REQUIRED` until `plan contract upgrade apply|recover`
-commits schema v4. Use `plan adapt`, `plan contract revise`, and
-`plan unknown add|resolve` for their separate responsibilities. Terminal
+commits schema v4. When one confirmed workflow must reconcile schema-v3
+authority and then upgrade that exact result, use
+`plan reconcile-upgrade apply|recover`; its parent journal fixes
+reconciliation before contract upgrade while both child journals remain
+independently recoverable. If exact staging exists without its journal, re-run
+parent `apply` for the parent window or parent `recover` for a child window;
+unexpected or drifted partial staging fails closed. Any incomplete parent or
+contract-upgrade journal makes authority recovery-only and blocks ordinary
+Plan or task writes plus fresh structural Plan transactions; only the bound
+workflow may resume. Use `plan adapt`, `plan contract revise`, and `plan unknown
+add|resolve` for their separate responsibilities. Terminal
 evidence must be recorded under `.work-governance/_Plan/.evidence/` and passed
 by `--evidence-manifest`; `.work-governance/logs/` is local process detail only.
 All mutations still use the stable `.work-governance/workctl.lock`, expected
