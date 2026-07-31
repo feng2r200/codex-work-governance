@@ -21,6 +21,12 @@ Report:
 - Git status, commit hash, and excluded files when Git was used;
 - whether the formal next step is action, verification, confirmation, or none.
 
+`下一步` is an informational routing field, not an implicit confirmation.
+Never append "是否继续", "确认进入下一阶段", or an equivalent question unless
+the next target is blocked by a real user-owned unknown or a typed intervention
+contract. If earlier dependency-ready work remains authorized, report the next
+action and continue it in the same turn.
+
 For every completed slice, present the reply contract below before any
 next-step statement:
 

@@ -99,6 +99,11 @@ Schema-v4 Plans carry:
 - append-only intake protocol v1 records bound to trusted current turns;
 - first-class unknowns with owner, impact, exact blockers, expected evidence,
   and task-level compatibility projection;
+- pending confirmations with a typed `intervention.kind`, exact `blocks`,
+  immutable `basis_ref`, and the required `basis_sha256`;
+- optional Plan-level `independent_validation` records for Plan challenge,
+  artifact review, and evidence audit, including context isolation, reviewed
+  digests, findings, and exact audit evidence;
 - validation provenance;
 - structured `scope.exclude` dispositions;
 - `delivery.status`, boundary, and evidence;
@@ -125,6 +130,17 @@ Controller gates:
 - active Plan scope must not conflict with the requested Plan;
 - task dependencies must be `verified` before dependent task start;
 - confirmation references must exist and be accepted before high-impact steps;
+- schema-v4 pending confirmations must be `STRICT_READY`; legacy pending gates
+  remain readable but cannot decide, advance, or close out until classified;
+- every target named by a required independent review stays blocked until the
+  review is verified by a controller-authenticated platform attestor and has no
+  unresolved blocker/high findings, or is degraded and separately covered by
+  exact evidence-bound risk authority. This controller exposes no authenticated
+  attestor and therefore rejects `verified` instead of trusting caller-authored
+  evidence. A degraded review reserves one exact risk-confirmation ID before
+  the confirmation exists, then requires that exact pending confirmation to be
+  created and decided after the review; it cannot adopt a pre-existing or
+  unrelated authority;
 - suspect, quarantined, or rollback-pending artifacts block closeout;
 - only a task that explicitly lists affected IDs in `resolves_artifacts` may
   progress while all blocking artifacts are `suspect`; quarantine and
@@ -144,8 +160,14 @@ Allowed structural changes:
   install the strict Plan, and activate the index last.
 - `plan admit recover`: deterministically roll an interrupted admission
   forward. `plan init` is not a normal public admission path.
-- `plan confirmation add`: create a pending or explicitly accepted gate before
-  a later decision depends on it.
+- `plan confirmation add`: create a gate with `--intervention-kind`,
+  repeatable exact `--blocks`, `--basis-ref`, and the digest required for
+  Plan-contract or deviation decisions. Schema v4 creates it only as pending;
+  accepted legacy records remain compatible.
+- `plan confirmation classify --manifest ...`: repair one legacy pending gate
+  into the strict intervention contract. During the live-controller bootstrap
+  only, it may also replace an accepted external-authority placeholder when
+  the already-recorded decision evidence digest exactly matches the new basis.
 - `plan schema-validate`: validate one candidate document without granting it
   authority.
 - `plan validate`: validate schema, index, unique authority, lineage, archives,
@@ -223,7 +245,19 @@ Allowed structural changes:
 - `plan evidence record --manifest ...`: canonicalize bounded typed evidence
   metadata under the active Plan and return its exact path and SHA256.
 - `plan confirm`: resolve a pending gate as `accepted` or `declined` with a
-  typed authority reference. Generic Plan patches cannot edit confirmations.
+  typed authority reference and the exact basis digest. Generic Plan patches
+  cannot edit confirmations, unclassified gates cannot decide, and a pending
+  basis placeholder cannot authorize work. Schema-v4 decisions must also bind
+  the trusted current turn, a current intake covering every blocked target,
+  and the current turn's exact `request_ref`.
+- `plan independent-review record --manifest ...`: record one isolated
+  `plan_challenge`, `artifact_review`, or `evidence_audit` against exact
+  contract and artifact digests. This is the only command allowed to migrate a
+  matching bootstrap review while its declared targets remain review-blocked;
+  it cannot mutate the parent Plan contract or reviewed artifacts. Verified
+  state requires a future controller-authenticated platform attestor; this
+  build fails closed without one, and different context strings or
+  caller-authored evidence never satisfy the gate.
 - `plan closeout-check|complete`: compute full route readiness and set Plan
   status complete only through the dedicated closeout command; `plan revise`
   cannot assign complete directly.

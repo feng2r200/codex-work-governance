@@ -50,7 +50,9 @@ ACTIVATION_TARGET_PLACEHOLDER_RE = re.compile(
     r"^(plugin:[A-Za-z0-9][A-Za-z0-9._-]*@[^@\s+]+\+codex\.)pending$"
 )
 ACTIVATION_CACHEBUSTER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-REFERENCE_RE = re.compile(r"^(user|project|git|runtime|evidence|handoff|codex-plugin-list):\S+$")
+REFERENCE_RE = re.compile(
+    r"^(user|project|git|runtime|evidence|handoff|codex-plugin-list|context|plugin):\S+$"
+)
 EVIDENCE_REFERENCE_FIELDS = {"evidence_ref", "state_evidence_ref"}
 ENTRY_ID_PATTERNS = {
     "obligations": re.compile(r"^O-\d{3}$"),
@@ -104,6 +106,32 @@ ACTIVATION_STATES = {
 BLOCKING_ACTIVATION_STATES = {"deferred", "pending_confirmation", "in_progress"}
 ROUTE_STATES = {"active", "awaiting_confirmation", "terminal"}
 CONFIRMATION_STATES = {"pending", "accepted", "declined"}
+INTERVENTION_KINDS = {
+    "plan_contract",
+    "external_authority",
+    "deviation_recovery",
+}
+INTERVENTION_CONTRACT_STATES = {
+    "STRICT_READY",
+    "LEGACY_CLASSIFICATION_REQUIRED",
+    "INVALID",
+}
+USER_INTERVENTION_STATES = {
+    "NOT_REQUIRED",
+    "REQUIREMENT_INPUT_REQUIRED",
+    "PLAN_DECISION_REQUIRED",
+    "AUTHORITY_REQUIRED",
+    "DEVIATION_DECISION_REQUIRED",
+}
+INDEPENDENT_REVIEW_MODES = {
+    "plan_challenge",
+    "artifact_review",
+    "evidence_audit",
+}
+INDEPENDENT_REVIEW_STATES = {"pending", "verified", "degraded"}
+INDEPENDENT_FINDING_SEVERITIES = {"blocker", "high", "medium", "low"}
+INDEPENDENT_FINDING_STATES = {"open", "resolved"}
+INDEPENDENT_BLOCKING_SEVERITIES = {"blocker", "high"}
 UNKNOWN_STATES = {"open", "resolved"}
 UNKNOWN_OWNERS = {"user", "agent"}
 UNKNOWN_IMPACTS = {"blocking", "non_blocking"}
@@ -121,12 +149,14 @@ REVISION_KINDS = {
     "contract-revision",
     "contract-upgrade",
     "confirmation-added",
+    "confirmation-classified",
     "confirmation-decided",
     "unknown-added",
     "unknown-classified",
     "unknown-resolved",
     "intake-recorded",
     "controlled-transition",
+    "independent-review-recorded",
     "retirement",
 }
 RETIREMENT_DISPOSITIONS = {
@@ -3524,6 +3554,188 @@ def confirmations(frontmatter: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return result
 
 
+def intervention_errors(
+    frontmatter: Mapping[str, Any],
+    item: Mapping[str, Any],
+) -> list[str]:
+    """Validate one typed user-intervention contract without rejecting legacy gates."""
+    intervention = item.get("intervention")
+    if intervention is None:
+        return []
+    confirmation_id = str(item.get("id", "unknown"))
+    if not isinstance(intervention, dict):
+        return [f"{confirmation_id}.intervention must be a mapping"]
+    errors: list[str] = []
+    kind = intervention.get("kind")
+    if kind not in INTERVENTION_KINDS:
+        errors.append(f"{confirmation_id}.intervention.kind must be supported")
+    blocks = intervention.get("blocks")
+    if (
+        not isinstance(blocks, list)
+        or not blocks
+        or not all(valid_target_ref(target) for target in blocks)
+    ):
+        errors.append(f"{confirmation_id}.intervention.blocks must be non-empty target refs")
+    elif len(blocks) != len(set(blocks)):
+        errors.append(f"{confirmation_id}.intervention.blocks must be unique")
+    else:
+        for target in blocks:
+            try:
+                require_target_exists(frontmatter, target)
+            except WorkctlError:
+                errors.append(f"{confirmation_id}.intervention.blocks names unknown {target}")
+    if not valid_reference(intervention.get("basis_ref")):
+        errors.append(f"{confirmation_id}.intervention.basis_ref must be typed")
+    basis_sha256 = intervention.get("basis_sha256")
+    if kind in {"plan_contract", "deviation_recovery"}:
+        if not isinstance(basis_sha256, str) or SHA256_RE.fullmatch(basis_sha256) is None:
+            errors.append(f"{confirmation_id}.intervention.basis_sha256 is required")
+    elif basis_sha256 is not None and (
+        not isinstance(basis_sha256, str) or SHA256_RE.fullmatch(basis_sha256) is None
+    ):
+        errors.append(f"{confirmation_id}.intervention.basis_sha256 must be a SHA256 digest")
+    return errors
+
+
+def intervention_contract_state(frontmatter: Mapping[str, Any]) -> str:
+    """Project strict, legacy-classification, or invalid intervention metadata."""
+    raw = frontmatter.get("confirmations", {})
+    if not isinstance(raw, dict):
+        return "INVALID"
+    legacy_pending = False
+    for group in ("required", "accepted"):
+        values = raw.get(group, [])
+        if not isinstance(values, list):
+            return "INVALID"
+        for item in values:
+            if not isinstance(item, dict):
+                return "INVALID"
+            if intervention_errors(frontmatter, item):
+                return "INVALID"
+            if item.get("status") == "pending" and item.get("intervention") is None:
+                legacy_pending = True
+    return "LEGACY_CLASSIFICATION_REQUIRED" if legacy_pending else "STRICT_READY"
+
+
+def require_strict_intervention_contract(frontmatter: Mapping[str, Any]) -> None:
+    """Reject structural advancement while a pending gate lacks a strict contract."""
+    state = intervention_contract_state(frontmatter)
+    if state != "STRICT_READY":
+        raise WorkctlError(f"INTERVENTION_CONTRACT_{state}")
+
+
+def intervention_placeholder(item: Mapping[str, Any]) -> bool:
+    """Return whether an external-authority gate still carries a bootstrap placeholder."""
+    intervention = item.get("intervention")
+    return bool(
+        isinstance(intervention, dict)
+        and intervention.get("kind") == "external_authority"
+        and isinstance(intervention.get("basis_ref"), str)
+        and str(intervention["basis_ref"]).startswith("evidence:pending-")
+    )
+
+
+def current_advancement_targets(frontmatter: Mapping[str, Any]) -> list[str]:
+    """Return the smallest dependency-ready target set for intervention projection."""
+    raw_tasks = frontmatter.get("tasks", [])
+    if isinstance(raw_tasks, list):
+        in_progress = [
+            f"task:{task['id']}"
+            for task in raw_tasks
+            if isinstance(task, dict)
+            and isinstance(task.get("id"), str)
+            and task.get("status") == "in_progress"
+        ]
+        if in_progress:
+            return in_progress
+        all_tasks = {
+            str(task["id"]): task
+            for task in raw_tasks
+            if isinstance(task, dict) and isinstance(task.get("id"), str)
+        }
+        for task in raw_tasks:
+            if not isinstance(task, dict) or task.get("status") != "pending":
+                continue
+            dependencies = task.get("depends_on", [])
+            if isinstance(dependencies, list) and all(
+                dependency in all_tasks
+                and all_tasks[dependency].get("status") in VERIFIED_TASK_STATES
+                for dependency in dependencies
+            ):
+                return [f"task:{task['id']}"]
+    delivery = frontmatter.get("delivery", {})
+    if isinstance(delivery, dict) and delivery.get("status") != "complete":
+        return ["delivery"]
+    activation = frontmatter.get("activation", {})
+    if isinstance(activation, dict) and activation.get("status") != "active":
+        return ["activation"]
+    return ["route"]
+
+
+def user_intervention_projection(frontmatter: Mapping[str, Any]) -> dict[str, Any]:
+    """Describe only the user-owned input that blocks the current advancement target."""
+    current_targets = current_advancement_targets(frontmatter)
+    raw_unknowns = frontmatter.get("unknowns", [])
+    if isinstance(raw_unknowns, list):
+        for unknown in raw_unknowns:
+            if (
+                isinstance(unknown, dict)
+                and unknown.get("status") == "open"
+                and unknown.get("owner") == "user"
+                and unknown.get("impact") == "blocking"
+                and isinstance(unknown.get("blocks"), list)
+                and set(current_targets).intersection(unknown["blocks"])
+            ):
+                return {
+                    "state": "REQUIREMENT_INPUT_REQUIRED",
+                    "current_targets": current_targets,
+                    "blocks": unknown["blocks"],
+                    "unknown_id": unknown.get("id"),
+                    "confirmation_id": None,
+                    "basis_ref": None,
+                }
+    raw_confirmations = frontmatter.get("confirmations", {})
+    required = raw_confirmations.get("required", []) if isinstance(raw_confirmations, dict) else []
+    for item in required if isinstance(required, list) else []:
+        if not isinstance(item, dict) or item.get("status") != "pending":
+            continue
+        intervention = item.get("intervention")
+        if intervention is None:
+            return {
+                "state": "PLAN_DECISION_REQUIRED",
+                "current_targets": current_targets,
+                "blocks": current_targets,
+                "unknown_id": None,
+                "confirmation_id": item.get("id"),
+                "basis_ref": None,
+            }
+        blocks = intervention.get("blocks", []) if isinstance(intervention, dict) else []
+        if not isinstance(blocks, list) or not set(current_targets).intersection(blocks):
+            continue
+        kind = intervention.get("kind") if isinstance(intervention, dict) else "plan_contract"
+        state = {
+            "plan_contract": "PLAN_DECISION_REQUIRED",
+            "external_authority": "AUTHORITY_REQUIRED",
+            "deviation_recovery": "DEVIATION_DECISION_REQUIRED",
+        }.get(str(kind), "PLAN_DECISION_REQUIRED")
+        return {
+            "state": state,
+            "current_targets": current_targets,
+            "blocks": blocks,
+            "unknown_id": None,
+            "confirmation_id": item.get("id"),
+            "basis_ref": intervention.get("basis_ref") if isinstance(intervention, dict) else None,
+        }
+    return {
+        "state": "NOT_REQUIRED",
+        "current_targets": current_targets,
+        "blocks": [],
+        "unknown_id": None,
+        "confirmation_id": None,
+        "basis_ref": None,
+    }
+
+
 def require_confirmation(frontmatter: dict[str, Any], confirmation_id: str | None) -> None:
     if not confirmation_id:
         return
@@ -3644,6 +3856,11 @@ def set_task_status(args: argparse.Namespace, status: str) -> None:
             )
         if status in {"in_progress", "verified", "skipped"}:
             require_dependencies_verified(doc.frontmatter, task)
+            require_independent_target(
+                root,
+                doc.frontmatter,
+                f"task:{args.task_id}",
+            )
             require_task_confirmation(doc.frontmatter, task, status)
         task["status"] = status
         if args.note:
@@ -3691,6 +3908,189 @@ def retirement_metadata_errors(frontmatter: dict[str, Any]) -> list[str]:
     return errors
 
 
+def independent_validation_errors(frontmatter: Mapping[str, Any]) -> list[str]:
+    """Validate the optional Plan-level independent-review contract."""
+    contract = frontmatter.get("independent_validation")
+    if contract is None:
+        return []
+    if not isinstance(contract, dict):
+        return ["independent_validation must be a mapping"]
+    errors: list[str] = []
+    required = contract.get("required")
+    if type(required) is not bool:
+        errors.append("independent_validation.required must be boolean")
+    if contract.get("state") not in INDEPENDENT_REVIEW_STATES:
+        errors.append("independent_validation.state must be pending, verified, or degraded")
+    required_modes = contract.get("required_modes")
+    if (
+        not isinstance(required_modes, list)
+        or not all(mode in INDEPENDENT_REVIEW_MODES for mode in required_modes)
+        or len(required_modes) != len(set(required_modes))
+    ):
+        errors.append("independent_validation.required_modes must be unique supported modes")
+    elif required and set(required_modes) != INDEPENDENT_REVIEW_MODES:
+        errors.append("required independent_validation must include all review modes")
+    if not valid_reference(contract.get("implementation_context_ref")):
+        errors.append("independent_validation.implementation_context_ref must be typed")
+    reviews = contract.get("reviews")
+    seen_modes: set[str] = set()
+    if not isinstance(reviews, list):
+        return [*errors, "independent_validation.reviews must be a list"]
+    for index, review in enumerate(reviews):
+        prefix = f"independent_validation.reviews[{index}]"
+        if not isinstance(review, dict):
+            errors.append(f"{prefix} must be a mapping")
+            continue
+        mode = review.get("mode")
+        if mode not in INDEPENDENT_REVIEW_MODES:
+            errors.append(f"{prefix}.mode must be supported")
+        elif mode in seen_modes:
+            errors.append(f"duplicate independent review mode {mode}")
+        else:
+            seen_modes.add(str(mode))
+        state = review.get("state")
+        if state not in INDEPENDENT_REVIEW_STATES:
+            errors.append(f"{prefix}.state must be pending, verified, or degraded")
+        blocks = review.get("blocks")
+        if (
+            not isinstance(blocks, list)
+            or not blocks
+            or not all(valid_target_ref(target) for target in blocks)
+            or len(blocks) != len(set(blocks))
+        ):
+            errors.append(f"{prefix}.blocks must be unique non-empty target refs")
+        else:
+            for target in blocks:
+                try:
+                    require_target_exists(frontmatter, target)
+                except WorkctlError:
+                    errors.append(f"{prefix}.blocks names unknown {target}")
+        if not valid_reference(review.get("review_context_ref")):
+            errors.append(f"{prefix}.review_context_ref must be typed")
+        contract_ref = review.get("reviewed_contract_ref")
+        contract_sha = review.get("reviewed_contract_sha256")
+        if state == "pending":
+            if contract_ref is not None and not valid_reference(contract_ref):
+                errors.append(f"{prefix}.reviewed_contract_ref must be null or typed")
+            if contract_sha is not None and (
+                not isinstance(contract_sha, str) or SHA256_RE.fullmatch(contract_sha) is None
+            ):
+                errors.append(f"{prefix}.reviewed_contract_sha256 must be null or SHA256")
+        else:
+            if not valid_reference(contract_ref):
+                errors.append(f"{prefix}.reviewed_contract_ref is required")
+            if not isinstance(contract_sha, str) or SHA256_RE.fullmatch(contract_sha) is None:
+                errors.append(f"{prefix}.reviewed_contract_sha256 is required")
+        reviewed_artifacts = review.get("reviewed_artifacts")
+        if not isinstance(reviewed_artifacts, list):
+            errors.append(f"{prefix}.reviewed_artifacts must be a list")
+        else:
+            if state in {"verified", "degraded"} and not reviewed_artifacts:
+                errors.append(f"{prefix}.reviewed_artifacts is required")
+            for artifact in reviewed_artifacts:
+                if (
+                    not isinstance(artifact, dict)
+                    or set(artifact) != {"ref", "sha256"}
+                    or not valid_reference(artifact.get("ref"))
+                    or not isinstance(artifact.get("sha256"), str)
+                    or SHA256_RE.fullmatch(str(artifact.get("sha256"))) is None
+                ):
+                    errors.append(f"{prefix}.reviewed_artifacts entries must bind ref and SHA256")
+        findings = review.get("findings")
+        if not isinstance(findings, list):
+            errors.append(f"{prefix}.findings must be a list")
+        else:
+            finding_ids: set[str] = set()
+            for finding in findings:
+                if not isinstance(finding, dict):
+                    errors.append(f"{prefix}.findings entries must be mappings")
+                    continue
+                finding_id = finding.get("id")
+                if not isinstance(finding_id, str) or not finding_id:
+                    errors.append(f"{prefix}.findings requires ids")
+                elif finding_id in finding_ids:
+                    errors.append(f"{prefix}.findings duplicate id {finding_id}")
+                else:
+                    finding_ids.add(finding_id)
+                if finding.get("severity") not in INDEPENDENT_FINDING_SEVERITIES:
+                    errors.append(f"{prefix}.findings severity must be supported")
+                if finding.get("status") not in INDEPENDENT_FINDING_STATES:
+                    errors.append(f"{prefix}.findings status must be open or resolved")
+                if not isinstance(finding.get("description"), str) or not finding.get(
+                    "description"
+                ):
+                    errors.append(f"{prefix}.findings description is required")
+                evidence_ref = finding.get("evidence_ref")
+                if evidence_ref is not None and not valid_reference(evidence_ref):
+                    errors.append(f"{prefix}.findings evidence_ref must be typed")
+        if not valid_reference(review.get("evidence_ref")):
+            errors.append(f"{prefix}.evidence_ref must be typed")
+        evidence_sha = review.get("evidence_sha256")
+        if state == "pending":
+            if evidence_sha is not None and (
+                not isinstance(evidence_sha, str) or SHA256_RE.fullmatch(evidence_sha) is None
+            ):
+                errors.append(f"{prefix}.evidence_sha256 must be null or SHA256")
+        elif not isinstance(evidence_sha, str) or SHA256_RE.fullmatch(evidence_sha) is None:
+            errors.append(f"{prefix}.evidence_sha256 is required")
+        isolation_ref = review.get("isolation_attestation_ref")
+        isolation_sha = review.get("isolation_attestation_sha256")
+        if state == "verified":
+            errors.append(
+                f"{prefix}.verified requires an authenticated platform attestor that is unavailable"
+            )
+        elif isolation_ref is not None or isolation_sha is not None:
+            errors.append(f"{prefix}.isolation attestation is valid only for verified state")
+        risk_confirmation = review.get("risk_acceptance_confirmation_id")
+        if state == "degraded":
+            if not isinstance(risk_confirmation, str) or not risk_confirmation.startswith("C-"):
+                errors.append(
+                    f"{prefix}.risk_acceptance_confirmation_id is required for degraded state"
+                )
+        elif risk_confirmation is not None:
+            errors.append(
+                f"{prefix}.risk_acceptance_confirmation_id is valid only for degraded state"
+            )
+        bootstrap = review.get("bootstrap_release")
+        if bootstrap is not None:
+            if not isinstance(bootstrap, dict):
+                errors.append(f"{prefix}.bootstrap_release must be a mapping")
+            else:
+                if not valid_reference(bootstrap.get("controller_build")):
+                    errors.append(f"{prefix}.bootstrap_release.controller_build must be typed")
+                for field in ("evidence_mapping", "releases"):
+                    values = bootstrap.get(field)
+                    if (
+                        not isinstance(values, list)
+                        or not values
+                        or not all(valid_target_ref(target) for target in values)
+                        or len(values) != len(set(values))
+                    ):
+                        errors.append(
+                            f"{prefix}.bootstrap_release.{field} must be unique target refs"
+                        )
+                    else:
+                        for target in values:
+                            try:
+                                require_target_exists(frontmatter, target)
+                            except WorkctlError:
+                                errors.append(
+                                    f"{prefix}.bootstrap_release.{field} names unknown {target}"
+                                )
+                releases = bootstrap.get("releases", [])
+                if (
+                    isinstance(releases, list)
+                    and isinstance(blocks, list)
+                    and not set(releases).issubset(blocks)
+                ):
+                    errors.append(f"{prefix}.bootstrap_release.releases must be blocked targets")
+    if isinstance(required_modes, list) and set(required_modes) != seen_modes:
+        errors.append("independent_validation reviews must exactly match required_modes")
+    if contract.get("state") != aggregate_independent_review_state(contract):
+        errors.append("independent_validation.state must match required review states")
+    return errors
+
+
 def validate_frontmatter(
     frontmatter: dict[str, Any],
     *,
@@ -3709,6 +4109,7 @@ def validate_frontmatter(
     if frontmatter.get("status") not in PLAN_STATES:
         errors.append("status must be a supported Plan state")
     errors.extend(retirement_metadata_errors(frontmatter))
+    errors.extend(independent_validation_errors(frontmatter))
     if frontmatter.get("mode") not in {"autonomous", "strict"}:
         errors.append("mode must be autonomous or strict")
     for field in ("title", "created_at", "updated_at"):
@@ -3792,6 +4193,7 @@ def validate_frontmatter(
                 confirmation_status = item.get("status")
                 if confirmation_status not in CONFIRMATION_STATES:
                     errors.append(f"{confirmation_id} has an unsupported status")
+                errors.extend(intervention_errors(frontmatter, item))
                 if confirmation_status in {"accepted", "declined"}:
                     if not item.get("ref"):
                         errors.append(f"{confirmation_id} resolved confirmation requires ref")
@@ -7965,6 +8367,8 @@ def resume_plan_admission(root: Path, journal_path: Path) -> None:
     reject_symlink_components(root, target)
     staged_doc = load_plan(staged)
     require_valid_candidate(staged_doc)
+    require_strict_intervention_contract(staged_doc.frontmatter)
+    require_new_plan_reviews_pending(staged_doc.frontmatter)
     if (
         staged_doc.frontmatter.get("schema_version") != 4
         or staged_doc.frontmatter.get("plan_id") != plan_id
@@ -8057,6 +8461,8 @@ def cmd_plan_admit_apply(args: argparse.Namespace) -> None:
             raise WorkctlError("PLAN_ADMISSION_INPUT_DRIFT")
         candidate = load_plan(prepared)
         require_valid_candidate(candidate)
+        require_strict_intervention_contract(candidate.frontmatter)
+        require_new_plan_reviews_pending(candidate.frontmatter)
         plan_id = str(manifest["plan_id"])
         if (
             candidate.frontmatter.get("schema_version") != 4
@@ -8091,6 +8497,8 @@ def cmd_plan_admit_apply(args: argparse.Namespace) -> None:
             record = inject_initial_intake(candidate.frontmatter, proposal)
             intake_binding = initial_intake_binding(proposal, record)
             require_valid_candidate(candidate)
+            require_strict_intervention_contract(candidate.frontmatter)
+            require_new_plan_reviews_pending(candidate.frontmatter)
         staged = transaction / "staging" / f"{plan_id}.md"
         if STRICT_INITIAL_INTAKE_REQUIRED:
             write_atomic(staged, dump_plan(candidate))
@@ -8311,6 +8719,8 @@ def prepare_contract_upgrade(
         record = inject_initial_intake(upgraded.frontmatter, proposal)
         intake_binding = initial_intake_binding(proposal, record)
     require_valid_candidate(upgraded)
+    require_strict_intervention_contract(upgraded.frontmatter)
+    require_new_plan_reviews_pending(upgraded.frontmatter)
     return ContractUpgradePreparation(
         manifest=manifest,
         upgraded=upgraded,
@@ -8833,6 +9243,8 @@ def load_reconcile_upgrade_journal(root: Path, journal_path: Path) -> dict[str, 
     schema4_doc = load_plan(schema4_staged)
     require_valid_candidate(schema3_doc)
     require_valid_candidate(schema4_doc)
+    require_strict_intervention_contract(schema4_doc.frontmatter)
+    require_new_plan_reviews_pending(schema4_doc.frontmatter)
     if (
         schema3_doc.frontmatter.get("schema_version") != 3
         or schema4_doc.frontmatter.get("schema_version") != 4
@@ -9115,6 +9527,27 @@ def current_request_matches(
     ) == decision_basis_sha256(frontmatter)
 
 
+def require_confirmation_turn_ref(
+    root: Path,
+    *,
+    ref: str,
+    turn_receipt_sha256: str | None,
+) -> None:
+    """Bind a schema-v4 confirmation decision to the trusted current user turn."""
+    if not isinstance(turn_receipt_sha256, str):
+        raise WorkctlError("TURN_RECEIPT_REQUIRED")
+    session_receipt = load_ready_receipt_v2(root)
+    if session_receipt is None:
+        raise WorkctlError("BOOTSTRAP_RECEIPT_REQUIRED")
+    turn = load_current_turn_receipt(
+        root,
+        supplied_sha256=turn_receipt_sha256,
+        session_receipt=cast(Mapping[str, object], session_receipt),
+    )
+    if ref != turn.get("request_ref"):
+        raise WorkctlError("CONFIRMATION_REF_CURRENT_TURN_REQUIRED")
+
+
 def cmd_plan_status(args: argparse.Namespace) -> None:
     root = project_root()
     report = inspect_authority(root)
@@ -9126,6 +9559,15 @@ def cmd_plan_status(args: argparse.Namespace) -> None:
             "contract_state": "NO_ACTIVE_PLAN",
             "intake_state": "NO_ACTIVE_PLAN",
             "unknown_contract_state": "NO_ACTIVE_PLAN",
+            "intervention_contract_state": "NO_ACTIVE_PLAN",
+            "user_intervention": {
+                "state": "NOT_REQUIRED",
+                "current_targets": [],
+                "blocks": [],
+                "unknown_id": None,
+                "confirmation_id": None,
+                "basis_ref": None,
+            },
             "legacy_unknown_ids": [],
             "intake_blockers": ["no active Plan"],
             "authority_candidates": [candidate_to_dict(item) for item in report.candidates],
@@ -9149,6 +9591,8 @@ def cmd_plan_status(args: argparse.Namespace) -> None:
         "contract_state": contract_state(doc.frontmatter),
         "intake_state": intake_state(doc.frontmatter),
         "unknown_contract_state": ("LEGACY_REPAIR_REQUIRED" if legacy_ids else "STRICT_READY"),
+        "intervention_contract_state": intervention_contract_state(doc.frontmatter),
+        "user_intervention": user_intervention_projection(doc.frontmatter),
         "legacy_unknown_ids": legacy_ids,
         "intake_blockers": intake_blockers(doc.frontmatter),
         "goal": doc.frontmatter.get("goal", {}),
@@ -9159,6 +9603,7 @@ def cmd_plan_status(args: argparse.Namespace) -> None:
         "tasks": doc.frontmatter.get("tasks", []),
         "validations": doc.frontmatter.get("validations", []),
         "confirmations": doc.frontmatter.get("confirmations", {}),
+        "independent_validation": doc.frontmatter.get("independent_validation"),
         "artifacts": doc.frontmatter.get("artifacts", []),
         "scope": doc.frontmatter.get("scope", {}),
         "delivery": doc.frontmatter.get("delivery", {}),
@@ -9570,11 +10015,23 @@ def cmd_plan_confirmation_add(args: argparse.Namespace) -> None:
             raise WorkctlError("INVALID_PLAN: confirmations.required must be a list")
         if args.confirmation_id in confirmations(doc.frontmatter):
             raise WorkctlError(f"CONFIRMATION_EXISTS: {args.confirmation_id}")
+        if doc.frontmatter.get("schema_version") == 4 and args.status == "accepted":
+            raise WorkctlError("CONFIRMATION_ACCEPTED_REQUIRES_PLAN_CONFIRM")
         item: dict[str, Any] = {
             "id": args.confirmation_id,
             "description": args.description,
             "status": args.status,
+            "intervention": {
+                "kind": args.intervention_kind,
+                "blocks": list(dict.fromkeys(args.blocks)),
+                "basis_ref": args.basis_ref,
+            },
         }
+        if args.basis_sha256 is not None:
+            item["intervention"]["basis_sha256"] = args.basis_sha256
+        errors = intervention_errors(doc.frontmatter, item)
+        if errors:
+            raise WorkctlError(f"INVALID_INTERVENTION_CONTRACT: {'; '.join(errors)}")
         if args.status == "accepted":
             if not isinstance(args.ref, str) or not valid_reference(args.ref):
                 raise WorkctlError("CONFIRMATION_REF_REQUIRED")
@@ -9597,6 +10054,79 @@ def cmd_plan_confirmation_add(args: argparse.Namespace) -> None:
         )
 
 
+def load_confirmation_classification_manifest(path: Path) -> dict[str, Any]:
+    """Load one closed legacy-confirmation intervention classification."""
+    if path.is_symlink() or not path.is_file():
+        raise WorkctlError("CONFIRMATION_CLASSIFICATION_MANIFEST_MISSING")
+    manifest = load_yaml_file(path)
+    if set(manifest) != {
+        "schema_version",
+        "kind",
+        "plan_id",
+        "confirmation_id",
+        "intervention",
+    }:
+        raise WorkctlError("CONFIRMATION_CLASSIFICATION_MANIFEST_INVALID")
+    intervention = manifest.get("intervention")
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("kind") != "confirmation-intervention-classification"
+        or not isinstance(manifest.get("plan_id"), str)
+        or PLAN_ID_RE.fullmatch(str(manifest["plan_id"])) is None
+        or not isinstance(manifest.get("confirmation_id"), str)
+        or not str(manifest["confirmation_id"]).startswith("C-")
+        or not isinstance(intervention, dict)
+        or set(intervention) - {"kind", "blocks", "basis_ref", "basis_sha256"}
+    ):
+        raise WorkctlError("CONFIRMATION_CLASSIFICATION_MANIFEST_INVALID")
+    return manifest
+
+
+def cmd_plan_confirmation_classify(args: argparse.Namespace) -> None:
+    """Repair one legacy pending gate or exact accepted bootstrap placeholder."""
+    root = project_root()
+    manifest = load_confirmation_classification_manifest(Path(args.manifest).resolve())
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        require_plan_contract_ready(doc.frontmatter)
+        require_expected_revision(doc.frontmatter, args.expected_revision)
+        if manifest["plan_id"] != doc.frontmatter.get("plan_id"):
+            raise WorkctlError("CONFIRMATION_CLASSIFICATION_PLAN_MISMATCH")
+        confirmation_id = str(manifest["confirmation_id"])
+        target = confirmations(doc.frontmatter).get(confirmation_id)
+        if target is None:
+            raise WorkctlError(f"UNKNOWN_CONFIRMATION: {confirmation_id}")
+        status = target.get("status")
+        existing = target.get("intervention")
+        replacement = cast(dict[str, Any], manifest["intervention"])
+        candidate = dict(target)
+        candidate["intervention"] = replacement
+        errors = intervention_errors(doc.frontmatter, candidate)
+        if errors:
+            raise WorkctlError(f"INVALID_INTERVENTION_CONTRACT: {'; '.join(errors)}")
+        if status == "pending":
+            if existing is not None and not intervention_placeholder(target):
+                raise WorkctlError("CONFIRMATION_ALREADY_STRICT")
+        elif status == "accepted" and intervention_placeholder(target):
+            if replacement.get("kind") != "external_authority" or target.get(
+                "evidence_sha256"
+            ) != replacement.get("basis_sha256"):
+                raise WorkctlError("ACCEPTED_PLACEHOLDER_BASIS_MISMATCH")
+        else:
+            raise WorkctlError("CONFIRMATION_CLASSIFICATION_PENDING_REQUIRED")
+        target["intervention"] = replacement
+        bump_revision(
+            doc.frontmatter,
+            kind="confirmation-classified",
+            rationale=f"Classify intervention contract for {confirmation_id}.",
+            confirmation_id=confirmation_id if status == "accepted" else None,
+        )
+        require_valid_candidate(doc)
+        write_atomic(doc.path, dump_plan(doc))
+        print(f"CONFIRMATION_CLASSIFIED {confirmation_id} revision={doc.frontmatter['revision']}")
+
+
 def cmd_plan_confirm(args: argparse.Namespace) -> None:
     root = project_root()
     with lock(root):
@@ -9617,6 +10147,37 @@ def cmd_plan_confirm(args: argparse.Namespace) -> None:
                 f"INVALID_CONFIRMATION_TRANSITION: {args.confirmation_id} "
                 f"{target.get('status')} -> {args.decision}"
             )
+        intervention = target.get("intervention")
+        if doc.frontmatter.get("schema_version") == 4:
+            if not isinstance(intervention, dict):
+                raise WorkctlError("CONFIRMATION_CLASSIFICATION_REQUIRED")
+            if intervention_placeholder(target):
+                raise WorkctlError("CONFIRMATION_BASIS_CLASSIFICATION_REQUIRED")
+            blocks = intervention.get("blocks", [])
+            if not isinstance(blocks, list):
+                raise WorkctlError("INVALID_INTERVENTION_CONTRACT")
+            require_current_intake(
+                root,
+                doc.frontmatter,
+                turn_receipt_sha256=args.turn_receipt_sha256,
+                expected_intake_sha256=args.expected_intake_sha256,
+                targets=blocks,
+            )
+            require_confirmation_turn_ref(
+                root,
+                ref=args.ref,
+                turn_receipt_sha256=args.turn_receipt_sha256,
+            )
+            basis_sha256 = intervention.get("basis_sha256")
+            if basis_sha256 is not None and args.evidence_sha256 != basis_sha256:
+                raise WorkctlError("CONFIRMATION_EVIDENCE_BASIS_MISMATCH")
+            if args.decision == "accepted" and not confirmation_accepts_degraded_review(
+                doc.frontmatter,
+                target,
+            ):
+                for current_target in current_advancement_targets(doc.frontmatter):
+                    if current_target in blocks:
+                        require_independent_target(root, doc.frontmatter, current_target)
         if doc.frontmatter.get("schema_version") in {3, 4} and not valid_reference(args.ref):
             raise WorkctlError("INVALID_CONFIRMATION_REF")
         target["status"] = args.decision
@@ -9639,6 +10200,289 @@ def cmd_plan_confirm(args: argparse.Namespace) -> None:
         write_atomic(doc.path, dump_plan(doc))
         print(
             f"CONFIRMATION_DECIDED {args.confirmation_id} {args.decision} "
+            f"revision={doc.frontmatter['revision']}"
+        )
+
+
+def load_independent_review_manifest(path: Path) -> dict[str, Any]:
+    """Load one closed independent-review recording manifest."""
+    if path.is_symlink() or not path.is_file():
+        raise WorkctlError("INDEPENDENT_REVIEW_MANIFEST_MISSING")
+    manifest = load_yaml_file(path)
+    required = {
+        "schema_version",
+        "kind",
+        "plan_id",
+        "mode",
+        "state",
+        "implementation_context_ref",
+        "review_context_ref",
+        "reviewed_contract",
+        "reviewed_artifacts",
+        "findings",
+        "evidence_manifest",
+        "isolation_attestation",
+        "bootstrap_evidence",
+    }
+    optional = {"risk_acceptance_confirmation_id"}
+    if (
+        set(manifest) - optional != required
+        or manifest.get("schema_version") != 1
+        or manifest.get("kind") != "independent-review"
+        or not isinstance(manifest.get("plan_id"), str)
+        or PLAN_ID_RE.fullmatch(str(manifest["plan_id"])) is None
+        or manifest.get("mode") not in INDEPENDENT_REVIEW_MODES
+        or manifest.get("state") not in {"verified", "degraded"}
+        or not valid_reference(manifest.get("implementation_context_ref"))
+        or not valid_reference(manifest.get("review_context_ref"))
+        or not isinstance(manifest.get("evidence_manifest"), str)
+        or (
+            manifest.get("isolation_attestation") is not None
+            and not isinstance(manifest.get("isolation_attestation"), str)
+        )
+    ):
+        raise WorkctlError("INDEPENDENT_REVIEW_MANIFEST_INVALID")
+    reviewed_contract = manifest.get("reviewed_contract")
+    if (
+        not isinstance(reviewed_contract, dict)
+        or set(reviewed_contract) != {"ref", "sha256"}
+        or not valid_reference(reviewed_contract.get("ref"))
+        or not isinstance(reviewed_contract.get("sha256"), str)
+        or SHA256_RE.fullmatch(str(reviewed_contract["sha256"])) is None
+    ):
+        raise WorkctlError("INDEPENDENT_REVIEW_CONTRACT_INVALID")
+    reviewed_artifacts = manifest.get("reviewed_artifacts")
+    if not isinstance(reviewed_artifacts, list) or not reviewed_artifacts:
+        raise WorkctlError("INDEPENDENT_REVIEW_ARTIFACTS_REQUIRED")
+    for artifact in reviewed_artifacts:
+        if (
+            not isinstance(artifact, dict)
+            or set(artifact) != {"ref", "sha256"}
+            or not valid_reference(artifact.get("ref"))
+            or not isinstance(artifact.get("sha256"), str)
+            or SHA256_RE.fullmatch(str(artifact["sha256"])) is None
+        ):
+            raise WorkctlError("INDEPENDENT_REVIEW_ARTIFACT_INVALID")
+    findings = manifest.get("findings")
+    if not isinstance(findings, list):
+        raise WorkctlError("INDEPENDENT_REVIEW_FINDINGS_INVALID")
+    finding_ids: set[str] = set()
+    for finding in findings:
+        if not isinstance(finding, dict) or set(finding) not in (
+            {"id", "severity", "status", "description"},
+            {"id", "severity", "status", "description", "evidence_ref"},
+        ):
+            raise WorkctlError("INDEPENDENT_REVIEW_FINDING_INVALID")
+        finding_id = finding.get("id")
+        if (
+            not isinstance(finding_id, str)
+            or not finding_id
+            or finding_id in finding_ids
+            or finding.get("severity") not in INDEPENDENT_FINDING_SEVERITIES
+            or finding.get("status") not in INDEPENDENT_FINDING_STATES
+            or not isinstance(finding.get("description"), str)
+            or not finding.get("description")
+            or (
+                finding.get("evidence_ref") is not None
+                and not valid_reference(finding.get("evidence_ref"))
+            )
+        ):
+            raise WorkctlError("INDEPENDENT_REVIEW_FINDING_INVALID")
+        finding_ids.add(finding_id)
+    bootstrap_evidence = manifest.get("bootstrap_evidence")
+    if not isinstance(bootstrap_evidence, list):
+        raise WorkctlError("INDEPENDENT_REVIEW_BOOTSTRAP_EVIDENCE_INVALID")
+    for item in bootstrap_evidence:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"target_ref", "evidence_ref", "evidence_sha256"}
+            or not valid_target_ref(item.get("target_ref"))
+            or not valid_reference(item.get("evidence_ref"))
+            or not isinstance(item.get("evidence_sha256"), str)
+            or SHA256_RE.fullmatch(str(item["evidence_sha256"])) is None
+        ):
+            raise WorkctlError("INDEPENDENT_REVIEW_BOOTSTRAP_EVIDENCE_INVALID")
+    risk_confirmation = manifest.get("risk_acceptance_confirmation_id")
+    if risk_confirmation is not None and (
+        not isinstance(risk_confirmation, str) or not risk_confirmation.startswith("C-")
+    ):
+        raise WorkctlError("INDEPENDENT_REVIEW_RISK_CONFIRMATION_INVALID")
+    if manifest["state"] == "degraded" and risk_confirmation is None:
+        raise WorkctlError("DEGRADED_REVIEW_RISK_CONFIRMATION_ID_REQUIRED")
+    if manifest["state"] == "verified" and risk_confirmation is not None:
+        raise WorkctlError("VERIFIED_REVIEW_CANNOT_CARRY_RISK_CONFIRMATION")
+    return manifest
+
+
+def bootstrap_entry_evidence(
+    frontmatter: Mapping[str, Any],
+    target: str,
+) -> tuple[object, object]:
+    """Project the evidence pointer currently carried by one bootstrap-mapped entry."""
+    kind, entry_id = target.split(":", 1)
+    field = {
+        "task": "tasks",
+        "obligation": "obligations",
+        "validation": "validations",
+        "artifact": "artifacts",
+    }.get(kind)
+    values = frontmatter.get(field, []) if field else []
+    entry = (
+        next(
+            (item for item in values if isinstance(item, dict) and item.get("id") == entry_id),
+            None,
+        )
+        if isinstance(values, list)
+        else None
+    )
+    if not isinstance(entry, dict):
+        return None, None
+    if field != "tasks":
+        return entry.get("evidence_ref"), entry.get("evidence_sha256")
+    note = entry.get("note")
+    match = (
+        re.search(r"evidence:(?P<path>\S+/(?P<sha>[0-9a-f]{64})\.json)", note)
+        if isinstance(note, str)
+        else None
+    )
+    if match is None:
+        return None, None
+    return f"evidence:{match.group('path')}", match.group("sha")
+
+
+def cmd_plan_independent_review_record(args: argparse.Namespace) -> None:
+    """Record one isolated review; this is the sole bootstrap-blocked migration write."""
+    root = project_root()
+    manifest = load_independent_review_manifest(Path(args.manifest).resolve())
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        require_plan_contract_ready(doc.frontmatter)
+        require_expected_revision(doc.frontmatter, args.expected_revision)
+        require_current_intake(
+            root,
+            doc.frontmatter,
+            turn_receipt_sha256=args.turn_receipt_sha256,
+            expected_intake_sha256=args.expected_intake_sha256,
+            targets=current_advancement_targets(doc.frontmatter),
+        )
+        if manifest["plan_id"] != doc.frontmatter.get("plan_id"):
+            raise WorkctlError("INDEPENDENT_REVIEW_PLAN_MISMATCH")
+        contract = doc.frontmatter.get("independent_validation")
+        if not isinstance(contract, dict) or contract.get("required") is not True:
+            raise WorkctlError("INDEPENDENT_REVIEW_NOT_REQUIRED")
+        implementation_context = str(manifest["implementation_context_ref"])
+        review_context = str(manifest["review_context_ref"])
+        if manifest["state"] == "verified" and implementation_context == review_context:
+            raise WorkctlError("INDEPENDENT_REVIEW_CONTEXT_NOT_ISOLATED")
+        if manifest["state"] == "verified":
+            raise WorkctlError("INDEPENDENT_REVIEW_TRUSTED_ATTESTATION_UNAVAILABLE")
+        configured_implementation = contract.get("implementation_context_ref")
+        if configured_implementation not in {
+            implementation_context,
+            "context:pending-implementation",
+        }:
+            raise WorkctlError("INDEPENDENT_REVIEW_IMPLEMENTATION_CONTEXT_MISMATCH")
+        reviews = contract.get("reviews", [])
+        review = (
+            next(
+                (
+                    item
+                    for item in reviews
+                    if isinstance(item, dict) and item.get("mode") == manifest["mode"]
+                ),
+                None,
+            )
+            if isinstance(reviews, list)
+            else None
+        )
+        if review is None:
+            raise WorkctlError("INDEPENDENT_REVIEW_MODE_NOT_CONFIGURED")
+        if review.get("state") != "pending":
+            raise WorkctlError("INDEPENDENT_REVIEW_ALREADY_RECORDED")
+        if manifest["state"] == "verified" and unresolved_blocking_findings(manifest):
+            raise WorkctlError("INDEPENDENT_REVIEW_BLOCKING_FINDINGS_OPEN")
+        evidence_ref, evidence_sha256 = verify_evidence_manifest(
+            root,
+            str(manifest["evidence_manifest"]),
+            plan_id=str(doc.frontmatter["plan_id"]),
+            subject=f"independent-review:{manifest['mode']}",
+        )
+        evidence_path = checked_project_path(root, evidence_ref.removeprefix("evidence:"))
+        evidence_payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        if evidence_payload.get("producer_ref") != review_context:
+            raise WorkctlError("INDEPENDENT_REVIEW_PRODUCER_CONTEXT_MISMATCH")
+        expected_bindings = {
+            (
+                str(cast(dict[str, Any], manifest["reviewed_contract"])["ref"]),
+                str(cast(dict[str, Any], manifest["reviewed_contract"])["sha256"]),
+            ),
+            *{
+                (str(item["ref"]), str(item["sha256"]))
+                for item in cast(list[dict[str, Any]], manifest["reviewed_artifacts"])
+            },
+        }
+        evidence_bindings = {
+            (str(item["ref"]), str(item["sha256"]))
+            for item in evidence_payload.get("items", [])
+            if isinstance(item, dict)
+        }
+        if not expected_bindings.issubset(evidence_bindings):
+            raise WorkctlError("INDEPENDENT_REVIEW_EVIDENCE_BINDING_MISMATCH")
+        bootstrap = review.get("bootstrap_release")
+        supplied_bootstrap = cast(list[dict[str, Any]], manifest["bootstrap_evidence"])
+        if isinstance(bootstrap, dict):
+            activation = doc.frontmatter.get("activation", {})
+            if not isinstance(activation, dict) or activation.get("current_ref") != bootstrap.get(
+                "controller_build"
+            ):
+                raise WorkctlError("INDEPENDENT_REVIEW_BOOTSTRAP_CONTROLLER_MISMATCH")
+            expected_targets = bootstrap.get("evidence_mapping", [])
+            if not isinstance(expected_targets, list) or {
+                item["target_ref"] for item in supplied_bootstrap
+            } != set(expected_targets):
+                raise WorkctlError("INDEPENDENT_REVIEW_BOOTSTRAP_MAPPING_MISMATCH")
+            for item in supplied_bootstrap:
+                target = str(item["target_ref"])
+                if not bootstrap_mapping_verified(root, doc.frontmatter, target):
+                    raise WorkctlError("INDEPENDENT_REVIEW_BOOTSTRAP_EVIDENCE_INVALID")
+                current_ref, current_sha = bootstrap_entry_evidence(doc.frontmatter, target)
+                if item["evidence_ref"] != current_ref or item["evidence_sha256"] != current_sha:
+                    raise WorkctlError("INDEPENDENT_REVIEW_BOOTSTRAP_EVIDENCE_MISMATCH")
+        elif supplied_bootstrap:
+            raise WorkctlError("INDEPENDENT_REVIEW_BOOTSTRAP_EVIDENCE_UNEXPECTED")
+        risk_confirmation = manifest.get("risk_acceptance_confirmation_id")
+        if isinstance(risk_confirmation, str):
+            existing_risk = confirmations(doc.frontmatter).get(risk_confirmation)
+            if existing_risk is not None:
+                raise WorkctlError("DEGRADED_REVIEW_PREEXISTING_RISK_FORBIDDEN")
+        raw_isolation = manifest["isolation_attestation"]
+        if raw_isolation is not None:
+            raise WorkctlError("DEGRADED_REVIEW_CANNOT_CLAIM_ISOLATION")
+        contract["implementation_context_ref"] = implementation_context
+        review["state"] = manifest["state"]
+        review["review_context_ref"] = review_context
+        reviewed_contract = cast(dict[str, Any], manifest["reviewed_contract"])
+        review["reviewed_contract_ref"] = reviewed_contract["ref"]
+        review["reviewed_contract_sha256"] = reviewed_contract["sha256"]
+        review["reviewed_artifacts"] = manifest["reviewed_artifacts"]
+        review["findings"] = manifest["findings"]
+        review["evidence_ref"] = evidence_ref
+        review["evidence_sha256"] = evidence_sha256
+        if risk_confirmation is not None:
+            review["risk_acceptance_confirmation_id"] = risk_confirmation
+        review["recorded_at"] = utc_now()
+        contract["state"] = aggregate_independent_review_state(contract)
+        bump_revision(
+            doc.frontmatter,
+            kind="independent-review-recorded",
+            rationale=f"Record independent {manifest['mode']} review.",
+            evidence_manifest=evidence_ref,
+        )
+        require_valid_candidate(doc)
+        write_atomic(doc.path, dump_plan(doc))
+        print(
+            f"INDEPENDENT_REVIEW_RECORDED {manifest['mode']} {manifest['state']} "
             f"revision={doc.frontmatter['revision']}"
         )
 
@@ -9825,6 +10669,366 @@ def require_target_exists(frontmatter: Mapping[str, Any], target: str) -> None:
         isinstance(item, dict) and item.get("id") == entry_id for item in values
     ):
         raise WorkctlError(f"UNKNOWN_TARGET_REF: {target}")
+
+
+def canonical_evidence_pointer(
+    root: Path,
+    frontmatter: Mapping[str, Any],
+    evidence_ref: object,
+    evidence_sha256: object,
+    *,
+    expected_subject: str | None = None,
+) -> bool:
+    """Return whether a Plan pointer names exact canonical evidence bytes."""
+    if (
+        not isinstance(evidence_ref, str)
+        or not evidence_ref.startswith("evidence:")
+        or not isinstance(evidence_sha256, str)
+        or SHA256_RE.fullmatch(evidence_sha256) is None
+    ):
+        return False
+    relative = evidence_ref.removeprefix("evidence:")
+    if Path(relative).stem != evidence_sha256:
+        return False
+    try:
+        path = checked_project_path(root, relative)
+    except WorkctlError:
+        return False
+    if path.is_symlink() or not path.is_file():
+        return False
+    content = path.read_bytes()
+    if sha256_bytes(content) != evidence_sha256:
+        return False
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return False
+    return bool(
+        isinstance(payload, dict)
+        and payload.get("plan_id") == frontmatter.get("plan_id")
+        and (expected_subject is None or payload.get("subject") == expected_subject)
+        and canonical_evidence_bytes(payload) == content
+    )
+
+
+def bootstrap_mapping_verified(
+    root: Path,
+    frontmatter: Mapping[str, Any],
+    target: str,
+) -> bool:
+    """Check the canonical V/T evidence mapping used only by the migration bridge."""
+    kind, entry_id = target.split(":", 1)
+    field = {
+        "task": "tasks",
+        "obligation": "obligations",
+        "validation": "validations",
+        "artifact": "artifacts",
+    }.get(kind)
+    if field is None:
+        return False
+    values = frontmatter.get(field, [])
+    entry = (
+        next(
+            (item for item in values if isinstance(item, dict) and item.get("id") == entry_id),
+            None,
+        )
+        if isinstance(values, list)
+        else None
+    )
+    if entry is None:
+        return False
+    expected_state = "final" if field == "artifacts" else "verified"
+    if entry.get("status") != expected_state:
+        return False
+    if field != "tasks":
+        return canonical_evidence_pointer(
+            root,
+            frontmatter,
+            entry.get("evidence_ref"),
+            entry.get("evidence_sha256"),
+            expected_subject=target,
+        )
+    note = entry.get("note")
+    if not isinstance(note, str):
+        return False
+    match = re.search(
+        r"evidence:(?P<path>\S+/(?P<sha>[0-9a-f]{64})\.json)",
+        note,
+    )
+    return bool(
+        match
+        and canonical_evidence_pointer(
+            root,
+            frontmatter,
+            f"evidence:{match.group('path')}",
+            match.group("sha"),
+            expected_subject=target,
+        )
+    )
+
+
+def unresolved_blocking_findings(review: Mapping[str, Any]) -> list[str]:
+    """Return unresolved blocker/high finding IDs from one review."""
+    findings = review.get("findings", [])
+    if not isinstance(findings, list):
+        return ["invalid"]
+    return [
+        str(finding.get("id", "unknown"))
+        for finding in findings
+        if isinstance(finding, dict)
+        and finding.get("severity") in INDEPENDENT_BLOCKING_SEVERITIES
+        and finding.get("status") == "open"
+    ]
+
+
+def recorded_review_integrity_valid(
+    root: Path,
+    frontmatter: Mapping[str, Any],
+    review: Mapping[str, Any],
+) -> bool:
+    """Revalidate canonical review and isolation bytes before releasing a target."""
+    mode = review.get("mode")
+    state = review.get("state")
+    evidence_ref = review.get("evidence_ref")
+    evidence_sha256 = review.get("evidence_sha256")
+    review_context_ref = review.get("review_context_ref")
+    if (
+        mode not in INDEPENDENT_REVIEW_MODES
+        or state not in {"verified", "degraded"}
+        or not valid_reference(review_context_ref)
+        or not canonical_evidence_pointer(
+            root,
+            frontmatter,
+            evidence_ref,
+            evidence_sha256,
+            expected_subject=f"independent-review:{mode}",
+        )
+    ):
+        return False
+    if state == "verified":
+        return False
+    try:
+        evidence_path = checked_project_path(
+            root,
+            str(evidence_ref).removeprefix("evidence:"),
+        )
+        evidence_payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except (WorkctlError, json.JSONDecodeError, OSError):
+        return False
+    if (
+        not isinstance(evidence_payload, dict)
+        or evidence_payload.get("producer_ref") != review_context_ref
+    ):
+        return False
+    contract_ref = review.get("reviewed_contract_ref")
+    contract_sha256 = review.get("reviewed_contract_sha256")
+    reviewed_artifacts = review.get("reviewed_artifacts")
+    contract = frontmatter.get("independent_validation")
+    if (
+        not valid_reference(contract_ref)
+        or not isinstance(contract_sha256, str)
+        or SHA256_RE.fullmatch(contract_sha256) is None
+        or not isinstance(reviewed_artifacts, list)
+        or not reviewed_artifacts
+        or any(
+            not isinstance(item, dict)
+            or set(item) != {"ref", "sha256"}
+            or not valid_reference(item.get("ref"))
+            or not isinstance(item.get("sha256"), str)
+            or SHA256_RE.fullmatch(str(item.get("sha256"))) is None
+            for item in reviewed_artifacts
+        )
+        or not isinstance(contract, dict)
+        or not valid_reference(contract.get("implementation_context_ref"))
+    ):
+        return False
+    expected_bindings = {
+        (str(contract_ref), contract_sha256),
+        *{
+            (str(item.get("ref")), str(item.get("sha256")))
+            for item in reviewed_artifacts
+            if isinstance(item, dict)
+        },
+    }
+    evidence_bindings = {
+        (str(item.get("ref")), str(item.get("sha256")))
+        for item in evidence_payload.get("items", [])
+        if isinstance(item, dict)
+    }
+    if not expected_bindings.issubset(evidence_bindings):
+        return False
+    return bool(
+        review.get("isolation_attestation_ref") is None
+        and review.get("isolation_attestation_sha256") is None
+    )
+
+
+def risk_confirmation_matches_review(
+    confirmation: Mapping[str, Any],
+    review: Mapping[str, Any],
+) -> bool:
+    """Return whether one accepted authority exactly covers one degraded review."""
+    intervention = confirmation.get("intervention")
+    review_blocks = review.get("blocks", [])
+    confirmation_blocks = intervention.get("blocks", []) if isinstance(intervention, dict) else []
+    return bool(
+        confirmation.get("status") == "accepted"
+        and confirmation.get("ref")
+        and isinstance(intervention, dict)
+        and intervention.get("kind") == "external_authority"
+        and intervention.get("basis_ref") == review.get("evidence_ref")
+        and intervention.get("basis_sha256") == review.get("evidence_sha256")
+        and isinstance(review_blocks, list)
+        and isinstance(confirmation_blocks, list)
+        and set(review_blocks).issubset(confirmation_blocks)
+    )
+
+
+def confirmation_accepts_degraded_review(
+    frontmatter: Mapping[str, Any],
+    confirmation: Mapping[str, Any],
+) -> bool:
+    """Allow the exact risk decision itself while its reviewed targets are blocked."""
+    contract = frontmatter.get("independent_validation")
+    reviews = contract.get("reviews", []) if isinstance(contract, dict) else []
+    return bool(
+        isinstance(reviews, list)
+        and any(
+            isinstance(review, dict)
+            and review.get("state") == "degraded"
+            and review.get("risk_acceptance_confirmation_id") == confirmation.get("id")
+            and risk_confirmation_matches_review(
+                {**confirmation, "status": "accepted", "ref": "pending-current-turn"},
+                review,
+            )
+            for review in reviews
+        )
+    )
+
+
+def review_has_risk_acceptance(
+    frontmatter: Mapping[str, Any],
+    review: Mapping[str, Any],
+) -> bool:
+    """Require a separate exact external-authority decision for degraded evidence."""
+    raw_confirmations = confirmations(cast(dict[str, Any], frontmatter))
+    confirmation_id = review.get("risk_acceptance_confirmation_id")
+    if not isinstance(confirmation_id, str):
+        return False
+    confirmation = raw_confirmations.get(confirmation_id)
+    return bool(
+        isinstance(confirmation, dict) and risk_confirmation_matches_review(confirmation, review)
+    )
+
+
+def review_releases_target(
+    root: Path,
+    frontmatter: Mapping[str, Any],
+    review: Mapping[str, Any],
+    target: str,
+) -> bool:
+    """Return whether one strict review or exact bootstrap bridge releases a target."""
+    if unresolved_blocking_findings(review):
+        return False
+    state = review.get("state")
+    if state in {"verified", "degraded"} and not recorded_review_integrity_valid(
+        root,
+        frontmatter,
+        review,
+    ):
+        return False
+    if state == "verified":
+        return True
+    if state == "degraded" and review_has_risk_acceptance(frontmatter, review):
+        return True
+    bootstrap = review.get("bootstrap_release")
+    activation = frontmatter.get("activation", {})
+    if not isinstance(bootstrap, dict) or not isinstance(activation, dict):
+        return False
+    if activation.get("current_ref") != bootstrap.get("controller_build"):
+        return False
+    releases = bootstrap.get("releases", [])
+    mapping = bootstrap.get("evidence_mapping", [])
+    return bool(
+        isinstance(releases, list)
+        and target in releases
+        and isinstance(mapping, list)
+        and mapping
+        and all(
+            isinstance(mapped_target, str)
+            and bootstrap_mapping_verified(root, frontmatter, mapped_target)
+            for mapped_target in mapping
+        )
+    )
+
+
+def independent_review_blockers(
+    root: Path,
+    frontmatter: Mapping[str, Any],
+    target: str,
+) -> list[str]:
+    """Return review modes that still block one exact advancement target."""
+    contract = frontmatter.get("independent_validation")
+    if not isinstance(contract, dict) or contract.get("required") is not True:
+        return []
+    reviews = contract.get("reviews", [])
+    if not isinstance(reviews, list):
+        return ["invalid"]
+    blockers: list[str] = []
+    for review in reviews:
+        if not isinstance(review, dict):
+            blockers.append("invalid")
+            continue
+        blocks = review.get("blocks", [])
+        if (
+            isinstance(blocks, list)
+            and target in blocks
+            and not review_releases_target(root, frontmatter, review, target)
+        ):
+            blockers.append(str(review.get("mode", "invalid")))
+    return blockers
+
+
+def require_independent_target(
+    root: Path,
+    frontmatter: Mapping[str, Any],
+    target: str,
+) -> None:
+    """Fail closed when a required independent review still blocks a target."""
+    blockers = independent_review_blockers(root, frontmatter, target)
+    if blockers:
+        raise WorkctlError(f"INDEPENDENT_REVIEW_REQUIRED: {target} blocked by {','.join(blockers)}")
+
+
+def aggregate_independent_review_state(contract: Mapping[str, Any]) -> str:
+    """Derive the Plan-level state from the required review records."""
+    reviews = contract.get("reviews", [])
+    states = (
+        {review.get("state") for review in reviews if isinstance(review, dict)}
+        if isinstance(reviews, list)
+        else set()
+    )
+    if states and states.issubset({"verified"}):
+        return "verified"
+    if states and states.issubset({"verified", "degraded"}) and "degraded" in states:
+        return "degraded"
+    return "pending"
+
+
+def require_new_plan_reviews_pending(frontmatter: Mapping[str, Any]) -> None:
+    """Reject pre-certified reviews when admitting or switching to new authority."""
+    contract = frontmatter.get("independent_validation")
+    if not isinstance(contract, dict):
+        return
+    reviews = contract.get("reviews", [])
+    if (
+        contract.get("state") != "pending"
+        or not isinstance(reviews, list)
+        or any(
+            not isinstance(review, dict) or review.get("state") != "pending" for review in reviews
+        )
+    ):
+        raise WorkctlError("NEW_PLAN_INDEPENDENT_REVIEW_MUST_BE_PENDING")
 
 
 def validate_unknown_classification(
@@ -10252,6 +11456,11 @@ def cmd_plan_verify_entry(args: argparse.Namespace) -> None:
             args.confirmation,
             {"accepted"},
         )
+        require_independent_target(
+            root,
+            doc.frontmatter,
+            f"{singular}:{args.entry_id}",
+        )
         entries = entries_by_id(doc.frontmatter, args.field)
         entry = entries.get(args.entry_id)
         if entry is None:
@@ -10307,6 +11516,16 @@ def cmd_plan_finalize_artifact(args: argparse.Namespace) -> None:
             doc.frontmatter,
             args.confirmation,
             {"accepted"},
+        )
+        require_independent_target(
+            root,
+            doc.frontmatter,
+            f"artifact:{args.artifact_id}",
+        )
+        require_independent_target(
+            root,
+            doc.frontmatter,
+            f"task:{args.task_id}",
         )
         artifact = entries_by_id(doc.frontmatter, "artifacts").get(args.artifact_id)
         if artifact is None:
@@ -10441,6 +11660,7 @@ def cmd_plan_delivery_complete(args: argparse.Namespace) -> None:
             args.confirmation,
             {"accepted"},
         )
+        require_independent_target(root, doc.frontmatter, "delivery")
         delivery = doc.frontmatter.get("delivery")
         if not isinstance(delivery, dict):
             raise WorkctlError("INVALID_DELIVERY")
@@ -10487,6 +11707,7 @@ def cmd_plan_activation_promote(args: argparse.Namespace) -> None:
         activation = doc.frontmatter.get("activation")
         if not isinstance(activation, dict):
             raise WorkctlError("INVALID_ACTIVATION")
+        require_independent_target(root, doc.frontmatter, "activation")
         require_matching_decision(
             doc.frontmatter,
             activation.get("confirmation_id"),
@@ -10795,6 +12016,11 @@ def closeout_readiness(
             blockers.append(f"intake is {current_intake_state}")
         for unknown_id in legacy_unknown_ids(frontmatter):
             blockers.append(f"legacy unknown contract: {unknown_id}")
+        intervention_state = intervention_contract_state(frontmatter)
+        if intervention_state != "STRICT_READY":
+            blockers.append(f"intervention contract is {intervention_state}")
+    for mode in independent_review_blockers(project_root(), frontmatter, "route"):
+        blockers.append(f"independent review blocks route: {mode}")
     raw_confirmations = frontmatter.get("confirmations", {})
     if not isinstance(raw_confirmations, dict):
         blockers.append("confirmations is invalid")
@@ -10878,6 +12104,7 @@ def cmd_plan_complete(args: argparse.Namespace) -> None:
                 subject="closeout",
             )
         readiness = closeout_readiness(doc.frontmatter, report, validate_plan(root))
+        require_independent_target(root, doc.frontmatter, "route")
         if not readiness["ready"]:
             raise WorkctlError(
                 f"CLOSEOUT_BLOCKED: {'; '.join(str(item) for item in readiness['blockers'])}"
@@ -10940,14 +12167,23 @@ def accepted_confirmation(
     accepted_at: str,
     evidence_sha256: str,
     description: str,
+    *,
+    intervention_kind: str = "plan_contract",
 ) -> dict[str, Any]:
     """Build a confirmed or dry-run-pending entry for the canonical Plan."""
+    intervention = {
+        "kind": intervention_kind,
+        "blocks": ["route"],
+        "basis_ref": f"project:confirmation-basis/{evidence_sha256}",
+        "basis_sha256": evidence_sha256,
+    }
     if ref == "PENDING":
         return {
             "id": confirmation_id,
             "description": description,
             "status": "pending",
             "evidence_sha256": evidence_sha256,
+            "intervention": intervention,
         }
     return {
         "id": confirmation_id,
@@ -10956,6 +12192,7 @@ def accepted_confirmation(
         "ref": ref,
         "accepted_at": accepted_at,
         "evidence_sha256": evidence_sha256,
+        "intervention": intervention,
     }
 
 
@@ -11352,6 +12589,8 @@ def prepare_reconciliation(
         prepared_doc.body,
     )
     require_valid_candidate(target_doc)
+    require_strict_intervention_contract(target_doc.frontmatter)
+    require_new_plan_reviews_pending(target_doc.frontmatter)
     manifest["migration_id"] = migration_id
     manifest["target_relative"] = target_relative
     manifest["sources"] = sources
@@ -12283,6 +13522,7 @@ def prepare_retirement(
         accepted_at,
         evidence_sha256,
         "Approve retirement of the exact obsolete Plan without claiming completion.",
+        intervention_kind="external_authority",
     )
     return manifest
 
@@ -12842,6 +14082,8 @@ def prepare_rollover(
     )
     target_doc = PlanDocument(target_path, target_frontmatter, prepared_doc.body)
     require_valid_candidate(target_doc)
+    require_strict_intervention_contract(target_doc.frontmatter)
+    require_new_plan_reviews_pending(target_doc.frontmatter)
 
     manifest["rollover_id"] = rollover_id
     manifest["source_plan"] = source_record
@@ -13582,6 +14824,7 @@ def build_parser() -> argparse.ArgumentParser:
     confirm.add_argument("--ref", required=True)
     confirm.add_argument("--evidence-sha256")
     confirm.add_argument("--expected-revision", type=int, required=True)
+    add_current_intake_args(confirm)
     confirm.set_defaults(func=cmd_plan_confirm)
     confirmation = plan_sub.add_parser("confirmation")
     confirmation_sub = confirmation.add_subparsers(
@@ -13597,8 +14840,30 @@ def build_parser() -> argparse.ArgumentParser:
         default="pending",
     )
     confirmation_add.add_argument("--ref")
+    confirmation_add.add_argument(
+        "--intervention-kind",
+        choices=sorted(INTERVENTION_KINDS),
+        required=True,
+    )
+    confirmation_add.add_argument("--blocks", action="append", required=True)
+    confirmation_add.add_argument("--basis-ref", required=True)
+    confirmation_add.add_argument("--basis-sha256")
     confirmation_add.add_argument("--expected-revision", type=int, required=True)
     confirmation_add.set_defaults(func=cmd_plan_confirmation_add)
+    confirmation_classify = confirmation_sub.add_parser("classify")
+    confirmation_classify.add_argument("--manifest", required=True)
+    confirmation_classify.add_argument("--expected-revision", type=int, required=True)
+    confirmation_classify.set_defaults(func=cmd_plan_confirmation_classify)
+    independent_review = plan_sub.add_parser("independent-review")
+    independent_review_sub = independent_review.add_subparsers(
+        dest="independent_review_action",
+        required=True,
+    )
+    independent_review_record = independent_review_sub.add_parser("record")
+    independent_review_record.add_argument("--manifest", required=True)
+    independent_review_record.add_argument("--expected-revision", type=int, required=True)
+    add_current_intake_args(independent_review_record)
+    independent_review_record.set_defaults(func=cmd_plan_independent_review_record)
     verify_entry = plan_sub.add_parser("verify-entry")
     verify_entry.add_argument("--field", choices=["obligations", "validations"], required=True)
     verify_entry.add_argument("--entry-id", required=True)

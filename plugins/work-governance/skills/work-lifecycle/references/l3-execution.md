@@ -22,10 +22,22 @@ During execution:
 - keep changes scoped to the obligation;
 - avoid parallel writes to the same data or remote surface;
 - use deterministic scripts for repeated fragile work;
+- continue through every dependency-ready task, validation, and evidence
+  transition covered by the current route-level `proceed` basis;
+- treat progress updates, completed-slice summaries, phase changes, and stated
+  next steps as communication only; never pause for a decision-free
+  continuation response;
 - record key evidence in `.work-governance/logs/` only when a Plan exists and the record has
   handoff value;
 - never promote `.work-governance/logs` content into Plan facts without
   confirmation.
+
+An ordinary command failure, evidence gap, or reversible implementation
+adjustment remains Agent-owned. Diagnose the falsifiable cause, change an
+input or hypothesis, and continue within the confirmed contract. Enter L5 and
+ask only when evidence shows the route must materially change the goal, scope,
+behavior, cost, safety, or delivery form, or when external authority is
+actually required.
 
 For an authorized repeated-work route, execute and verify the explicit pilot
 dependency before any dependent batch. At each planned batch boundary, compare

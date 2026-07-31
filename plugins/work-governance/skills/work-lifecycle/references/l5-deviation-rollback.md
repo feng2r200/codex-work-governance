@@ -3,6 +3,11 @@
 Enter L5 when evidence shows the route, output, scope, dependency, or artifact
 state may no longer serve the goal.
 
+Do not enter L5 merely because an implementation attempt failed, a local fact
+is unknown, or more evidence is needed. Those are Agent-owned diagnosis and
+exploration unless they prove a material change to goal, scope, behavior,
+cost, safety, or delivery shape.
+
 Immediate actions:
 
 - stop downstream execution;
@@ -48,6 +53,12 @@ High-impact recovery choices require confirmation:
 - compensating data changes;
 - scope revision;
 - resuming from an older queue.
+
+Bind that confirmation as `intervention.kind=deviation_recovery`, name the
+exact blocked targets, use the immutable deviation evidence as `basis_ref` and
+`basis_sha256`, and present the observed evidence, impact, and materially
+distinct recovery options. If the correction stays within the confirmed
+contract and is reversible, diagnose and apply it without asking the user.
 
 After recovery:
 

@@ -82,6 +82,22 @@ def ensure_test_ready_receipt(
             intake_marker + "    return\n",
             1,
         )
+        confirmation_ref_marker = (
+            "def require_confirmation_turn_ref(\n"
+            "    root: Path,\n"
+            "    *,\n"
+            "    ref: str,\n"
+            "    turn_receipt_sha256: str | None,\n"
+            ") -> None:\n"
+            '    """Bind a schema-v4 confirmation decision to the trusted current user turn."""\n'
+        )
+        if confirmation_ref_marker not in controller_source:
+            raise AssertionError("test confirmation-turn patch marker drifted")
+        controller_source = controller_source.replace(
+            confirmation_ref_marker,
+            confirmation_ref_marker + "    return\n",
+            1,
+        )
     lock_marker = '    with lock_path.open("a+", encoding="utf-8") as handle:\n'
     lock_instrumentation = (
         lock_marker
@@ -7814,6 +7830,14 @@ def test_transactional_admission_removes_initial_confirmation_deadlock(
         "C-EXECUTE",
         "--description",
         "Authorize observed execution.",
+        "--intervention-kind",
+        "plan_contract",
+        "--blocks",
+        "task:T-001",
+        "--basis-ref",
+        "user:execute-contract",
+        "--basis-sha256",
+        "a" * 64,
         "--expected-revision",
         "1",
     )
@@ -7825,6 +7849,8 @@ def test_transactional_admission_removes_initial_confirmation_deadlock(
         "C-EXECUTE",
         "--ref",
         "user:execute",
+        "--evidence-sha256",
+        "a" * 64,
         "--expected-revision",
         "2",
     )
@@ -9083,6 +9109,14 @@ def test_active_schema_v3_requires_recoverable_contract_upgrade(tmp_path: Path) 
         "accepted",
         "--ref",
         "user:contract-upgrade",
+        "--intervention-kind",
+        "plan_contract",
+        "--blocks",
+        "route",
+        "--basis-ref",
+        "user:contract-upgrade",
+        "--basis-sha256",
+        "b" * 64,
         "--expected-revision",
         "1",
         env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
@@ -9208,6 +9242,1071 @@ def test_contract_upgrade_recovery_rejects_noncanonical_target_before_write(
     assert result.returncode == 2
     assert "INVALID_CONTRACT_UPGRADE_JOURNAL" in result.stderr
     assert not (tmp_path / "_Plan").exists()
+
+
+def admit_schema_v4_test_plan(
+    cwd: Path,
+    frontmatter: dict[str, Any],
+    *,
+    transaction_id: str,
+) -> str:
+    """Admit one schema-v4 fixture and return its Plan ID."""
+    run_workctl(cwd, "layout", "migrate")
+    plan_id = str(frontmatter["plan_id"])
+    prepared = cwd / "candidate.md"
+    write_markdown_plan(prepared, frontmatter, "# Strict governance fixture\n")
+    manifest = {
+        "schema_version": 1,
+        "kind": "plan-admission",
+        "transaction_id": transaction_id,
+        "prepared_plan": prepared.name,
+        "plan_id": plan_id,
+        "plan_sha256": sha256_path(prepared),
+        "confirmation_id": "C-ADMISSION",
+        "confirmation_ref": "user:observed-admission",
+    }
+    manifest_path = cwd / "admission.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    run_workctl(cwd, "plan", "admit", "apply", "--manifest", str(manifest_path))
+    return plan_id
+
+
+def test_pending_confirmation_requires_strict_classification_and_exact_basis(
+    tmp_path: Path,
+) -> None:
+    """Legacy pending gates stay readable but cannot decide until exact classification."""
+    plan_id = admit_schema_v4_test_plan(
+        tmp_path,
+        schema_v4_admission_plan("PLAN-20260731-101"),
+        transaction_id="ADM-20260731-101",
+    )
+    frontmatter, body = read_plan_by_id(tmp_path, plan_id)
+    frontmatter["confirmations"]["required"].append(
+        {
+            "id": "C-LEGACY-PENDING",
+            "description": "Legacy decision without typed intervention.",
+            "status": "pending",
+        }
+    )
+    plan_file = tmp_path / ".work-governance" / "_Plan" / f"{plan_id}.md"
+    write_markdown_plan(plan_file, frontmatter, body)
+
+    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    blocked = run_workctl(
+        tmp_path,
+        "plan",
+        "confirm",
+        "--confirmation-id",
+        "C-LEGACY-PENDING",
+        "--ref",
+        "user:decision",
+        "--evidence-sha256",
+        "a" * 64,
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+    classification = {
+        "schema_version": 1,
+        "kind": "confirmation-intervention-classification",
+        "plan_id": plan_id,
+        "confirmation_id": "C-LEGACY-PENDING",
+        "intervention": {
+            "kind": "plan_contract",
+            "blocks": ["task:T-001"],
+            "basis_ref": "user:exact-plan-contract",
+            "basis_sha256": "a" * 64,
+        },
+    }
+    classification_path = tmp_path / "classification.yaml"
+    classification_path.write_text(
+        yaml.safe_dump(classification, sort_keys=False),
+        encoding="utf-8",
+    )
+    run_workctl(
+        tmp_path,
+        "plan",
+        "confirmation",
+        "classify",
+        "--manifest",
+        str(classification_path),
+        "--expected-revision",
+        "1",
+    )
+    wrong_basis = run_workctl(
+        tmp_path,
+        "plan",
+        "confirm",
+        "--confirmation-id",
+        "C-LEGACY-PENDING",
+        "--ref",
+        "user:decision",
+        "--evidence-sha256",
+        "b" * 64,
+        "--expected-revision",
+        "2",
+        check=False,
+    )
+    run_workctl(
+        tmp_path,
+        "plan",
+        "confirm",
+        "--confirmation-id",
+        "C-LEGACY-PENDING",
+        "--ref",
+        "user:decision",
+        "--evidence-sha256",
+        "a" * 64,
+        "--expected-revision",
+        "2",
+    )
+    final = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+
+    assert status["intervention_contract_state"] == "LEGACY_CLASSIFICATION_REQUIRED"
+    assert status["user_intervention"]["state"] == "PLAN_DECISION_REQUIRED"
+    assert "CONFIRMATION_CLASSIFICATION_REQUIRED" in blocked.stderr
+    assert "CONFIRMATION_EVIDENCE_BASIS_MISMATCH" in wrong_basis.stderr
+    assert final["intervention_contract_state"] == "STRICT_READY"
+    assert final["user_intervention"]["state"] == "NOT_REQUIRED"
+
+
+def test_future_authority_gate_is_information_until_its_target_is_current(
+    tmp_path: Path,
+) -> None:
+    """A future live gate does not turn ordinary progress reporting into a wait."""
+    frontmatter = schema_v4_admission_plan("PLAN-20260731-102")
+    frontmatter["tasks"].append(
+        {
+            "id": "T-002",
+            "description": "Run the separately authorized live switch.",
+            "status": "pending",
+            "depends_on": ["T-001"],
+            "unknowns": [],
+            "expected_evidence_delta": "The live boundary is exact.",
+            "requires_confirmation": "C-LIVE",
+        }
+    )
+    frontmatter["confirmations"]["required"].append(
+        {
+            "id": "C-LIVE",
+            "description": "Authorize the exact external switch.",
+            "status": "pending",
+            "intervention": {
+                "kind": "external_authority",
+                "blocks": ["task:T-002", "activation"],
+                "basis_ref": "project:future-live-basis",
+            },
+        }
+    )
+    admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id="ADM-20260731-102",
+    )
+
+    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+
+    assert status["intervention_contract_state"] == "STRICT_READY"
+    assert status["user_intervention"]["current_targets"] == ["task:T-001"]
+    assert status["user_intervention"]["state"] == "NOT_REQUIRED"
+
+
+def test_schema_v4_admission_rejects_unclassified_pending_gate(tmp_path: Path) -> None:
+    """New authority cannot introduce a generic pending continuation gate."""
+    frontmatter = schema_v4_admission_plan("PLAN-20260731-105")
+    frontmatter["confirmations"]["required"].append(
+        {
+            "id": "C-CONTINUE",
+            "description": "Generic continuation request.",
+            "status": "pending",
+        }
+    )
+    run_workctl(tmp_path, "layout", "migrate")
+    prepared = tmp_path / "candidate.md"
+    write_markdown_plan(prepared, frontmatter, "# Invalid generic gate\n")
+    manifest = {
+        "schema_version": 1,
+        "kind": "plan-admission",
+        "transaction_id": "ADM-20260731-105",
+        "prepared_plan": prepared.name,
+        "plan_id": frontmatter["plan_id"],
+        "plan_sha256": sha256_path(prepared),
+        "confirmation_id": "C-ADMISSION",
+        "confirmation_ref": "user:observed-admission",
+    }
+    manifest_path = tmp_path / "admission.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    rejected = run_workctl(
+        tmp_path,
+        "plan",
+        "admit",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+    )
+
+    assert "INTERVENTION_CONTRACT_LEGACY_CLASSIFICATION_REQUIRED" in rejected.stderr
+
+
+def test_accepted_bootstrap_placeholder_classifies_only_matching_decision_digest(
+    tmp_path: Path,
+) -> None:
+    """Post-install migration can tighten an already exact old-controller decision."""
+    frontmatter = schema_v4_admission_plan("PLAN-20260731-106")
+    frontmatter["confirmations"]["required"].append(
+        {
+            "id": "C-LIVE",
+            "description": "Old-controller exact live decision.",
+            "status": "accepted",
+            "ref": "user:live-switch",
+            "accepted_at": "2026-07-31T10:00:00+00:00",
+            "evidence_sha256": "a" * 64,
+            "intervention": {
+                "kind": "external_authority",
+                "blocks": ["task:T-001", "activation", "route"],
+                "basis_ref": "evidence:pending-exact-live-basis",
+            },
+        }
+    )
+    plan_id = admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id="ADM-20260731-106",
+    )
+    classification = {
+        "schema_version": 1,
+        "kind": "confirmation-intervention-classification",
+        "plan_id": plan_id,
+        "confirmation_id": "C-LIVE",
+        "intervention": {
+            "kind": "external_authority",
+            "blocks": ["task:T-001", "activation", "route"],
+            "basis_ref": "evidence:exact-live-basis",
+            "basis_sha256": "b" * 64,
+        },
+    }
+    path = tmp_path / "classification.yaml"
+    path.write_text(yaml.safe_dump(classification, sort_keys=False), encoding="utf-8")
+    mismatch = run_workctl(
+        tmp_path,
+        "plan",
+        "confirmation",
+        "classify",
+        "--manifest",
+        str(path),
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+    cast(dict[str, Any], classification["intervention"])["basis_sha256"] = "a" * 64
+    path.write_text(yaml.safe_dump(classification, sort_keys=False), encoding="utf-8")
+    run_workctl(
+        tmp_path,
+        "plan",
+        "confirmation",
+        "classify",
+        "--manifest",
+        str(path),
+        "--expected-revision",
+        "1",
+    )
+    updated, _ = read_plan_by_id(tmp_path, plan_id)
+    live = next(item for item in updated["confirmations"]["required"] if item["id"] == "C-LIVE")
+
+    assert "ACCEPTED_PLACEHOLDER_BASIS_MISMATCH" in mismatch.stderr
+    assert live["status"] == "accepted"
+    assert live["intervention"]["basis_sha256"] == "a" * 64
+
+
+def independent_validation_fixture() -> dict[str, Any]:
+    """Build three pending review modes with only artifact_review blocking T-001."""
+    pending_route_review = {
+        "state": "pending",
+        "blocks": ["route"],
+        "review_context_ref": "context:pending-review",
+        "reviewed_contract_sha256": None,
+        "reviewed_artifacts": [],
+        "findings": [],
+        "evidence_ref": "project:pending-independent-review",
+        "evidence_sha256": None,
+    }
+    return {
+        "required": True,
+        "state": "pending",
+        "required_modes": ["plan_challenge", "artifact_review", "evidence_audit"],
+        "implementation_context_ref": "context:implementation",
+        "reviews": [
+            {"mode": "plan_challenge", **pending_route_review},
+            {
+                "mode": "artifact_review",
+                "state": "pending",
+                "blocks": ["task:T-001", "activation", "route"],
+                "review_context_ref": "context:pending-artifact-review",
+                "reviewed_contract_sha256": None,
+                "reviewed_artifacts": [],
+                "findings": [],
+                "evidence_ref": "project:pending-artifact-review",
+                "evidence_sha256": None,
+            },
+            {
+                "mode": "evidence_audit",
+                **{
+                    **pending_route_review,
+                    "review_context_ref": "context:pending-evidence-audit",
+                    "evidence_ref": "project:pending-evidence-audit",
+                },
+            },
+        ],
+    }
+
+
+def record_review_evidence(
+    cwd: Path,
+    plan_id: str,
+    *,
+    producer_ref: str = "context:implementation",
+    subject: str = "independent-review:artifact_review",
+) -> dict[str, Any]:
+    """Install canonical evidence binding the reviewed contract and artifact digests."""
+    evidence = {
+        "schema_version": 1,
+        "kind": "work-governance-evidence",
+        "plan_id": plan_id,
+        "subject": subject,
+        "created_at": "2026-07-31T10:00:00+00:00",
+        "producer_ref": producer_ref,
+        "items": [
+            {"ref": "project:reviewed-contract", "sha256": "a" * 64},
+            {"ref": "git:candidate-commit", "sha256": "b" * 64},
+        ],
+    }
+    path = cwd / "review-evidence.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+    return cast(
+        dict[str, Any],
+        json.loads(
+            run_workctl(
+                cwd,
+                "plan",
+                "evidence",
+                "record",
+                "--manifest",
+                str(path),
+            ).stdout
+        ),
+    )
+
+
+def review_record_manifest(
+    plan_id: str,
+    evidence_path: str,
+    *,
+    state: str,
+    review_context_ref: str,
+    findings: list[dict[str, Any]] | None = None,
+    risk_confirmation_id: str | None = None,
+    isolation_attestation: str | None = None,
+) -> dict[str, Any]:
+    """Build one strict artifact-review manifest."""
+    manifest: dict[str, Any] = {
+        "schema_version": 1,
+        "kind": "independent-review",
+        "plan_id": plan_id,
+        "mode": "artifact_review",
+        "state": state,
+        "implementation_context_ref": "context:implementation",
+        "review_context_ref": review_context_ref,
+        "reviewed_contract": {
+            "ref": "project:reviewed-contract",
+            "sha256": "a" * 64,
+        },
+        "reviewed_artifacts": [{"ref": "git:candidate-commit", "sha256": "b" * 64}],
+        "findings": findings or [],
+        "evidence_manifest": evidence_path,
+        "isolation_attestation": isolation_attestation,
+        "bootstrap_evidence": [],
+    }
+    if risk_confirmation_id is not None:
+        manifest["risk_acceptance_confirmation_id"] = risk_confirmation_id
+    return manifest
+
+
+def record_isolation_attestation(
+    cwd: Path,
+    plan_id: str,
+    *,
+    implementation_context_ref: str,
+    review_context_ref: str,
+    review_evidence_ref: str,
+    review_evidence_sha256: str,
+    producer_ref: str = "runtime:codex-collaboration",
+) -> dict[str, Any]:
+    """Install canonical collaboration evidence binding both contexts and review bytes."""
+    evidence = {
+        "schema_version": 1,
+        "kind": "work-governance-evidence",
+        "plan_id": plan_id,
+        "subject": "isolation-attestation:artifact_review",
+        "created_at": "2026-07-31T10:01:00+00:00",
+        "producer_ref": producer_ref,
+        "items": [
+            {
+                "ref": implementation_context_ref,
+                "sha256": hashlib.sha256(implementation_context_ref.encode()).hexdigest(),
+            },
+            {
+                "ref": review_context_ref,
+                "sha256": hashlib.sha256(review_context_ref.encode()).hexdigest(),
+            },
+            {
+                "ref": review_evidence_ref,
+                "sha256": review_evidence_sha256,
+            },
+        ],
+    }
+    path = cwd / "isolation-attestation.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+    return cast(
+        dict[str, Any],
+        json.loads(
+            run_workctl(
+                cwd,
+                "plan",
+                "evidence",
+                "record",
+                "--manifest",
+                str(path),
+            ).stdout
+        ),
+    )
+
+
+def test_same_context_review_can_only_record_degraded_and_remains_blocking(
+    tmp_path: Path,
+) -> None:
+    """A same-context self-review cannot satisfy a high-impact advancement gate."""
+    frontmatter = schema_v4_admission_plan("PLAN-20260731-103")
+    frontmatter["independent_validation"] = independent_validation_fixture()
+    plan_id = admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id="ADM-20260731-103",
+    )
+    evidence = record_review_evidence(tmp_path, plan_id)
+    manifest_path = tmp_path / "review.yaml"
+    verified = review_record_manifest(
+        plan_id,
+        str(evidence["path"]),
+        state="verified",
+        review_context_ref="context:implementation",
+    )
+    manifest_path.write_text(yaml.safe_dump(verified, sort_keys=False), encoding="utf-8")
+    rejected = run_workctl(
+        tmp_path,
+        "plan",
+        "independent-review",
+        "record",
+        "--manifest",
+        str(manifest_path),
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+    degraded = {
+        **verified,
+        "state": "degraded",
+        "risk_acceptance_confirmation_id": "C-SAME-CONTEXT-RISK",
+    }
+    manifest_path.write_text(yaml.safe_dump(degraded, sort_keys=False), encoding="utf-8")
+    run_workctl(
+        tmp_path,
+        "plan",
+        "independent-review",
+        "record",
+        "--manifest",
+        str(manifest_path),
+        "--expected-revision",
+        "1",
+    )
+    blocked = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-revision",
+        "2",
+        check=False,
+    )
+    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+
+    assert "INDEPENDENT_REVIEW_CONTEXT_NOT_ISOLATED" in rejected.stderr
+    assert "INDEPENDENT_REVIEW_REQUIRED" in blocked.stderr
+    assert status["independent_validation"]["state"] == "pending"
+    assert any(
+        blocker == "independent review blocks route: artifact_review"
+        for blocker in status["closeout_readiness"]["blockers"]
+    )
+
+
+def test_degraded_review_requires_a_reserved_risk_confirmation_id(
+    tmp_path: Path,
+) -> None:
+    """A degraded record cannot rely on later global confirmation discovery."""
+    frontmatter = schema_v4_admission_plan("PLAN-20260731-112")
+    frontmatter["independent_validation"] = independent_validation_fixture()
+    plan_id = admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id="ADM-20260731-112",
+    )
+    evidence = record_review_evidence(tmp_path, plan_id)
+    manifest = review_record_manifest(
+        plan_id,
+        str(evidence["path"]),
+        state="degraded",
+        review_context_ref="context:implementation",
+    )
+    manifest_path = tmp_path / "review.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    rejected = run_workctl(
+        tmp_path,
+        "plan",
+        "independent-review",
+        "record",
+        "--manifest",
+        str(manifest_path),
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+
+    assert "DEGRADED_REVIEW_RISK_CONFIRMATION_ID_REQUIRED" in rejected.stderr
+
+
+@pytest.mark.parametrize("preexisting_status", ["pending", "accepted"])
+def test_preexisting_confirmation_cannot_be_adopted_by_degraded_review(
+    tmp_path: Path,
+    preexisting_status: str,
+) -> None:
+    """A new authority cannot preload a gate for a future degraded review."""
+    frontmatter = schema_v4_admission_plan("PLAN-20260731-113")
+    frontmatter["independent_validation"] = independent_validation_fixture()
+    preexisting = {
+        "id": "C-PREEXISTING-REVIEW-RISK",
+        "description": "Preload risk authority before review evidence exists.",
+        "status": preexisting_status,
+        "intervention": {
+            "kind": "external_authority",
+            "blocks": ["task:T-001", "activation", "route"],
+            "basis_ref": "evidence:precomputed-degraded-review",
+            "basis_sha256": "c" * 64,
+        },
+    }
+    if preexisting_status == "accepted":
+        preexisting["ref"] = "user:preloaded-review-risk"
+        preexisting["accepted_at"] = "2026-07-31T10:00:00+00:00"
+    cast(list[dict[str, Any]], frontmatter["confirmations"]["required"]).append(preexisting)
+    plan_id = admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id="ADM-20260731-113",
+    )
+    evidence = record_review_evidence(tmp_path, plan_id)
+    manifest = review_record_manifest(
+        plan_id,
+        str(evidence["path"]),
+        state="degraded",
+        review_context_ref="context:implementation",
+        risk_confirmation_id="C-PREEXISTING-REVIEW-RISK",
+    )
+    manifest_path = tmp_path / "review.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    rejected = run_workctl(
+        tmp_path,
+        "plan",
+        "independent-review",
+        "record",
+        "--manifest",
+        str(manifest_path),
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+    blocked = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+
+    assert "DEGRADED_REVIEW_PREEXISTING_RISK_FORBIDDEN" in rejected.stderr
+    assert "INDEPENDENT_REVIEW_REQUIRED" in blocked.stderr
+
+
+def test_distinct_context_labels_without_platform_attestation_cannot_verify(
+    tmp_path: Path,
+) -> None:
+    """Different free-form labels alone cannot certify an isolated review."""
+    frontmatter = schema_v4_admission_plan("PLAN-20260731-105")
+    frontmatter["independent_validation"] = independent_validation_fixture()
+    plan_id = admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id="ADM-20260731-105",
+    )
+    review_context = "context:isolated-artifact-review"
+    evidence = record_review_evidence(
+        tmp_path,
+        plan_id,
+        producer_ref=review_context,
+    )
+    manifest = review_record_manifest(
+        plan_id,
+        str(evidence["path"]),
+        state="verified",
+        review_context_ref=review_context,
+    )
+    manifest_path = tmp_path / "review.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    rejected = run_workctl(
+        tmp_path,
+        "plan",
+        "independent-review",
+        "record",
+        "--manifest",
+        str(manifest_path),
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+
+    assert "INDEPENDENT_REVIEW_TRUSTED_ATTESTATION_UNAVAILABLE" in rejected.stderr
+
+
+def test_caller_controlled_canonical_attestation_cannot_verify_review(
+    tmp_path: Path,
+) -> None:
+    """Public evidence canonicalization cannot authenticate a platform attestor."""
+    frontmatter = schema_v4_admission_plan("PLAN-20260731-106")
+    frontmatter["independent_validation"] = independent_validation_fixture()
+    plan_id = admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id="ADM-20260731-106",
+    )
+    review_context = "context:isolated-artifact-review"
+    evidence = record_review_evidence(
+        tmp_path,
+        plan_id,
+        producer_ref=review_context,
+    )
+    evidence_ref = f"evidence:{evidence['path']}"
+    attestation = record_isolation_attestation(
+        tmp_path,
+        plan_id,
+        implementation_context_ref="context:implementation",
+        review_context_ref=review_context,
+        review_evidence_ref=evidence_ref,
+        review_evidence_sha256=str(evidence["sha256"]),
+    )
+    manifest = review_record_manifest(
+        plan_id,
+        str(evidence["path"]),
+        state="verified",
+        review_context_ref=review_context,
+        isolation_attestation=str(attestation["path"]),
+    )
+    manifest_path = tmp_path / "review.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    rejected = run_workctl(
+        tmp_path,
+        "plan",
+        "independent-review",
+        "record",
+        "--manifest",
+        str(manifest_path),
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+
+    assert "INDEPENDENT_REVIEW_TRUSTED_ATTESTATION_UNAVAILABLE" in rejected.stderr
+
+
+def test_review_release_revalidates_canonical_evidence_bytes(
+    tmp_path: Path,
+) -> None:
+    """Evidence drift restores the block even after exact degraded-risk acceptance."""
+    frontmatter = schema_v4_admission_plan("PLAN-20260731-111")
+    frontmatter["independent_validation"] = independent_validation_fixture()
+    plan_id = admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id="ADM-20260731-111",
+    )
+    evidence = record_review_evidence(tmp_path, plan_id)
+    manifest = review_record_manifest(
+        plan_id,
+        str(evidence["path"]),
+        state="degraded",
+        review_context_ref="context:implementation",
+        risk_confirmation_id="C-TAMPERED-REVIEW-RISK",
+    )
+    manifest_path = tmp_path / "review.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    run_workctl(
+        tmp_path,
+        "plan",
+        "independent-review",
+        "record",
+        "--manifest",
+        str(manifest_path),
+        "--expected-revision",
+        "1",
+    )
+    run_workctl(
+        tmp_path,
+        "plan",
+        "confirmation",
+        "add",
+        "--confirmation-id",
+        "C-TAMPERED-REVIEW-RISK",
+        "--description",
+        "Accept the exact degraded review risk.",
+        "--intervention-kind",
+        "external_authority",
+        "--blocks",
+        "task:T-001",
+        "--blocks",
+        "activation",
+        "--blocks",
+        "route",
+        "--basis-ref",
+        f"evidence:{evidence['path']}",
+        "--basis-sha256",
+        str(evidence["sha256"]),
+        "--expected-revision",
+        "2",
+    )
+    run_workctl(
+        tmp_path,
+        "plan",
+        "confirm",
+        "--confirmation-id",
+        "C-TAMPERED-REVIEW-RISK",
+        "--ref",
+        "user:tampered-review-risk",
+        "--evidence-sha256",
+        str(evidence["sha256"]),
+        "--expected-revision",
+        "3",
+    )
+    stored = tmp_path / str(evidence["path"])
+    stored.write_bytes(stored.read_bytes() + b" ")
+
+    blocked = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-revision",
+        "4",
+        check=False,
+    )
+
+    assert "INDEPENDENT_REVIEW_REQUIRED" in blocked.stderr
+
+
+def test_review_evidence_producer_must_equal_the_declared_review_context(
+    tmp_path: Path,
+) -> None:
+    """A context label cannot claim review evidence produced by another context."""
+    frontmatter = schema_v4_admission_plan("PLAN-20260731-107")
+    frontmatter["independent_validation"] = independent_validation_fixture()
+    plan_id = admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id="ADM-20260731-107",
+    )
+    evidence = record_review_evidence(
+        tmp_path,
+        plan_id,
+        producer_ref="context:unrelated-producer",
+    )
+    manifest = review_record_manifest(
+        plan_id,
+        str(evidence["path"]),
+        state="degraded",
+        review_context_ref="context:isolated-artifact-review",
+        risk_confirmation_id="C-PRODUCER-RISK",
+    )
+    manifest_path = tmp_path / "review.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    rejected = run_workctl(
+        tmp_path,
+        "plan",
+        "independent-review",
+        "record",
+        "--manifest",
+        str(manifest_path),
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+
+    assert "INDEPENDENT_REVIEW_PRODUCER_CONTEXT_MISMATCH" in rejected.stderr
+
+
+def test_schema_v4_admission_rejects_preloaded_verified_review(
+    tmp_path: Path,
+) -> None:
+    """A new authority cannot arrive with a self-certified review already released."""
+    run_workctl(tmp_path, "layout", "migrate")
+    plan_id = "PLAN-20260731-108"
+    frontmatter = schema_v4_admission_plan(plan_id)
+    contract = independent_validation_fixture()
+    artifact_review = next(
+        review for review in contract["reviews"] if review["mode"] == "artifact_review"
+    )
+    artifact_review.update(
+        {
+            "state": "verified",
+            "review_context_ref": "context:preloaded-review",
+            "reviewed_contract_ref": "project:reviewed-contract",
+            "reviewed_contract_sha256": "a" * 64,
+            "reviewed_artifacts": [{"ref": "git:candidate", "sha256": "b" * 64}],
+            "evidence_ref": "evidence:preloaded-review",
+            "evidence_sha256": "c" * 64,
+            "isolation_attestation_ref": "evidence:preloaded-isolation",
+            "isolation_attestation_sha256": "d" * 64,
+        }
+    )
+    frontmatter["independent_validation"] = contract
+    prepared = tmp_path / "candidate.md"
+    write_markdown_plan(prepared, frontmatter, "# Preloaded review\n")
+    admission = {
+        "schema_version": 1,
+        "kind": "plan-admission",
+        "transaction_id": "ADM-20260731-108",
+        "prepared_plan": prepared.name,
+        "plan_id": plan_id,
+        "plan_sha256": sha256_path(prepared),
+        "confirmation_id": "C-ADMISSION",
+        "confirmation_ref": "user:observed-admission",
+    }
+    admission_path = tmp_path / "admission.yaml"
+    admission_path.write_text(yaml.safe_dump(admission, sort_keys=False), encoding="utf-8")
+
+    rejected = run_workctl(
+        tmp_path,
+        "plan",
+        "admit",
+        "apply",
+        "--manifest",
+        str(admission_path),
+        check=False,
+    )
+
+    assert "verified requires an authenticated platform attestor" in rejected.stderr
+
+
+def test_bootstrap_release_rejects_canonical_evidence_for_the_wrong_subject(
+    tmp_path: Path,
+) -> None:
+    """Bootstrap evidence must prove the mapped entry rather than a nearby fact."""
+    frontmatter = schema_v4_admission_plan("PLAN-20260731-109")
+    contract = independent_validation_fixture()
+    artifact_review = next(
+        review for review in contract["reviews"] if review["mode"] == "artifact_review"
+    )
+    artifact_review["bootstrap_release"] = {
+        "controller_build": "plugin:test-build",
+        "evidence_mapping": ["validation:V-001"],
+        "releases": ["task:T-001"],
+    }
+    frontmatter["independent_validation"] = contract
+    cast(dict[str, Any], frontmatter["activation"])["current_ref"] = "plugin:test-build"
+    plan_id = admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id="ADM-20260731-109",
+    )
+    wrong_subject = {
+        "schema_version": 1,
+        "kind": "work-governance-evidence",
+        "plan_id": plan_id,
+        "subject": "task:T-001",
+        "created_at": "2026-07-31T10:02:00+00:00",
+        "producer_ref": "runtime:bootstrap-probe",
+        "items": [{"ref": "project:nearby-result", "sha256": "e" * 64}],
+    }
+    evidence_path = tmp_path / "wrong-bootstrap-subject.json"
+    evidence_path.write_text(json.dumps(wrong_subject), encoding="utf-8")
+    evidence = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "evidence",
+            "record",
+            "--manifest",
+            str(evidence_path),
+        ).stdout
+    )
+    current, body = read_plan_by_id(tmp_path, plan_id)
+    validation = cast(list[dict[str, Any]], current["validations"])[0]
+    validation["status"] = "verified"
+    validation["evidence_ref"] = f"evidence:{evidence['path']}"
+    validation["evidence_sha256"] = str(evidence["sha256"])
+    write_markdown_plan(
+        tmp_path / ".work-governance" / "_Plan" / f"{plan_id}.md",
+        current,
+        body,
+    )
+
+    blocked = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+
+    assert "INDEPENDENT_REVIEW_REQUIRED" in blocked.stderr
+
+
+def test_degraded_review_needs_exact_risk_acceptance_and_open_high_still_blocks(
+    tmp_path: Path,
+) -> None:
+    """Exact risk acceptance releases degradation but never an unresolved high finding."""
+    frontmatter = schema_v4_admission_plan("PLAN-20260731-104")
+    frontmatter["independent_validation"] = independent_validation_fixture()
+    plan_id = admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id="ADM-20260731-104",
+    )
+    evidence = record_review_evidence(tmp_path, plan_id)
+    manifest = review_record_manifest(
+        plan_id,
+        str(evidence["path"]),
+        state="degraded",
+        review_context_ref="context:implementation",
+        risk_confirmation_id="C-REVIEW-RISK",
+        findings=[
+            {
+                "id": "F-001",
+                "severity": "high",
+                "status": "open",
+                "description": "The audited artifact remains unsafe.",
+            }
+        ],
+    )
+    manifest_path = tmp_path / "review.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    run_workctl(
+        tmp_path,
+        "plan",
+        "independent-review",
+        "record",
+        "--manifest",
+        str(manifest_path),
+        "--expected-revision",
+        "1",
+    )
+    fabricated = run_workctl(
+        tmp_path,
+        "plan",
+        "confirmation",
+        "add",
+        "--confirmation-id",
+        "C-REVIEW-RISK",
+        "--description",
+        "Accept the exact degraded review risk.",
+        "--status",
+        "accepted",
+        "--ref",
+        "user:review-risk",
+        "--intervention-kind",
+        "external_authority",
+        "--blocks",
+        "task:T-001",
+        "--blocks",
+        "activation",
+        "--blocks",
+        "route",
+        "--basis-ref",
+        f"evidence:{evidence['path']}",
+        "--basis-sha256",
+        str(evidence["sha256"]),
+        "--expected-revision",
+        "2",
+        check=False,
+    )
+    run_workctl(
+        tmp_path,
+        "plan",
+        "confirmation",
+        "add",
+        "--confirmation-id",
+        "C-REVIEW-RISK",
+        "--description",
+        "Accept the exact degraded review risk.",
+        "--intervention-kind",
+        "external_authority",
+        "--blocks",
+        "task:T-001",
+        "--blocks",
+        "activation",
+        "--blocks",
+        "route",
+        "--basis-ref",
+        f"evidence:{evidence['path']}",
+        "--basis-sha256",
+        str(evidence["sha256"]),
+        "--expected-revision",
+        "2",
+    )
+    run_workctl(
+        tmp_path,
+        "plan",
+        "confirm",
+        "--confirmation-id",
+        "C-REVIEW-RISK",
+        "--ref",
+        "user:review-risk",
+        "--evidence-sha256",
+        str(evidence["sha256"]),
+        "--expected-revision",
+        "3",
+    )
+    blocked = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-revision",
+        "4",
+        check=False,
+    )
+
+    assert "CONFIRMATION_ACCEPTED_REQUIRES_PLAN_CONFIRM" in fabricated.stderr
+    assert "INDEPENDENT_REVIEW_REQUIRED" in blocked.stderr
 
 
 def test_evidence_subject_and_hash_are_verified_before_terminal_transition(
@@ -9448,12 +10547,29 @@ def test_schema_v4_contract_revision_is_confirmation_and_evidence_bound(
         "C-CONTRACT",
         "--description",
         "Approve the revised goal.",
-        "--status",
-        "accepted",
-        "--ref",
+        "--intervention-kind",
+        "plan_contract",
+        "--blocks",
+        "route",
+        "--basis-ref",
         "user:revised-goal",
+        "--basis-sha256",
+        "f" * 64,
         "--expected-revision",
         "1",
+    )
+    run_workctl(
+        tmp_path,
+        "plan",
+        "confirm",
+        "--confirmation-id",
+        "C-CONTRACT",
+        "--ref",
+        "user:revised-goal",
+        "--evidence-sha256",
+        "f" * 64,
+        "--expected-revision",
+        "2",
     )
     evidence_input = tmp_path / "contract-evidence.json"
     evidence_input.write_text(
@@ -9484,7 +10600,7 @@ def test_schema_v4_contract_revision_is_confirmation_and_evidence_bound(
         "schema_version": 1,
         "kind": "plan-contract-revision",
         "plan_id": plan_id,
-        "expected_revision": 2,
+        "expected_revision": 3,
         "confirmation_id": "C-CONTRACT",
         "rationale": "Align the contract with the confirmed user-visible result.",
         "evidence_manifest": recorded["path"],
@@ -9511,7 +10627,7 @@ def test_schema_v4_contract_revision_is_confirmation_and_evidence_bound(
     )
     revised, _ = read_plan_by_id(tmp_path, plan_id)
 
-    assert revised["revision"] == 3
+    assert revised["revision"] == 4
     assert revised["contract"] == {
         "revision": 2,
         "confirmation_id": "C-CONTRACT",

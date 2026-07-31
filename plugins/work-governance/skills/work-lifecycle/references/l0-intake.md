@@ -21,6 +21,17 @@ Build a compact cognition map:
 Prefer exploration over questions when the answer is discoverable locally.
 Ask only the path-changing question when user choice is required.
 
+Classify ownership before deciding:
+
+- facts discoverable from files, code, commands, logs, runtime, or supported
+  external inspection are `owner=agent`; choose `explore`, investigate, then
+  re-evaluate without transferring the research burden to the user;
+- only an unresolved `owner=user` requirement whose `blocks` cover the next
+  target permits `ask`; ask one question with the largest path-changing effect;
+- when no blocker covers the next target, choose `proceed` and execute every
+  dependency-ready target in the current turn instead of asking between
+  slices.
+
 The trusted `UserPromptSubmit` context binds this intake to one current-turn
 receipt. Except for a simple low-risk No-Plan answer, explicitly choose:
 
@@ -33,7 +44,21 @@ receipt. Except for a simple low-risk No-Plan answer, explicitly choose:
 Show one `INTAKE_RECEIPT` when first classifying the request. Show
 `INTAKE_REVISION` only when the demand contract materially changes. A later
 turn or structural contract, unknown, task, or route change invalidates the
-prior decision.
+prior decision. Completing a task, validation, evidence transition, slice, or
+phase does not invalidate a route-level `proceed` decision by itself.
+
+There are only four user-intervention boundaries:
+
+- requirement input: one blocking user-owned `U-NNN`; do not also create a
+  confirmation for the same question;
+- Plan decision: the exact material solution contract;
+- deviation decision: an evidence-proven L5 change to goal, scope, behavior,
+  cost, safety, or delivery shape;
+- external authority: system, remote, production, destructive, or otherwise
+  out-of-bound permission.
+
+Ordinary failures, missing local evidence, reversible implementation choices,
+progress summaries, and "the next phase" are not user-intervention boundaries.
 
 Keep rationale minimal. Never copy raw prompt content, credentials, tokens, or
 other secrets into a Plan intake record.

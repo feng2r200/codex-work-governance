@@ -53,6 +53,53 @@ request. Validation challenges claims; it does not own the parent Plan.
   alternate-route options. Report when sunk cost, test volume, or a preferred
   implementation is being mistaken for truth.
 
+## Plan-level Review Contract
+
+High-impact Plans carry `independent_validation` with `required`, aggregate
+`state`, required modes, the implementation context, and one review record per
+mode. Required modes are `plan_challenge`, `artifact_review`, and
+`evidence_audit`.
+
+Each review record names:
+
+- `state`: `pending`, `verified`, or `degraded`;
+- exact shared target `blocks` and their release condition;
+- implementation and review context references;
+- the reviewed contract and artifact SHA256 digests;
+- findings with severity and resolution state;
+- a canonical evidence reference and SHA256.
+
+Record a result only through `plan independent-review record --manifest`.
+Reviewers receive the demand contract and raw artifacts, remain read-only, and
+cannot modify the parent Plan or delivery. An unresolved `blocker` or `high`
+finding preserves every declared block and prevents dependent task progress,
+live switching, activation, delivery completion, and closeout.
+
+Different free-form context labels and caller-authored canonical evidence are
+not isolation evidence. A `verified` record requires an authenticated platform
+attestor that the controller can validate outside the caller-controlled
+evidence recorder. This controller has no such attestor capability, so it
+fails closed with `INDEPENDENT_REVIEW_TRUSTED_ATTESTATION_UNAVAILABLE` and
+records the review only as `degraded`. Matching contexts or review evidence
+whose producer differs from the declared review context also cannot verify.
+
+A degraded review cannot support a high-impact completion claim. It releases
+blocks only when a separate `external_authority` risk-acceptance confirmation
+binds the exact degraded review evidence and is accepted through `plan confirm`
+under the trusted current user turn. The degraded review manifest must reserve
+the exact `risk_acceptance_confirmation_id`; that ID must not exist when the
+review is recorded. Create the pending confirmation after the review and decide
+that exact ID through
+`plan confirm`. The controller never scans for or adopts another accepted
+confirmation. Schema-v4 `plan confirmation add` cannot pre-accept the decision.
+
+For a bootstrap Plan created by a controller that predates the review command,
+only exact canonical V/T evidence whose subject equals every declared mapped
+target may temporarily release its bounded pre-install targets. It does not
+change review state. The new recorder is the sole allowed blocked-state
+migration command and must migrate that exact evidence before activation,
+delivery, or closeout.
+
 ## Output Shape
 
 Lead with findings ordered by severity:
