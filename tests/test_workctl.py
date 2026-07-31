@@ -676,6 +676,119 @@ def bind_reconciliation_confirmations(
     return dry_run
 
 
+def write_reconcile_upgrade_fixture(cwd: Path) -> Path:
+    """Build exact child manifests for the composed two-transaction route."""
+    reconciliation_manifest = write_reconciliation_fixture(cwd)
+    prepared = cwd / "prepared.md"
+    prepared_text = prepared.read_text(encoding="utf-8")
+    _, prepared_raw, prepared_body = prepared_text.split("---\n", 2)
+    prepared_frontmatter = cast(dict[str, Any], yaml.safe_load(prepared_raw))
+    prepared_frontmatter["confirmations"]["required"].append(
+        {
+            "id": "C-CONTRACT-UPGRADE",
+            "description": "Upgrade the reconciled schema-v3 Plan contract.",
+            "status": "accepted",
+            "ref": "user:contract-upgrade",
+            "accepted_at": "2026-07-30T00:03:00+00:00",
+        }
+    )
+    write_markdown_plan(prepared, prepared_frontmatter, prepared_body)
+    bind_reconciliation_confirmations(
+        cwd,
+        reconciliation_manifest,
+        include_agents_confirmation=False,
+    )
+
+    namespace = runpy.run_path(str(SCRIPT), run_name="workctl_composed_fixture")
+    _, target_doc, _ = namespace["prepare_reconciliation"](
+        cwd,
+        reconciliation_manifest,
+        require_confirmations=True,
+    )
+    schema3_bytes = namespace["dump_plan"](target_doc).encode("utf-8")
+    plan_id = cast(str, target_doc.frontmatter["plan_id"])
+
+    evidence = {
+        "schema_version": 1,
+        "kind": "work-governance-evidence",
+        "plan_id": plan_id,
+        "subject": "contract-upgrade",
+        "created_at": "2026-07-30T00:04:00+00:00",
+        "producer_ref": "user:contract-upgrade",
+        "items": [{"ref": "project:confirmed-contract", "sha256": "b" * 64}],
+    }
+    evidence_bytes = (
+        json.dumps(
+            evidence,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+        + b"\n"
+    )
+    evidence_sha256 = hashlib.sha256(evidence_bytes).hexdigest()
+    evidence_path = (
+        cwd / ".work-governance" / "_Plan" / ".evidence" / plan_id / f"{evidence_sha256}.json"
+    )
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_bytes(evidence_bytes)
+
+    contract_upgrade_manifest = cwd / "upgrade.yaml"
+    contract_upgrade_manifest.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "kind": "plan-contract-upgrade",
+                "transaction_id": "UPG-20260730-001",
+                "plan_id": plan_id,
+                "expected_revision": target_doc.frontmatter["revision"],
+                "plan_sha256": hashlib.sha256(schema3_bytes).hexdigest(),
+                "confirmation_id": "C-CONTRACT-UPGRADE",
+                "confirmation_ref": "user:contract-upgrade",
+                "evidence_manifest": evidence_path.relative_to(cwd).as_posix(),
+                "goal": {
+                    "statement": "Preserve the reconciled authority and install schema v4.",
+                    "success_conditions": ["Reconciliation commits before contract upgrade."],
+                },
+                "unknowns": [],
+                "task_metadata": {
+                    "T-001": {
+                        "unknowns": [],
+                        "expected_evidence_delta": (
+                            "The reconciled route remains dependency-ready."
+                        ),
+                    }
+                },
+                "validation_provenance": {
+                    "V-001": {
+                        "kind": "code-invariant",
+                        "source_ref": "project:index-last-reconciliation",
+                    }
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    composed_manifest = cwd / "reconcile-upgrade.yaml"
+    composed_manifest.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "kind": "plan-reconcile-upgrade",
+                "workflow_id": "RCU-20260730-001",
+                "reconciliation_manifest": reconciliation_manifest.name,
+                "reconciliation_manifest_sha256": sha256_path(reconciliation_manifest),
+                "contract_upgrade_manifest": contract_upgrade_manifest.name,
+                "contract_upgrade_manifest_sha256": sha256_path(contract_upgrade_manifest),
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return composed_manifest
+
+
 def make_terminal_rollover_source(cwd: Path) -> Path:
     """Create a governed, complete, terminal, closeout-ready Plan."""
     init_plan(cwd)
@@ -8035,6 +8148,899 @@ def test_plan_admission_recovery_rejects_noncanonical_target_before_write(
     assert result.returncode == 2
     assert "INVALID_PLAN_ADMISSION_JOURNAL" in result.stderr
     assert not (tmp_path / "_Plan").exists()
+
+
+def test_composed_reconciliation_upgrade_entry_is_registered(tmp_path: Path) -> None:
+    """One public command owns the ordered reconciliation-to-upgrade route."""
+    run_workctl(tmp_path, "layout", "migrate")
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--help",
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "usage:" in result.stdout
+
+
+def test_composed_reconciliation_upgrade_preserves_child_order_and_journals(
+    tmp_path: Path,
+) -> None:
+    """One invocation commits schema v3 before the independent schema-v4 child."""
+    manifest_path = write_reconcile_upgrade_fixture(tmp_path)
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+
+    plan_id = "PLAN-20260724-002"
+    active, _ = read_plan_by_id(tmp_path, plan_id)
+    migration = yaml.safe_load(
+        (
+            tmp_path / ".work-governance" / "_Plan" / ".migrations" / "MIG-20260724-001.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    upgrade = json.loads(
+        (
+            tmp_path
+            / ".work-governance"
+            / "runtime"
+            / "contract-upgrades"
+            / "UPG-20260730-001"
+            / "journal.json"
+        ).read_text(encoding="utf-8")
+    )
+    parent = json.loads(
+        (
+            tmp_path
+            / ".work-governance"
+            / "runtime"
+            / "reconcile-upgrades"
+            / "RCU-20260730-001"
+            / "journal.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert "RECONCILE_UPGRADE_COMMITTED" in result.stdout
+    assert active["schema_version"] == 4
+    assert migration["status"] == "committed"
+    assert upgrade["status"] == "committed"
+    assert parent["status"] == "committed"
+    assert parent["schema3_plan_sha256"] == migration["target_sha256"]
+    assert migration["target_sha256"] == upgrade["source_sha256"]
+    assert upgrade["target_sha256"] == sha256_path(
+        tmp_path / ".work-governance" / "_Plan" / f"{plan_id}.md"
+    )
+
+
+def test_composed_reconciliation_upgrade_recovers_between_children(
+    tmp_path: Path,
+) -> None:
+    """Parent recovery resumes only the upgrade after reconciliation commits."""
+    manifest_path = write_reconcile_upgrade_fixture(tmp_path)
+
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={
+            "TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1",
+            "WORKCTL_TEST_RECONCILE_UPGRADE_INTERRUPT_AFTER": ("reconciliation-committed"),
+        },
+    )
+    schema3, _ = read_plan_by_id(tmp_path, "PLAN-20260724-002")
+    parent_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "reconcile-upgrades"
+        / "RCU-20260730-001"
+        / "journal.json"
+    )
+    interrupted_parent = json.loads(parent_path.read_text(encoding="utf-8"))
+
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "recover",
+        "--workflow-id",
+        "RCU-20260730-001",
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+    schema4, _ = read_plan_by_id(tmp_path, "PLAN-20260724-002")
+    recovered_parent = json.loads(parent_path.read_text(encoding="utf-8"))
+
+    assert interrupted.returncode == 2
+    assert "RECONCILE_UPGRADE_TEST_INTERRUPTED: reconciliation-committed" in interrupted.stderr
+    assert schema3["schema_version"] == 3
+    assert interrupted_parent["status"] == "reconciliation-committed"
+    assert "RECONCILE_UPGRADE_COMMITTED" in recovered.stdout
+    assert schema4["schema_version"] == 4
+    assert recovered_parent["status"] == "committed"
+
+
+@pytest.mark.parametrize(
+    ("stage_kind", "expected_journals", "retry_command"),
+    [
+        ("parent", (False, False, False), "apply"),
+        ("reconciliation", (True, False, False), "recover"),
+        ("contract-upgrade", (True, True, False), "recover"),
+    ],
+)
+def test_composed_reconciliation_upgrade_recovers_before_journal_publication(
+    tmp_path: Path,
+    stage_kind: str,
+    expected_journals: tuple[bool, bool, bool],
+    retry_command: str,
+) -> None:
+    """Exact partial staging is resumable before each transaction journal exists."""
+    manifest_path = write_reconcile_upgrade_fixture(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={
+            "TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1",
+            "WORKCTL_TEST_STAGE_INTERRUPT_BEFORE_JOURNAL": stage_kind,
+        },
+    )
+    parent_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "reconcile-upgrades"
+        / "RCU-20260730-001"
+        / "journal.json"
+    )
+    migration_path = (
+        tmp_path / ".work-governance" / "_Plan" / ".migrations" / "MIG-20260724-001.yaml"
+    )
+    upgrade_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "contract-upgrades"
+        / "UPG-20260730-001"
+        / "journal.json"
+    )
+    observed_journals = (
+        parent_path.is_file(),
+        migration_path.is_file(),
+        upgrade_path.is_file(),
+    )
+    if stage_kind == "parent":
+        time.sleep(1.1)
+
+    if retry_command == "apply":
+        recovered = run_workctl(
+            tmp_path,
+            "plan",
+            "reconcile-upgrade",
+            "apply",
+            "--manifest",
+            str(manifest_path),
+            env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+        )
+    else:
+        recovered = run_workctl(
+            tmp_path,
+            "plan",
+            "reconcile-upgrade",
+            "recover",
+            "--workflow-id",
+            "RCU-20260730-001",
+            env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+        )
+    active, _ = read_plan_by_id(tmp_path, "PLAN-20260724-002")
+    parent = json.loads(parent_path.read_text(encoding="utf-8"))
+    migration = cast(
+        dict[str, Any],
+        yaml.safe_load(migration_path.read_text(encoding="utf-8")),
+    )
+    upgrade = json.loads(upgrade_path.read_text(encoding="utf-8"))
+
+    assert interrupted.returncode == 2
+    assert f"TRANSACTION_STAGE_TEST_INTERRUPTED: {stage_kind}" in interrupted.stderr
+    assert observed_journals == expected_journals
+    assert "RECONCILE_UPGRADE_COMMITTED" in recovered.stdout
+    assert active["schema_version"] == 4
+    assert active["updated_at"] == "2026-07-30T00:03:00+00:00"
+    assert parent["status"] == "committed"
+    assert migration["status"] == "committed"
+    assert upgrade["status"] == "committed"
+
+
+def test_composed_reconciliation_upgrade_rejects_partial_staging_drift(
+    tmp_path: Path,
+) -> None:
+    """A retry cannot authenticate changed parent bytes that lack a journal."""
+    manifest_path = write_reconcile_upgrade_fixture(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={
+            "TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1",
+            "WORKCTL_TEST_STAGE_INTERRUPT_BEFORE_JOURNAL": "parent",
+        },
+    )
+    parent_dir = (
+        tmp_path / ".work-governance" / "runtime" / "reconcile-upgrades" / "RCU-20260730-001"
+    )
+    (parent_dir / "staging" / "schema3-plan.md").write_bytes(b"drift\n")
+
+    retried = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+
+    assert interrupted.returncode == 2
+    assert retried.returncode == 2
+    assert "RECONCILE_UPGRADE_TRANSACTION_CONFLICT" in retried.stderr
+    assert not (parent_dir / "journal.json").exists()
+    assert not (
+        tmp_path / ".work-governance" / "_Plan" / ".migrations" / "MIG-20260724-001.yaml"
+    ).exists()
+
+
+def test_composed_reconciliation_upgrade_recovers_during_reconciliation_child(
+    tmp_path: Path,
+) -> None:
+    """Recovery finishes a migration interrupted after index activation."""
+    manifest_path = write_reconcile_upgrade_fixture(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={
+            "TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1",
+            "WORKCTL_TEST_INTERRUPT_AFTER": "index-activation",
+        },
+    )
+    migration_path = (
+        tmp_path / ".work-governance" / "_Plan" / ".migrations" / "MIG-20260724-001.yaml"
+    )
+    parent_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "reconcile-upgrades"
+        / "RCU-20260730-001"
+        / "journal.json"
+    )
+    migration = cast(
+        dict[str, Any],
+        yaml.safe_load(migration_path.read_text(encoding="utf-8")),
+    )
+    parent = json.loads(parent_path.read_text(encoding="utf-8"))
+    schema3, _ = read_plan_by_id(tmp_path, "PLAN-20260724-002")
+
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "recover",
+        "--workflow-id",
+        "RCU-20260730-001",
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+    schema4, _ = read_plan_by_id(tmp_path, "PLAN-20260724-002")
+
+    assert interrupted.returncode == 2
+    assert "SIMULATED_MIGRATION_INTERRUPT: index-activation" in interrupted.stderr
+    assert migration["status"] == "applying"
+    assert parent["status"] == "children-staged"
+    assert schema3["schema_version"] == 3
+    assert "RECONCILE_UPGRADE_COMMITTED" in recovered.stdout
+    assert schema4["schema_version"] == 4
+
+
+def test_composed_reconciliation_upgrade_recovers_during_upgrade_child(
+    tmp_path: Path,
+) -> None:
+    """Recovery authenticates schema-v4 bytes left by an interrupted upgrade."""
+    manifest_path = write_reconcile_upgrade_fixture(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={
+            "TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1",
+            "WORKCTL_TEST_UPGRADE_INTERRUPT_AFTER": "plan-replaced",
+        },
+    )
+    upgrade_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "contract-upgrades"
+        / "UPG-20260730-001"
+        / "journal.json"
+    )
+    parent_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "reconcile-upgrades"
+        / "RCU-20260730-001"
+        / "journal.json"
+    )
+    upgrade = json.loads(upgrade_path.read_text(encoding="utf-8"))
+    parent = json.loads(parent_path.read_text(encoding="utf-8"))
+    interrupted_active, _ = read_plan_by_id(tmp_path, "PLAN-20260724-002")
+
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "recover",
+        "--workflow-id",
+        "RCU-20260730-001",
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+    recovered_upgrade = json.loads(upgrade_path.read_text(encoding="utf-8"))
+    recovered_parent = json.loads(parent_path.read_text(encoding="utf-8"))
+
+    assert interrupted.returncode == 2
+    assert "PLAN_CONTRACT_UPGRADE_TEST_INTERRUPTED: plan-replaced" in interrupted.stderr
+    assert interrupted_active["schema_version"] == 4
+    assert upgrade["status"] == "plan-replaced"
+    assert parent["status"] == "reconciliation-committed"
+    assert "RECONCILE_UPGRADE_COMMITTED" in recovered.stdout
+    assert recovered_upgrade["status"] == "committed"
+    assert recovered_parent["status"] == "committed"
+
+
+def test_composed_reconciliation_upgrade_blocks_mutation_during_upgrade_cutover(
+    tmp_path: Path,
+) -> None:
+    """An incomplete parent makes schema-v4 cutover globally recovery-only."""
+    manifest_path = write_reconcile_upgrade_fixture(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={
+            "TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1",
+            "WORKCTL_TEST_UPGRADE_INTERRUPT_AFTER": "plan-replaced",
+        },
+    )
+    active_path = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260724-002.md"
+    migration_path = (
+        tmp_path / ".work-governance" / "_Plan" / ".migrations" / "MIG-20260724-001.yaml"
+    )
+    parent_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "reconcile-upgrades"
+        / "RCU-20260730-001"
+        / "journal.json"
+    )
+    upgrade_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "contract-upgrades"
+        / "UPG-20260730-001"
+        / "journal.json"
+    )
+    protected_paths = [active_path, migration_path, parent_path, upgrade_path]
+    before = [sha256_path(path) for path in protected_paths]
+    active, _ = read_plan_by_id(tmp_path, "PLAN-20260724-002")
+
+    status = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "status",
+            env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+        ).stdout
+    )
+    mutation = run_workctl(
+        tmp_path,
+        "task",
+        "block",
+        "--task-id",
+        "T-001",
+        "--expected-revision",
+        str(active["revision"]),
+        check=False,
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+
+    assert interrupted.returncode == 2
+    assert status["authority_state"] == "MIGRATION_RECOVERY_REQUIRED"
+    assert any(
+        "incomplete reconcile-upgrade journal" in reason for reason in status["blocking_reasons"]
+    )
+    assert any(
+        "incomplete contract-upgrade journal" in reason for reason in status["blocking_reasons"]
+    )
+    assert mutation.returncode == 2
+    assert "AUTHORITY_BLOCKED: MIGRATION_RECOVERY_REQUIRED" in mutation.stderr
+    assert [sha256_path(path) for path in protected_paths] == before
+
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "recover",
+        "--workflow-id",
+        "RCU-20260730-001",
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+    final_active, _ = read_plan_by_id(tmp_path, "PLAN-20260724-002")
+
+    assert "RECONCILE_UPGRADE_COMMITTED" in recovered.stdout
+    assert final_active["schema_version"] == 4
+
+
+def test_composed_reconciliation_upgrade_blocks_fresh_reconciliation_transactions(
+    tmp_path: Path,
+) -> None:
+    """Recovery-only state cannot stage a second parent or ordinary reconciliation."""
+    manifest_path = write_reconcile_upgrade_fixture(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={
+            "TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1",
+            "WORKCTL_TEST_STAGE_INTERRUPT_BEFORE_JOURNAL": "reconciliation",
+        },
+    )
+    second_manifest_path = tmp_path / "reconcile-upgrade-b.yaml"
+    second_manifest = cast(
+        dict[str, Any],
+        yaml.safe_load(manifest_path.read_text(encoding="utf-8")),
+    )
+    second_manifest["workflow_id"] = "RCU-20260730-002"
+    second_manifest_path.write_text(
+        yaml.safe_dump(second_manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    parent_a = tmp_path / ".work-governance" / "runtime" / "reconcile-upgrades" / "RCU-20260730-001"
+    parent_b = parent_a.parent / "RCU-20260730-002"
+    migration = tmp_path / ".work-governance" / "_Plan" / ".migrations" / "MIG-20260724-001"
+    plan_dir = tmp_path / ".work-governance" / "_Plan"
+    protected_files = sorted(
+        [
+            *(path for path in parent_a.rglob("*") if path.is_file()),
+            *(path for path in migration.rglob("*") if path.is_file()),
+            *plan_dir.glob("PLAN-*.md"),
+            *(path for path in [plan_dir / "index.yaml"] if path.is_file()),
+        ],
+        key=lambda path: path.as_posix(),
+    )
+    before = {path.relative_to(tmp_path).as_posix(): sha256_path(path) for path in protected_files}
+
+    second_parent = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(second_manifest_path),
+        check=False,
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+    ordinary_reconciliation = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile",
+        "apply",
+        "--manifest",
+        str(tmp_path / "reconcile.yaml"),
+        check=False,
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+    after_files = sorted(
+        [
+            *(path for path in parent_a.rglob("*") if path.is_file()),
+            *(path for path in migration.rglob("*") if path.is_file()),
+            *plan_dir.glob("PLAN-*.md"),
+            *(path for path in [plan_dir / "index.yaml"] if path.is_file()),
+        ],
+        key=lambda path: path.as_posix(),
+    )
+    after = {path.relative_to(tmp_path).as_posix(): sha256_path(path) for path in after_files}
+
+    assert interrupted.returncode == 2
+    assert second_parent.returncode == 2
+    assert "MIGRATION_RECOVERY_REQUIRED" in second_parent.stderr
+    assert ordinary_reconciliation.returncode == 2
+    assert "MIGRATION_RECOVERY_REQUIRED" in ordinary_reconciliation.stderr
+    assert not parent_b.exists()
+    assert after == before
+
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "recover",
+        "--workflow-id",
+        "RCU-20260730-001",
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+    final_active, _ = read_plan_by_id(tmp_path, "PLAN-20260724-002")
+
+    assert "RECONCILE_UPGRADE_COMMITTED" in recovered.stdout
+    assert final_active["schema_version"] == 4
+
+
+def test_composed_reconciliation_upgrade_rejects_wrong_child_order(
+    tmp_path: Path,
+) -> None:
+    """A prepared upgrade cannot accept schema-v4 authority before its child runs."""
+    manifest_path = write_reconcile_upgrade_fixture(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={
+            "TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1",
+            "WORKCTL_TEST_RECONCILE_UPGRADE_INTERRUPT_AFTER": ("reconciliation-committed"),
+        },
+    )
+    parent_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "reconcile-upgrades"
+        / "RCU-20260730-001"
+        / "journal.json"
+    )
+    upgrade_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "contract-upgrades"
+        / "UPG-20260730-001"
+        / "journal.json"
+    )
+    parent = json.loads(parent_path.read_text(encoding="utf-8"))
+    active_path = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260724-002.md"
+    schema4_staged = tmp_path / str(parent["schema4_staged_path"])
+    shutil.copyfile(schema4_staged, active_path)
+
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "recover",
+        "--workflow-id",
+        "RCU-20260730-001",
+        check=False,
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+    upgrade = json.loads(upgrade_path.read_text(encoding="utf-8"))
+
+    assert interrupted.returncode == 2
+    assert recovered.returncode == 2
+    assert "RECONCILE_UPGRADE_CHILD_ORDER_VIOLATION" in recovered.stderr
+    assert upgrade["status"] == "prepared"
+
+
+def test_composed_reconciliation_upgrade_committed_recovery_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    """A committed recovery call revalidates without rewriting any journal."""
+    manifest_path = write_reconcile_upgrade_fixture(tmp_path)
+    run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+    paths = [
+        tmp_path / ".work-governance" / "_Plan" / "PLAN-20260724-002.md",
+        tmp_path / ".work-governance" / "_Plan" / ".migrations" / "MIG-20260724-001.yaml",
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "contract-upgrades"
+        / "UPG-20260730-001"
+        / "journal.json",
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "reconcile-upgrades"
+        / "RCU-20260730-001"
+        / "journal.json",
+    ]
+    before = [sha256_path(path) for path in paths]
+
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "recover",
+        "--workflow-id",
+        "RCU-20260730-001",
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+
+    assert "RECONCILE_UPGRADE_ALREADY_COMMITTED" in recovered.stdout
+    assert [sha256_path(path) for path in paths] == before
+
+
+def test_composed_reconciliation_upgrade_rejects_parent_binding_drift(
+    tmp_path: Path,
+) -> None:
+    """A changed parent binding fails closed without touching active schema v4."""
+    manifest_path = write_reconcile_upgrade_fixture(tmp_path)
+    run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+    parent_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "reconcile-upgrades"
+        / "RCU-20260730-001"
+        / "journal.json"
+    )
+    active_path = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260724-002.md"
+    active_before = sha256_path(active_path)
+    parent = json.loads(parent_path.read_text(encoding="utf-8"))
+    parent["schema4_plan_sha256"] = "d" * 64
+    parent_path.write_text(json.dumps(parent), encoding="utf-8")
+
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "recover",
+        "--workflow-id",
+        "RCU-20260730-001",
+        check=False,
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+
+    assert recovered.returncode == 2
+    assert "RECONCILE_UPGRADE_BINDING_DRIFT" in recovered.stderr
+    assert sha256_path(active_path) == active_before
+
+
+def test_composed_reconciliation_upgrade_rejects_stale_confirmation_before_staging(
+    tmp_path: Path,
+) -> None:
+    """A stale reconciliation decision aborts before any transaction is staged."""
+    manifest_path = write_reconcile_upgrade_fixture(tmp_path)
+    reconciliation_path = tmp_path / "reconcile.yaml"
+    reconciliation = cast(
+        dict[str, Any],
+        yaml.safe_load(reconciliation_path.read_text(encoding="utf-8")),
+    )
+    reconciliation["confirmations"]["baseline"]["evidence_sha256"] = "e" * 64
+    reconciliation_path.write_text(
+        yaml.safe_dump(reconciliation, sort_keys=False),
+        encoding="utf-8",
+    )
+    manifest = cast(
+        dict[str, Any],
+        yaml.safe_load(manifest_path.read_text(encoding="utf-8")),
+    )
+    manifest["reconciliation_manifest_sha256"] = sha256_path(reconciliation_path)
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+
+    assert result.returncode == 2
+    assert "CONFIRMATION_EVIDENCE_MISMATCH: baseline" in result.stderr
+    assert not (
+        tmp_path / ".work-governance" / "runtime" / "reconcile-upgrades" / "RCU-20260730-001"
+    ).exists()
+    assert not (
+        tmp_path / ".work-governance" / "_Plan" / ".migrations" / "MIG-20260724-001.yaml"
+    ).exists()
+
+
+def test_composed_reconciliation_upgrade_rejects_forged_parent_commit(
+    tmp_path: Path,
+) -> None:
+    """A forged parent status cannot skip its uncommitted upgrade child."""
+    manifest_path = write_reconcile_upgrade_fixture(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={
+            "TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1",
+            "WORKCTL_TEST_RECONCILE_UPGRADE_INTERRUPT_AFTER": ("reconciliation-committed"),
+        },
+    )
+    parent_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "reconcile-upgrades"
+        / "RCU-20260730-001"
+        / "journal.json"
+    )
+    parent = json.loads(parent_path.read_text(encoding="utf-8"))
+    parent["status"] = "committed"
+    parent_path.write_text(json.dumps(parent), encoding="utf-8")
+
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "recover",
+        "--workflow-id",
+        "RCU-20260730-001",
+        check=False,
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+    active, _ = read_plan_by_id(tmp_path, "PLAN-20260724-002")
+
+    assert interrupted.returncode == 2
+    assert recovered.returncode == 2
+    assert "RECONCILE_UPGRADE_COMMITTED_STATE_INVALID" in recovered.stderr
+    assert "RECONCILE_UPGRADE_ALREADY_COMMITTED" not in recovered.stdout
+    assert active["schema_version"] == 3
+
+
+def test_composed_reconciliation_upgrade_rejects_forged_upgrade_child_commit(
+    tmp_path: Path,
+) -> None:
+    """A forged child status cannot authenticate absent schema-v4 authority."""
+    manifest_path = write_reconcile_upgrade_fixture(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={
+            "TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1",
+            "WORKCTL_TEST_RECONCILE_UPGRADE_INTERRUPT_AFTER": ("reconciliation-committed"),
+        },
+    )
+    upgrade_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "contract-upgrades"
+        / "UPG-20260730-001"
+        / "journal.json"
+    )
+    upgrade = json.loads(upgrade_path.read_text(encoding="utf-8"))
+    upgrade["status"] = "committed"
+    upgrade_path.write_text(json.dumps(upgrade), encoding="utf-8")
+
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "recover",
+        "--workflow-id",
+        "RCU-20260730-001",
+        check=False,
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+    active, _ = read_plan_by_id(tmp_path, "PLAN-20260724-002")
+
+    assert interrupted.returncode == 2
+    assert recovered.returncode == 2
+    assert "CONTRACT_UPGRADE_COMMITTED_STATE_DRIFT" in recovered.stderr
+    assert active["schema_version"] == 3
+
+
+def test_composed_reconciliation_upgrade_rejects_forged_migration_binding(
+    tmp_path: Path,
+) -> None:
+    """A committed migration child remains bound to its accepted proposal."""
+    manifest_path = write_reconcile_upgrade_fixture(tmp_path)
+    run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+    migration_path = (
+        tmp_path / ".work-governance" / "_Plan" / ".migrations" / "MIG-20260724-001.yaml"
+    )
+    migration = cast(
+        dict[str, Any],
+        yaml.safe_load(migration_path.read_text(encoding="utf-8")),
+    )
+    migration["prepared_plan_sha256"] = "c" * 64
+    migration_path.write_text(yaml.safe_dump(migration, sort_keys=False), encoding="utf-8")
+    active_path = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260724-002.md"
+    active_before = sha256_path(active_path)
+
+    recovered = run_workctl(
+        tmp_path,
+        "plan",
+        "reconcile-upgrade",
+        "recover",
+        "--workflow-id",
+        "RCU-20260730-001",
+        check=False,
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
+    )
+
+    assert recovered.returncode == 2
+    assert "MIGRATION_COMMITTED_BINDING_DRIFT" in recovered.stderr
+    assert sha256_path(active_path) == active_before
 
 
 def test_active_schema_v3_requires_recoverable_contract_upgrade(tmp_path: Path) -> None:

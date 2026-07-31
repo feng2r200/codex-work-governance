@@ -370,6 +370,43 @@ confirmation to the dry-run proposal digest, and binds a separate confirmation
 to any exact `AGENTS.md` routing diff digest. It archives exact source bytes,
 writes non-authoritative pointers with path-correct links, and activates the
 new index last. Recovery rechecks staged hashes and the Git baseline.
+
+When one user decision must both reconcile schema-v3 authority and immediately
+upgrade that exact result to schema v4, use the composed controller entry:
+
+```sh
+<receipt-bound-workctl> plan reconcile-upgrade apply \
+  --manifest /path/to/reconcile-upgrade.yaml
+<receipt-bound-workctl> plan reconcile-upgrade recover \
+  --workflow-id RCU-YYYYMMDD-NNN
+```
+
+The parent manifest fixes an `RCU-YYYYMMDD-NNN` workflow ID plus the paths and
+SHA256 digests of one ordinary reconciliation manifest and one ordinary
+contract-upgrade manifest. Apply fully prepares the parent, schema-v3 target,
+schema-v4 target, and both child transactions before the reconciliation child
+can mutate authority. The legal order is always reconciliation followed by
+contract upgrade; each child retains its own authenticated journal and
+recovery contract.
+
+If interruption occurs after parent staging but before the parent journal is
+published, re-run `apply`. If it occurs after a child stages bytes but before
+that child journal is published, parent `recover` validates and fills only
+missing exact staging bytes before publishing the missing child journal.
+Unexpected paths, symlinks, changed bytes, or changed inputs fail closed.
+Recovery then resumes only the incomplete child. An interruption during
+reconciliation may leave schema v3 uncommitted or active; an interruption
+between children leaves schema v3 active; an interruption during contract
+upgrade may leave authenticated schema-v4 bytes active with an uncommitted
+upgrade journal. Parent recovery validates the parent binding, child journals,
+index, lineage, intake binding, and final schema-v4 hash. A committed recovery
+call is read-only validation and cannot advance a forged or incomplete child.
+While either the parent or contract-upgrade journal is incomplete,
+`plan status` reports `MIGRATION_RECOVERY_REQUIRED`; ordinary Plan and task
+mutations and fresh structural Plan transactions remain blocked until the bound
+parent recovery commits. Re-running `apply` for that same workflow remains an
+idempotent recovery entry.
+
 `plan closeout-check` and `plan complete` include full Plan validation and
 enforce route-level terminal completion.
 
