@@ -1,6 +1,6 @@
 [project]
 name = "work-governance"
-version = "1.0.4"
+version = "1.0.5"
 description = "Local Codex work governance plugin controller and tests"
 requires-python = ">=3.12"
 license = "Apache-2.0"
