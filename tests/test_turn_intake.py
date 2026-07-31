@@ -799,6 +799,240 @@ def test_controller_exposes_turn_bound_intake_receipt_command() -> None:
     assert "--targets" in result.stdout
 
 
+def test_schema_v4_risk_acceptance_requires_the_current_receipt_bound_user_turn(
+    tmp_path: Path,
+) -> None:
+    """A degraded review is released only by the exact current-turn risk decision."""
+    project, session_id = prepare_admitted_project(tmp_path)
+    plan_id = "PLAN-20260729-001"
+    frontmatter = read_plan_frontmatter(project, plan_id)
+    frontmatter["independent_validation"] = {
+        "required": True,
+        "state": "pending",
+        "required_modes": ["plan_challenge", "artifact_review", "evidence_audit"],
+        "implementation_context_ref": "context:implementation",
+        "reviews": [
+            {
+                "mode": "plan_challenge",
+                "state": "pending",
+                "blocks": ["route"],
+                "review_context_ref": "context:pending-plan-challenge",
+                "reviewed_contract_sha256": None,
+                "reviewed_artifacts": [],
+                "findings": [],
+                "evidence_ref": "project:pending-plan-challenge",
+                "evidence_sha256": None,
+            },
+            {
+                "mode": "artifact_review",
+                "state": "pending",
+                "blocks": ["task:T-001", "activation", "route"],
+                "review_context_ref": "context:pending-artifact-review",
+                "reviewed_contract_sha256": None,
+                "reviewed_artifacts": [],
+                "findings": [],
+                "evidence_ref": "project:pending-artifact-review",
+                "evidence_sha256": None,
+            },
+            {
+                "mode": "evidence_audit",
+                "state": "pending",
+                "blocks": ["route"],
+                "review_context_ref": "context:pending-evidence-audit",
+                "reviewed_contract_sha256": None,
+                "reviewed_artifacts": [],
+                "findings": [],
+                "evidence_ref": "project:pending-evidence-audit",
+                "evidence_sha256": None,
+            },
+        ],
+    }
+    write_plan_frontmatter(project, plan_id, frontmatter)
+    _review_intake, _review_manifest, review_turn_sha256 = issue_intake(
+        project,
+        session_id=session_id,
+        turn_id="turn-record-degraded-review",
+        decision="proceed",
+        targets=["task:T-001"],
+        expected_revision=1,
+    )
+    review_frontmatter = read_plan_frontmatter(project, plan_id)
+    review_records = cast(
+        list[dict[str, object]],
+        cast(dict[str, object], review_frontmatter["intake"])["records"],
+    )
+    review_intake_sha256 = cast(str, review_records[-1]["record_sha256"])
+    evidence_input = project / "degraded-review-evidence.json"
+    evidence_input.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "work-governance-evidence",
+                "plan_id": plan_id,
+                "subject": "independent-review:artifact_review",
+                "created_at": "2026-07-31T10:03:00+00:00",
+                "producer_ref": "context:implementation",
+                "items": [
+                    {"ref": "project:reviewed-contract", "sha256": "a" * 64},
+                    {"ref": "git:candidate", "sha256": "b" * 64},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence = cast(
+        dict[str, object],
+        json.loads(
+            run_controller(
+                project,
+                "plan",
+                "evidence",
+                "record",
+                "--manifest",
+                str(evidence_input),
+            ).stdout
+        ),
+    )
+    review_manifest = project / "degraded-review.yaml"
+    review_manifest.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "kind": "independent-review",
+                "plan_id": plan_id,
+                "mode": "artifact_review",
+                "state": "degraded",
+                "implementation_context_ref": "context:implementation",
+                "review_context_ref": "context:implementation",
+                "reviewed_contract": {
+                    "ref": "project:reviewed-contract",
+                    "sha256": "a" * 64,
+                },
+                "reviewed_artifacts": [{"ref": "git:candidate", "sha256": "b" * 64}],
+                "findings": [],
+                "evidence_manifest": evidence["path"],
+                "isolation_attestation": None,
+                "bootstrap_evidence": [],
+                "risk_acceptance_confirmation_id": "C-REVIEW-RISK",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    run_controller(
+        project,
+        "plan",
+        "independent-review",
+        "record",
+        "--manifest",
+        str(review_manifest),
+        "--expected-revision",
+        "2",
+        "--turn-receipt-sha256",
+        review_turn_sha256,
+        "--expected-intake-sha256",
+        review_intake_sha256,
+    )
+    basis_sha256 = cast(str, evidence["sha256"])
+    run_controller(
+        project,
+        "plan",
+        "confirmation",
+        "add",
+        "--confirmation-id",
+        "C-REVIEW-RISK",
+        "--description",
+        "Accept the exact degraded independent-review risk.",
+        "--intervention-kind",
+        "external_authority",
+        "--blocks",
+        "task:T-001",
+        "--blocks",
+        "activation",
+        "--blocks",
+        "route",
+        "--basis-ref",
+        f"evidence:{evidence['path']}",
+        "--basis-sha256",
+        basis_sha256,
+        "--expected-revision",
+        "3",
+    )
+    proposal, _manifest, turn_sha256 = issue_intake(
+        project,
+        session_id=session_id,
+        turn_id="turn-review-risk-decision",
+        decision="proceed",
+        targets=["task:T-001", "activation", "route"],
+        expected_revision=4,
+    )
+    frontmatter = read_plan_frontmatter(project, plan_id)
+    records = cast(
+        list[dict[str, object]],
+        cast(dict[str, object], frontmatter["intake"])["records"],
+    )
+    intake_sha256 = cast(str, records[-1]["record_sha256"])
+    fabricated = run_controller(
+        project,
+        "plan",
+        "confirm",
+        "--confirmation-id",
+        "C-REVIEW-RISK",
+        "--ref",
+        "user:fabricated-review-risk-decision",
+        "--evidence-sha256",
+        basis_sha256,
+        "--expected-revision",
+        "5",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+        check=False,
+    )
+    accepted = run_controller(
+        project,
+        "plan",
+        "confirm",
+        "--confirmation-id",
+        "C-REVIEW-RISK",
+        "--ref",
+        cast(str, proposal["request_ref"]),
+        "--evidence-sha256",
+        basis_sha256,
+        "--expected-revision",
+        "5",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+    )
+    started = run_controller(
+        project,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-revision",
+        "6",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+    )
+    revised = read_plan_frontmatter(project, plan_id)
+    confirmations = cast(
+        list[dict[str, object]],
+        cast(dict[str, object], revised["confirmations"])["required"],
+    )
+    risk = next(item for item in confirmations if item["id"] == "C-REVIEW-RISK")
+
+    assert "CONFIRMATION_REF_CURRENT_TURN_REQUIRED" in fabricated.stderr
+    assert "CONFIRMATION_DECIDED C-REVIEW-RISK accepted" in accepted.stdout
+    assert "TASK_UPDATED T-001 in_progress" in started.stdout
+    assert risk["ref"] == proposal["request_ref"]
+
+
 def test_turn_hook_hashes_exact_utf8_prompt_and_atomically_replaces(
     tmp_path: Path,
 ) -> None:
@@ -1591,6 +1825,126 @@ def test_basis_change_invalidates_prior_intake(tmp_path: Path) -> None:
 
     assert blocked.returncode == 2
     assert "INTAKE_BASIS_STALE" in blocked.stderr
+
+
+def test_route_proceed_crosses_ready_tasks_and_evidence_until_structure_changes(
+    tmp_path: Path,
+) -> None:
+    """One route decision remains valid across volatile progress, but not contract structure."""
+    project, session_id = prepare_admitted_project(tmp_path)
+    _proposal, _manifest, turn_sha256 = issue_intake(
+        project,
+        session_id=session_id,
+        turn_id="turn-route-proceed",
+        decision="proceed",
+        targets=["route"],
+        expected_revision=1,
+    )
+    frontmatter = read_plan_frontmatter(project, "PLAN-20260729-001")
+    intake = cast(dict[str, object], frontmatter["intake"])
+    record = cast(dict[str, object], cast(list[object], intake["records"])[-1])
+    intake_sha256 = cast(str, record["record_sha256"])
+
+    def task_transition(action: str, task_id: str, revision: int) -> None:
+        run_controller(
+            project,
+            "task",
+            action,
+            "--task-id",
+            task_id,
+            "--expected-revision",
+            str(revision),
+            "--turn-receipt-sha256",
+            turn_sha256,
+            "--expected-intake-sha256",
+            intake_sha256,
+        )
+
+    task_transition("start", "T-001", 2)
+    task_transition("verify", "T-001", 3)
+    task_transition("start", "T-002", 4)
+    evidence_input = project / "route-validation-evidence.json"
+    evidence_input.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "work-governance-evidence",
+                "plan_id": "PLAN-20260729-001",
+                "subject": "validation:V-001",
+                "created_at": "2026-07-31T10:00:00Z",
+                "producer_ref": "runtime:route-proceed-test",
+                "items": [{"ref": "project:validation-result", "sha256": "a" * 64}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    recorded = cast(
+        dict[str, object],
+        json.loads(
+            run_controller(
+                project,
+                "plan",
+                "evidence",
+                "record",
+                "--manifest",
+                str(evidence_input),
+            ).stdout
+        ),
+    )
+    run_controller(
+        project,
+        "plan",
+        "verify-entry",
+        "--field",
+        "validations",
+        "--entry-id",
+        "V-001",
+        "--confirmation",
+        "C-ADMISSION",
+        "--evidence-manifest",
+        cast(str, recorded["path"]),
+        "--expected-revision",
+        "5",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+    )
+    run_controller(
+        project,
+        "plan",
+        "unknown",
+        "add",
+        "--unknown-id",
+        "U-001",
+        "--question",
+        "Which new local constraint applies?",
+        "--owner",
+        "agent",
+        "--impact",
+        "non_blocking",
+        "--expected-evidence",
+        "A local inspection result.",
+        "--expected-revision",
+        "6",
+    )
+    stale = run_controller(
+        project,
+        "task",
+        "verify",
+        "--task-id",
+        "T-002",
+        "--expected-revision",
+        "7",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+        check=False,
+    )
+
+    assert stale.returncode == 2
+    assert "INTAKE_BASIS_STALE" in stale.stderr
 
 
 @pytest.mark.parametrize(

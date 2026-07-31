@@ -13,6 +13,20 @@ Define:
 - artifacts `A-###` and their expected, suspect, quarantined, or final state;
 - confirmation gates for high-impact choices.
 
+Do not model conversation as a gate. A new confirmation must carry an
+`intervention` contract with:
+
+- `kind`: `plan_contract`, `external_authority`, or
+  `deviation_recovery`;
+- `blocks`: exact shared target references;
+- `basis_ref`: the typed contract, authority, or deviation evidence source;
+- `basis_sha256`: required for Plan contracts and deviation evidence so the
+  decision cannot drift.
+
+A requirement question stays a user-owned `U-NNN`; it is not duplicated as a
+confirmation. Generic "continue" gates and gates that block no exact target
+are invalid for new Plans, rollover, reconciliation, and contract revision.
+
 Give every planned validation a provenance class:
 
 - a confirmed obligation;
@@ -40,6 +54,10 @@ Do not turn missing authorization into a plain exclusion. When local delivery
 can finish before a runtime, production, publication, or live-plugin change,
 define delivery and activation separately and preserve the activation decision
 as a route-level gate.
+
+Define future gates against their exact targets without making them the current
+route state. A pending live authority may block `task:T-NNN`, `activation`, and
+`route` while all earlier local tasks remain active and dependency-ready.
 
 Bulk or blanket authorization waives only repeated confirmation prompts; it
 does not waive acceptance evidence. When repeated work can amplify a shared

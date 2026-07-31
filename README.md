@@ -33,6 +33,38 @@ the next step. Plan-controlled work uses its `T-ID`; a No-Plan request uses
 `NO_PLAN`. In-progress, blocked, unverified, and SubAgent-only results cannot be
 reported as completed slices.
 
+## Communication and user intervention
+
+Work Governance separates communication from waiting. Discovery and planning
+stay conversational; execution reports progress and completed slices while
+continuing through every dependency-ready target covered by the current
+route-level `proceed` decision. A task boundary, validation result, phase
+change, or stated next step never creates a "continue" gate.
+
+User input is collected only at four boundaries:
+
+- one blocking user-owned requirement unknown (`U-NNN`);
+- confirmation of the exact material Plan contract;
+- an evidence-proven L5 direction or recovery decision;
+- system, remote, production, destructive, or other external authority.
+
+Agent-owned facts are explored locally. Ordinary failures, evidence gaps, and
+reversible implementation adjustments are diagnosed by the Agent. New
+confirmations use machine-readable `intervention` metadata with a kind, exact
+blocked targets, typed basis, and the required basis digest; generic
+continuation gates are invalid.
+
+`plan status` projects both the intervention-contract readiness and the exact
+current user-intervention state. A future live-switch gate may block only its
+target task, activation, and route while earlier local work remains active.
+
+High-impact Plans also carry per-mode independent review records for Plan
+challenge, artifact review, and evidence audit. The controller preserves
+reviewer isolation, reviewed digests, findings, and evidence; unresolved
+blocker/high findings stop their declared downstream targets. Same-context or
+unproven isolation is `degraded` and cannot support high-impact completion
+without separately accepted, evidence-bound risk authority.
+
 ## Goal-first stop-loss
 
 Work stays anchored to the user-visible target rather than test volume. After
@@ -195,9 +227,14 @@ states, atomic Plan writes, recoverable Plan admission, reconciliation and
 terminal Plan rollover, explicit active-Plan retirement, terminal closeout,
 and immutable evidence records.
 
-Confirmations are created through `plan confirmation add`; decisions are made
-through `plan confirm` and may be
-`accepted` or `declined`. Activation, confirmation-bound exclusions, and
+Confirmations are created through `plan confirmation add` with a typed
+intervention kind, exact blocked targets, and an immutable basis;
+`plan confirmation classify --manifest ...` repairs a readable legacy pending
+gate. Decisions are made through `plan confirm`, may be `accepted` or
+`declined`, and must bind the required basis digest. Schema-v4 gates are always
+created pending; their decisions require a current intake covering the blocked
+targets plus the trusted current turn's exact `request_ref`. Activation,
+confirmation-bound exclusions, and
 terminal-route transitions are bound to their own decision ID; another
 accepted gate cannot authorize them. Activation declared `active` also
 requires typed, current runtime evidence whose `observed_ref` exactly matches
@@ -252,7 +289,20 @@ records. Goal or contract changes use `plan contract revise`; evidence-backed
 method changes that preserve the goal use `plan adapt`. Unknowns are managed
 through `plan unknown add`, `plan unknown classify`, and
 `plan unknown resolve`. `plan status` reports independent contract, intake,
-and unknown-contract state axes.
+unknown-contract, intervention-contract, and exact current user-intervention
+state axes. Required Plan challenge, artifact review, and evidence audit
+records are installed through `plan independent-review record --manifest ...`;
+same-context review is recorded only as degraded and unresolved blocker/high
+findings preserve every declared downstream block. Different context strings
+or caller-authored canonical records do not prove isolation. Verified state
+requires a controller-authenticated platform attestor; because this build has
+no such attestor, it rejects `verified` and permits only the separately
+risk-accepted `degraded` route. Review evidence bytes are revalidated before
+any target release. Each degraded record reserves one exact risk-confirmation
+ID, rejects any pre-existing ID, and can be released only when that same ID is
+then created pending and decided through current-turn `plan confirm`; the controller never scans
+for a matching accepted authority. Bootstrap mappings accept only canonical
+evidence whose subject equals the mapped target.
 
 Missing authority for a live action creates a pending confirmation and keeps
 the project route open. It cannot be converted into an absolute no-next claim

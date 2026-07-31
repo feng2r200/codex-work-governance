@@ -42,6 +42,18 @@ component, and the recovery condition.
   excludes only local runtime content.
 - High-impact, destructive, remote, production, data, structure-revision, and
   substantive rollback decisions require confirmation before action.
+- Communication is not waiting. Discuss and summarize frequently during
+  discovery, then continue across every dependency-ready execution slice.
+  Progress reports, completed-slice summaries, phase transitions, and a stated
+  next step do not create confirmation gates.
+- Collect user input only for a blocking user-owned requirement unknown, the
+  exact Plan contract that establishes a material solution, an
+  evidence-proven material direction change in L5, or authority outside the
+  Agent's local boundary. Investigate agent-owned facts and diagnose ordinary
+  execution failures without asking the user.
+- Never ask a decision-free continuation question such as "should I continue"
+  or "confirm the next phase." `下一步` is information unless it names a real
+  user-owned decision and its blocked targets.
 - Bulk or blanket authorization waives only repeated confirmation prompts. When
   repeated work can amplify a shared defect, keep the pilot task and validation
   as explicit dependencies; authorization cannot satisfy the pilot gate. Freeze
@@ -164,7 +176,11 @@ Non-simple No-Plan work shows the reply-level `INTAKE_RECEIPT` but does not call
 the Plan controller or persist an intake record. Advancing task, obligation,
 validation, artifact, delivery, activation, adaptation, and closeout commands
 require that turn digest plus the latest `expected_intake_sha256`. Never reuse
-a prior turn decision.
+a prior turn decision. One route-level `proceed` decision remains the basis for
+all dependency-ready tasks, validations, and evidence transitions in the same
+user turn. Reclassify only when a new turn, contract revision, unknown, task,
+or route-structure change invalidates that basis; a task or phase boundary
+alone does not.
 
 ## SubAgent Delegation
 
