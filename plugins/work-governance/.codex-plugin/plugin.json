@@ -1,6 +1,6 @@
 {
   "name": "work-governance",
-  "version": "1.0.4+codex.20260730081627",
+  "version": "1.0.4+codex.20260731031511",
   "description": "Govern Codex work with trusted per-turn intake and one versioned local Plan authority.",
   "author": {
     "name": "Work Governance Contributors"
