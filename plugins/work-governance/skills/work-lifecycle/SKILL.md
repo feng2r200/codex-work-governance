@@ -14,6 +14,13 @@ component, and the recovery condition.
 
 - Communicate in the user's requested language and lead with the conclusion.
 - Treat the current user instruction as the highest task authority.
+- When a new request arrives while a Plan is active, classify it against the
+  user-visible goal before changing the Plan. Run unrelated bounded work as a
+  `NO_PLAN_INTERRUPTION`, preserve the parent Plan/task/revision/next-action
+  resume anchor, and resume it automatically when the interruption ends.
+  Reprioritize dependency-ready tasks for aligned non-material requests; adapt
+  or revise the Plan only for aligned material change. Apply the same routing
+  test to findings from slice audits and validation.
 - Keep root `AGENTS.md` thin: route and hard constraints live there; reusable
   method lives in this plugin.
 - Use the receipt-bound runtime `workctl.py` for deterministic Plan mutations.
@@ -68,6 +75,12 @@ component, and the recovery condition.
   agent owns the Plan, confirmation gates, and logs.
 - Completion, fix, test-pass, commit-ready, or merge-ready claims require fresh
   evidence from the current run.
+- Treat reviewer acquisition failure as `VALIDATOR_UNAVAILABLE`, not as a
+  confidence judgment about the work. After one initial attempt and at most one
+  materially changed retry, a deterministic self-challenge may release only
+  ordinary reversible local tasks; concrete blocker/high findings and delivery,
+  activation, route, confirmation-bound, or other high-impact targets remain
+  fail-closed.
 - Keep a goal anchor before repeating an action or expanding validation: restate
   the user-visible target, the unresolved fact, and the next action expected to
   change evidence. Tests and coverage are support tools, not the target.
@@ -189,10 +202,20 @@ alone does not.
 
 The Plan keeps one bounded `intake.current` anchor and a digest/count summary.
 Complete canonical records live in ignored, project-local, content-addressed
-history. A repeated request is idempotent unless a changed decision basis
-materially moves `ask` or `explore` to `proceed`; that transition records an
-explicit supersession link. Rationale-only or same-basis mutation still fails
-closed.
+history. A repeated request is idempotent unless a changed controller-bound
+decision basis either materially moves `ask` or `explore` to `proceed`, or
+refreshes an otherwise identical `proceed` decision after a controller-caused
+Plan revision. Every refresh records an explicit supersession link; direct
+unbound edits, rationale changes, target changes, stale turns, and same-basis
+mutation still fail closed.
+
+An accepted external gate records authority but never claims the external
+action happened. Reconcile a live exclusion only after successful activation
+evidence and only through its explicit `activation.resolves_exclusions`
+binding, with exact single-match compatibility for legacy Plans. When the
+route, handoff, evidence, intake, and accepted confirmation are all ready, use
+the atomic terminal closeout path instead of manufacturing a decision-free
+extra user turn.
 
 ## SubAgent Delegation
 

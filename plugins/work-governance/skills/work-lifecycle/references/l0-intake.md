@@ -32,6 +32,24 @@ Classify ownership before deciding:
   dependency-ready target in the current turn instead of asking between
   slices.
 
+When a new request arrives during an active Plan, classify its alignment with
+the goal before treating it as a deviation:
+
+- unrelated, bounded work is a `NO_PLAN_INTERRUPTION`; preserve the parent
+  Plan ID, task, revision, and next-action resume anchor, finish the bounded
+  request without mutating Plan structure, then resume automatically;
+- aligned work that changes only execution order or priority stays inside the
+  current Plan and reprioritizes the dependency-ready queue without a contract
+  revision;
+- aligned work that materially changes obligations, scope, behavior, cost,
+  safety, delivery form, or acceptance evidence adapts or revises the Plan on
+  the strongest current authority.
+
+Apply the same classifier to audit findings discovered between slices. The
+Plan is a revisable route map, not a requirement that useful work conform to
+an obsolete ordering. Ask only when the aligned material change is itself
+ambiguous or crosses a real confirmation boundary.
+
 The trusted `UserPromptSubmit` context binds this intake to one current-turn
 receipt. Except for a simple low-risk No-Plan answer, explicitly choose:
 
@@ -67,10 +85,12 @@ The active Plan stores one bounded `intake.current` record plus the immutable
 history head and count. Full canonical records are content-addressed under the
 ignored project-local runtime history. Protocol-v1 Plans remain readable and
 migrate on their next successful intake write. A repeated request is an exact
-replay unless a changed decision basis materially transitions `ask` or
-`explore` to `proceed`; the new record must link the superseded record.
-Changing only rationale, targets, or other content under the same basis is a
-conflict and fails closed.
+replay unless a changed decision basis materially transitions
+`ask|explore -> proceed`, or refreshes the same `proceed` after a
+controller-authorized structural change. A proceed refresh must preserve
+request bytes, targets, rationale, and current-unknown binding; the new record
+links the latest superseded record. Changing only rationale, targets, or other
+content under the same basis is a conflict and fails closed.
 
 When a current user instruction or decision will become future execution
 authority, capture its strongest available provenance. Prefer

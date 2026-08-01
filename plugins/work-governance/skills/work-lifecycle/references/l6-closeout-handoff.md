@@ -66,6 +66,15 @@ bound tasks are skipped, exclusion disposition is resolved, and activation is
 complete delivery, no unresolved exclusion disposition, and resolved
 activation with typed decision or runtime evidence.
 
+When all non-route readiness conditions already hold and the current route gate
+is resolved, use
+`plan complete --finalize-route --confirmation C-... --evidence-manifest ...`
+to terminalize route and handoff and complete the Plan in one atomic write. Do
+not insert a separate route-adaptation write that stales the current intake and
+forces a decision-free extra user turn. The command still requires current-turn
+intake, exact confirmation binding, independent route release, activation and
+exclusion resolution, and canonical closeout evidence.
+
 Do not reopen or structurally revise a completed terminal Plan to admit later
 work. When a distinct route is required, prepare a new schema-v4 Plan contract
 and use the digest-bound `plan rollover apply` flow. The completed predecessor
