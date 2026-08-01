@@ -98,3 +98,5 @@ def test_public_contract_explains_proposal_and_executed_hook_boundaries() -> Non
     assert "it never places proposals under the canonical Plan root" in readme_flat
     assert "bounded SessionStart source and session identifier" in privacy_flat
     assert "migration does not apply it or accept its confirmations" in privacy_flat
+    assert "one session cannot supersede another" in privacy_flat
+    assert "raw prompt content is not copied into those records" in privacy_flat

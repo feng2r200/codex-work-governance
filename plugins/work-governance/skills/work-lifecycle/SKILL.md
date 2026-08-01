@@ -17,15 +17,18 @@ component, and the recovery condition.
 - Keep root `AGENTS.md` thin: route and hard constraints live there; reusable
   method lives in this plugin.
 - Use the receipt-bound runtime `workctl.py` for deterministic Plan mutations.
-- Require the current SessionStart context and
-  `.work-governance/bootstrap-state.json` to report `READY` for the exact
+- Require the current SessionStart context and its emitted session-scoped
+  bootstrap receipt to report `READY` for the exact
   Plugin build, `session_id`, `runtime_bundle_ref`, `controller_ref`,
   `controller_sha256`, and `receipt_sha256` before Plan-controlled work. If the hook is
   untrusted, disabled, skipped by managed policy, absent, or stale, report
   `ENVIRONMENT_BLOCKED` and the recovery condition.
-- Treat `.work-governance/runtime/bootstrap-capability.json` as a separate,
+- Treat the emitted session-scoped bootstrap capability as a separate,
   SessionStart-only authority for exact layout migration or recovery commands.
   It never authorizes Plan-controlled work or satisfies the READY requirement.
+- Treat `.work-governance/bootstrap-state.json` only as a legacy compatibility
+  surface. It never overrides the exact session-scoped receipt emitted by the
+  current hook.
 - Do not create a Plan, index, or log entry for No-Plan tasks. Layout bootstrap
   may create `.work-governance/version.yaml` and ignored local infrastructure.
 - Keep `.work-governance/_Plan/index.yaml` as the active Plan locator and
@@ -147,9 +150,10 @@ uv run --no-project --offline --cache-dir .work-governance/cache/uv \
 Never derive a controller path from the repository, current branch, Plugin
 cache, or this skill's source path. Reuse the same absolute controller and
 receipt digest for every command in this session; pass `--receipt-sha256`
-before the command domain. A newer SessionStart supersedes the digest and old
-session writes fail closed; controller commands require `LAYOUT_READY` except
-for layout inspection/recovery. A blocked SessionStart may inject an exact
+before the command domain. A replacement SessionStart in the same session
+supersedes the digest when its trusted runtime identity changes; a different
+session has its own receipt and cannot supersede this one. All controller commands require `LAYOUT_READY`
+except for layout inspection/recovery. A blocked SessionStart may inject an exact
 capability-bound `layout_command_prefix`; use it only for the reported layout
 recovery, never for Plan writes. An active schema-v3 Plan reports
 `PLAN_CONTRACT_UPGRADE_REQUIRED` until `plan contract upgrade apply|recover`
@@ -167,7 +171,8 @@ add|resolve` for their separate responsibilities. Terminal
 evidence must be recorded under `.work-governance/_Plan/.evidence/` and passed
 by `--evidence-manifest`; `.work-governance/logs/` is local process detail only.
 All mutations still use the stable `.work-governance/workctl.lock`, expected
-revision checks, candidate validation, and atomic writes.
+revision checks, candidate validation, bounded lock acquisition with holder
+diagnostics, and atomic writes.
 
 `UserPromptSubmit` separately injects the current `turn_receipt_sha256`.
 For Plan-controlled work, run controller `intake receipt`, state an explicit
@@ -181,6 +186,13 @@ all dependency-ready tasks, validations, and evidence transitions in the same
 user turn. Reclassify only when a new turn, contract revision, unknown, task,
 or route-structure change invalidates that basis; a task or phase boundary
 alone does not.
+
+The Plan keeps one bounded `intake.current` anchor and a digest/count summary.
+Complete canonical records live in ignored, project-local, content-addressed
+history. A repeated request is idempotent unless a changed decision basis
+materially moves `ask` or `explore` to `proceed`; that transition records an
+explicit supersession link. Rationale-only or same-basis mutation still fails
+closed.
 
 ## SubAgent Delegation
 

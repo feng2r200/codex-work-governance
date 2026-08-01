@@ -41,6 +41,7 @@ LOCAL_DIRECTORIES = (
 RECEIPT_NAME = "bootstrap-state.json"
 CLAIM_NAME = "bootstrap-claim.json"
 CAPABILITY_NAME = "bootstrap-capability.json"
+SESSIONS_DIR_NAME = "sessions"
 LEGACY_ADOPTION_NAME = "legacy-adoption.json"
 FAILURE_JOURNAL_NAME = "bootstrap-failure-journal.json"
 BOOTSTRAP_STAGING_NAME = ".work-governance.bootstrap"
@@ -1352,7 +1353,6 @@ def project_input_digest(project_root: Path) -> str:
         ("legacy-plan", legacy_plan_path(project_root)),
         ("version", version),
         ("ignore", governance / ".gitignore"),
-        ("runtime", governance / "runtime"),
     ]
     if not version.is_file():
         paths.extend(
@@ -1362,7 +1362,15 @@ def project_input_digest(project_root: Path) -> str:
                 ("claude", project_root / "CLAUDE.md"),
             ]
         )
-    return stable_digest([{"name": name, "manifest": path_manifest(path)} for name, path in paths])
+    manifests = [{"name": name, "manifest": path_manifest(path)} for name, path in paths]
+    runtime_manifest = [
+        entry
+        for entry in path_manifest(governance / "runtime")
+        if entry.get("path") != SESSIONS_DIR_NAME
+        and not str(entry.get("path", "")).startswith(f"{SESSIONS_DIR_NAME}/")
+    ]
+    manifests.append({"name": "runtime", "manifest": runtime_manifest})
+    return stable_digest(manifests)
 
 
 def project_output_digest(project_root: Path) -> str:
@@ -1415,6 +1423,72 @@ def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def session_state_dir(governance: Path, session_id: str) -> Path:
+    """Return one symlink-safe project-local session state directory."""
+    session_dir = governance / "runtime" / SESSIONS_DIR_NAME / session_id
+    reject_symlink_components(governance.parent, session_dir)
+    session_dir.mkdir(parents=True, exist_ok=True)
+    if session_dir.is_symlink() or not session_dir.is_dir():
+        raise BootstrapError("GOVERNANCE_SESSION_STATE_INVALID")
+    return session_dir
+
+
+def session_receipt_path(governance: Path, session_id: str) -> Path:
+    """Return the canonical READY receipt for one Codex session."""
+    return session_state_dir(governance, session_id) / RECEIPT_NAME
+
+
+def session_capability_path(governance: Path, session_id: str) -> Path:
+    """Return the bootstrap-only capability for one Codex session."""
+    return session_state_dir(governance, session_id) / CAPABILITY_NAME
+
+
+def ready_receipt_is_reusable(
+    prior: Mapping[str, Any] | None,
+    candidate: Mapping[str, Any],
+) -> bool:
+    """Keep a same-session receipt stable when its trusted runtime identity is stable."""
+    if not isinstance(prior, Mapping):
+        return False
+    stable_fields = {
+        "schema_version",
+        "bootstrap_contract_version",
+        "action_revision",
+        "status",
+        "plugin_build",
+        "plugin_manifest_sha256",
+        "layout_state",
+        "session_id",
+        "runtime_bundle_ref",
+        "runtime_manifest_sha256",
+        "controller_ref",
+        "controller_sha256",
+        "lifecycle_ref",
+        "lifecycle_sha256",
+    }
+    return all(prior.get(field) == candidate.get(field) for field in stable_fields)
+
+
+def install_legacy_ready_receipt_if_absent(
+    governance: Path,
+    payload: Mapping[str, Any],
+) -> None:
+    """Maintain the singleton compatibility receipt without superseding its session."""
+    legacy = governance / RECEIPT_NAME
+    reject_symlink_components(governance.parent, legacy)
+    if legacy.exists() or legacy.is_symlink():
+        if legacy.is_symlink() or not legacy.is_file():
+            raise BootstrapError("GOVERNANCE_BOOTSTRAP_RECEIPT_INVALID")
+        current = load_receipt(legacy)
+        if (
+            current is not None
+            and current.get("status") == "READY"
+            and current.get("session_id") != payload.get("session_id")
+        ):
+            return
+    atomic_write_json(legacy, payload)
 
 
 def runtime_bundle_payload(
@@ -1566,19 +1640,42 @@ def invalidate_bootstrap_receipt(project_root: Path, path: Path) -> None:
         os.close(directory_descriptor)
 
 
+def invalidate_legacy_ready_for_session(
+    governance: Path,
+    session_id: Optional[str],
+) -> None:
+    """Invalidate legacy compatibility only when it belongs to the failing session."""
+    if session_id is None:
+        return
+    legacy = governance / RECEIPT_NAME
+    current = load_receipt(legacy)
+    if (
+        current is not None
+        and current.get("status") == "READY"
+        and current.get("session_id") == session_id
+    ):
+        invalidate_bootstrap_receipt(governance.parent, legacy)
+
+
 def json_payload_bytes(payload: Mapping[str, Any]) -> bytes:
     """Return the exact bytes used by atomic JSON records."""
     return (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
-def recover_blocked_failure(governance: Path) -> None:
+def recover_blocked_failure(
+    governance: Path,
+    *,
+    receipt_path: Optional[Path] = None,
+    journal_path: Optional[Path] = None,
+) -> None:
     """Finish an interrupted blocked evidence/receipt installation."""
     project_root = governance.parent
     runtime = governance / "runtime"
     reject_symlink_components(project_root, runtime)
     if not runtime.is_dir():
         raise BootstrapError("BOOTSTRAP_FAILURE_RUNTIME_INVALID")
-    journal = runtime / FAILURE_JOURNAL_NAME
+    target_receipt = receipt_path or governance / RECEIPT_NAME
+    journal = journal_path or runtime / FAILURE_JOURNAL_NAME
     reject_symlink_components(project_root, journal)
     if not journal.exists() and not journal.is_symlink():
         return
@@ -1625,8 +1722,11 @@ def recover_blocked_failure(governance: Path) -> None:
     ):
         raise BootstrapError("BOOTSTRAP_FAILURE_JOURNAL_INVALID")
     atomic_write_json(evidence_path, evidence_payload)
-    atomic_write_json(governance / RECEIPT_NAME, receipt_payload)
-    validate_blocked_record(governance)
+    atomic_write_json(target_receipt, receipt_payload)
+    if target_receipt == governance / RECEIPT_NAME:
+        validate_blocked_record(governance)
+    elif load_receipt(target_receipt) != receipt_payload:
+        raise BootstrapError("BOOTSTRAP_FAILURE_RECEIPT_INVALID")
     journal.unlink()
     directory_descriptor = os.open(str(journal.parent), os.O_RDONLY)
     try:
@@ -1646,6 +1746,8 @@ def persist_blocked_failure(
     records: Sequence[Mapping[str, Any]],
     hook_source: Optional[str],
     session_id: Optional[str],
+    receipt_path: Optional[Path] = None,
+    journal_path: Optional[Path] = None,
 ) -> str:
     """Journal, install, and validate one claim-bound uncommitted failure record."""
     project_root = governance.parent
@@ -1689,10 +1791,18 @@ def persist_blocked_failure(
         "evidence_payload": evidence_payload,
         "receipt_payload": receipt_payload,
     }
-    atomic_write_json(governance / "runtime" / FAILURE_JOURNAL_NAME, journal_payload)
+    target_receipt = receipt_path or governance / RECEIPT_NAME
+    target_journal = journal_path or governance / "runtime" / FAILURE_JOURNAL_NAME
+    reject_symlink_components(project_root, target_receipt)
+    reject_symlink_components(project_root, target_journal)
+    atomic_write_json(target_journal, journal_payload)
     if os.environ.get("WORK_GOVERNANCE_TEST_INTERRUPT_FAILURE_AFTER_JOURNAL") == "1":
         raise BootstrapError("BOOTSTRAP_TEST_INTERRUPTED_FAILURE_INSTALL")
-    recover_blocked_failure(governance)
+    recover_blocked_failure(
+        governance,
+        receipt_path=target_receipt,
+        journal_path=target_journal,
+    )
     return evidence_ref
 
 
@@ -1927,6 +2037,7 @@ def main() -> int:
     """Execute one incremental bootstrap and always return short hook context."""
     governance: Optional[Path] = None
     receipt_path: Optional[Path] = None
+    failure_journal_path: Optional[Path] = None
     evidence: Optional[Path] = None
     build: Optional[str] = None
     manifest_digest: Optional[str] = None
@@ -1964,10 +2075,29 @@ def main() -> int:
             manifest_digest=manifest_digest,
         )
         controller = project_root / str(runtime_bundle["controller_ref"])
-        receipt_path = governance / RECEIPT_NAME
+        safe_session_id = session_id or "session-unavailable"
+        committed_layout = (governance / "version.yaml").is_file()
+        receipt_path = (
+            session_receipt_path(governance, safe_session_id)
+            if committed_layout
+            else governance / RECEIPT_NAME
+        )
+        failure_journal_path = (
+            receipt_path.parent / FAILURE_JOURNAL_NAME
+            if committed_layout
+            else governance / "runtime" / FAILURE_JOURNAL_NAME
+        )
+        if committed_layout:
+            recover_blocked_failure(
+                governance,
+                receipt_path=receipt_path,
+                journal_path=failure_journal_path,
+            )
         evidence = evidence_path(governance)
         input_digest = project_input_digest(project_root)
         receipt = load_receipt(receipt_path)
+        if receipt is None:
+            receipt = load_receipt(governance / RECEIPT_NAME)
         bootstrap_receipt = {
             **base_receipt,
             "schema_version": 2,
@@ -1978,10 +2108,14 @@ def main() -> int:
             "project_output_sha256": project_output_digest(project_root),
             "layout_state": "BOOTSTRAPPING",
             "evidence_ref": f"evidence:{evidence.relative_to(project_root).as_posix()}",
-            "session_id": session_id or "session-unavailable",
+            "session_id": safe_session_id,
             **runtime_bundle,
         }
-        capability_path = governance / "runtime" / CAPABILITY_NAME
+        capability_path = (
+            session_capability_path(governance, safe_session_id)
+            if committed_layout
+            else governance / "runtime" / CAPABILITY_NAME
+        )
         atomic_write_json(capability_path, bootstrap_receipt)
         bootstrap_receipt_sha256 = sha256_file(capability_path)
         layout_state = run_bootstrap(
@@ -2005,18 +2139,27 @@ def main() -> int:
             "project_output_sha256": project_output_digest(project_root),
             "layout_state": layout_state,
             "evidence_ref": f"evidence:{evidence.relative_to(project_root).as_posix()}",
-            "session_id": session_id or "session-unavailable",
+            "session_id": safe_session_id,
             **runtime_bundle,
         }
-        atomic_write_json(
-            evidence,
-            {
-                **ready_receipt,
-                "hook_source": hook_input.get("source"),
-                "commands": records,
-            },
-        )
-        atomic_write_json(receipt_path, ready_receipt)
+        canonical_receipt_path = session_receipt_path(governance, safe_session_id)
+        prior_ready = load_receipt(canonical_receipt_path)
+        if prior_ready is None and receipt is not None and receipt.get("status") == "READY":
+            prior_ready = receipt
+        if ready_receipt_is_reusable(prior_ready, ready_receipt):
+            ready_receipt = cast(Dict[str, Any], prior_ready)
+        else:
+            atomic_write_json(
+                evidence,
+                {
+                    **ready_receipt,
+                    "hook_source": hook_input.get("source"),
+                    "commands": records,
+                },
+            )
+        atomic_write_json(canonical_receipt_path, ready_receipt)
+        install_legacy_ready_receipt_if_absent(governance, ready_receipt)
+        receipt_path = canonical_receipt_path
         receipt_relative = receipt_path.relative_to(project_root).as_posix()
         receipt_sha256 = sha256_file(receipt_path)
         uv_path = shutil.which("uv") or "uv"
@@ -2049,6 +2192,8 @@ def main() -> int:
         detail = failed_command_detail(records)
         blocked_evidence_ref = "unavailable"
         try:
+            if governance is not None:
+                invalidate_legacy_ready_for_session(governance, session_id)
             if (
                 governance is not None
                 and isinstance(build, str)
@@ -2065,6 +2210,8 @@ def main() -> int:
                     records=records,
                     hook_source=hook_source,
                     session_id=session_id,
+                    receipt_path=receipt_path,
+                    journal_path=failure_journal_path,
                 )
             elif governance is not None and receipt_path is not None:
                 invalidate_bootstrap_receipt(governance.parent, receipt_path)
