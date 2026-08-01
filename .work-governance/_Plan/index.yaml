@@ -1,27 +1,7 @@
 schema_version: 1
-active_plan_id: PLAN-20260801-001
+active_plan_id: PLAN-20260801-002
 plans:
-- id: PLAN-20260729-001
-  path: PLAN-20260729-001.md
-  title: Work Governance 1.0.4 per-turn intake clarification contract
-  created_at: '2026-07-29T13:12:38Z'
-- id: PLAN-20260730-001
-  path: PLAN-20260730-001.md
-  title: Composed reconciliation and schema-v4 contract upgrade controller
-  created_at: '2026-07-30T07:34:42Z'
-- id: PLAN-20260731-001
-  path: PLAN-20260731-001.md
-  title: Local main integration and work-governance Plugin activation
-  created_at: '2026-07-31T02:37:45Z'
-- id: PLAN-20260731-002
-  path: PLAN-20260731-002.md
-  title: User intervention governance and independent audit contracts
-  created_at: '2026-07-31T05:00:00Z'
-- id: PLAN-20260731-003
-  path: PLAN-20260731-003.md
-  title: Work Governance 1.0.5 local milestone release
-  created_at: '2026-07-31T09:13:04Z'
-- id: PLAN-20260801-001
-  path: PLAN-20260801-001.md
-  title: Work Governance session-safe receipt and intake stabilization
-  created_at: '2026-08-01T06:21:37Z'
+- id: PLAN-20260801-002
+  path: PLAN-20260801-002.md
+  title: Work Governance flow alignment, reviewer availability, and atomic closeout
+  created_at: '2026-08-01T08:46:41Z'

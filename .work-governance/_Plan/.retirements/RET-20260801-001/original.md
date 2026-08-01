@@ -2,11 +2,11 @@
 schema_version: 4
 plan_id: PLAN-20260801-001
 title: Work Governance session-safe receipt and intake stabilization
-status: retired
+status: active
 mode: autonomous
-revision: 49
+revision: 48
 created_at: '2026-08-01T06:21:37Z'
-updated_at: '2026-08-01T08:47:37+00:00'
+updated_at: '2026-08-01T08:40:50+00:00'
 goal:
   statement: Fix the confirmed non-tmux execution-flow defects in an isolated Git
     worktree, produce and genuinely exercise an immutable Work Governance 1.0.6 Plugin
@@ -133,18 +133,6 @@ confirmations:
       - route
       basis_ref: project:confirmation-basis/79f4203a0157b1455799e9f12d2d1549c70a5b501ed423c218387cb5edf0a690
       basis_sha256: 79f4203a0157b1455799e9f12d2d1549c70a5b501ed423c218387cb5edf0a690
-  - id: C-PLAN-RETIREMENT
-    description: Approve retirement of the exact obsolete Plan without claiming completion.
-    status: accepted
-    ref: user:session/019fbbe3-53ee-75c0-8a5f-db76f0c68349/turn/019fbc79-97ac-7ac0-a764-d389ff72fe8b/sha256/50b21f7b0afde50475c687dc8b6bb2135a8430a268246aaef32340cc1b2a8718
-    accepted_at: '2026-08-01T08:46:41Z'
-    evidence_sha256: dc35ec86820e65e0f96c9067056a9a6b493f79aa17a5c629c8c244b35a624aab
-    intervention:
-      kind: external_authority
-      blocks:
-      - route
-      basis_ref: project:confirmation-basis/dc35ec86820e65e0f96c9067056a9a6b493f79aa17a5c629c8c244b35a624aab
-      basis_sha256: dc35ec86820e65e0f96c9067056a9a6b493f79aa17a5c629c8c244b35a624aab
 unknowns: []
 obligations:
 - id: O-001
@@ -712,15 +700,6 @@ revision_history:
   kind: intake-recorded
   changed_at: '2026-08-01T08:40:50+00:00'
   rationale: Record intake for user:session/019fbbe3-53ee-75c0-8a5f-db76f0c68349/turn/019fbc79-97ac-7ac0-a764-d389ff72fe8b/sha256/50b21f7b0afde50475c687dc8b6bb2135a8430a268246aaef32340cc1b2a8718.
-- revision: 49
-  kind: retirement
-  changed_at: '2026-08-01T08:47:37+00:00'
-  rationale: The 1.0.6 candidate was delivered, installed, activated, and verified,
-    but the 1.0.6 controller cannot truthfully reconcile its accepted live exclusion
-    and terminal route in the same trusted request without demanding a meaningless
-    extra user turn. Preserve the verified activation and retire the obsolete bookkeeping
-    surface so the explicitly confirmed 1.0.7 repair Plan can become the sole authority.
-  confirmation_id: C-PLAN-RETIREMENT
 intake:
   protocol_version: 2
   current:
@@ -740,45 +719,6 @@ intake:
     storage: project-local-immutable
     head_sha256: c8f18f2f46aa2f258da033813dc502b0c2ceb069e67a36713f9755edf1ee15ac
     record_count: 3
-retirement:
-  retirement_id: RET-20260801-001
-  reason: The 1.0.6 candidate was delivered, installed, activated, and verified, but
-    the 1.0.6 controller cannot truthfully reconcile its accepted live exclusion and
-    terminal route in the same trusted request without demanding a meaningless extra
-    user turn. Preserve the verified activation and retire the obsolete bookkeeping
-    surface so the explicitly confirmed 1.0.7 repair Plan can become the sole authority.
-  retired_at: '2026-08-01T08:46:41Z'
-  proposal_sha256: dc35ec86820e65e0f96c9067056a9a6b493f79aa17a5c629c8c244b35a624aab
-  original_path: .work-governance/_Plan/.retirements/RET-20260801-001/original.md
-  original_sha256: 42c481cccc265860c3f4312016000e2ba0b82eb0f77b5d5d684634fbf560c818
-  confirmation:
-    id: C-PLAN-RETIREMENT
-    ref: user:session/019fbbe3-53ee-75c0-8a5f-db76f0c68349/turn/019fbc79-97ac-7ac0-a764-d389ff72fe8b/sha256/50b21f7b0afde50475c687dc8b6bb2135a8430a268246aaef32340cc1b2a8718
-    evidence_sha256: dc35ec86820e65e0f96c9067056a9a6b493f79aa17a5c629c8c244b35a624aab
-  dispositions:
-    exclusions:
-    - description: Install, reinstall, enable, disable, or switch the live Work Governance
-        Plugin, marketplace registration, Codex configuration, or current shared Plugin
-        cache before C-LIVE-SWITCH.
-      disposition: superseded
-      reason: C-LIVE-SWITCH was accepted and exact 1.0.6 activation evidence is already
-        preserved; only the stale exclusion bookkeeping remains.
-      resolution_ref: user:session/019fbbe3-53ee-75c0-8a5f-db76f0c68349/turn/019fbc79-97ac-7ac0-a764-d389ff72fe8b/sha256/50b21f7b0afde50475c687dc8b6bb2135a8430a268246aaef32340cc1b2a8718
-    activation:
-      disposition: preserved
-      reason: Exact 1.0.6 live activation remains a verified historical fact and is
-        not undone by this retirement.
-      resolution_ref: user:session/019fbbe3-53ee-75c0-8a5f-db76f0c68349/turn/019fbc79-97ac-7ac0-a764-d389ff72fe8b/sha256/50b21f7b0afde50475c687dc8b6bb2135a8430a268246aaef32340cc1b2a8718
-    route:
-      disposition: superseded
-      reason: The obsolete 1.0.6 route is replaced by the confirmed 1.0.7 flow-repair
-        route and is not represented as falsely completed.
-      resolution_ref: user:session/019fbbe3-53ee-75c0-8a5f-db76f0c68349/turn/019fbc79-97ac-7ac0-a764-d389ff72fe8b/sha256/50b21f7b0afde50475c687dc8b6bb2135a8430a268246aaef32340cc1b2a8718
-    handoff:
-      disposition: superseded
-      reason: The 1.0.6 handoff is replaced by the confirmed 1.0.7 implementation
-        and exact-build pre-install gate.
-      resolution_ref: user:session/019fbbe3-53ee-75c0-8a5f-db76f0c68349/turn/019fbc79-97ac-7ac0-a764-d389ff72fe8b/sha256/50b21f7b0afde50475c687dc8b6bb2135a8430a268246aaef32340cc1b2a8718
 ---
 # Work Governance session-safe receipt and intake stabilization
 

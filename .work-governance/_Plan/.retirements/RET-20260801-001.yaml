@@ -1,0 +1,63 @@
+schema_version: 1
+kind: plan-retirement-journal
+retirement_id: RET-20260801-001
+status: committed
+created_at: '2026-08-01T08:47:37+00:00'
+updated_at: '2026-08-01T08:47:38+00:00'
+source_plan:
+  path: .work-governance/_Plan/PLAN-20260801-001.md
+  plan_id: PLAN-20260801-001
+  revision: 48
+  sha256: 42c481cccc265860c3f4312016000e2ba0b82eb0f77b5d5d684634fbf560c818
+index_baseline:
+  active_plan_id: PLAN-20260801-001
+  sha256: 4252e49d688356e3fdbcda0c5e88ae310c059343c5a8825a097862ec5c6077a0
+reason: The 1.0.6 candidate was delivered, installed, activated, and verified, but
+  the 1.0.6 controller cannot truthfully reconcile its accepted live exclusion and
+  terminal route in the same trusted request without demanding a meaningless extra
+  user turn. Preserve the verified activation and retire the obsolete bookkeeping
+  surface so the explicitly confirmed 1.0.7 repair Plan can become the sole authority.
+dispositions:
+  exclusions:
+  - description: Install, reinstall, enable, disable, or switch the live Work Governance
+      Plugin, marketplace registration, Codex configuration, or current shared Plugin
+      cache before C-LIVE-SWITCH.
+    disposition: superseded
+    reason: C-LIVE-SWITCH was accepted and exact 1.0.6 activation evidence is already
+      preserved; only the stale exclusion bookkeeping remains.
+    resolution_ref: user:session/019fbbe3-53ee-75c0-8a5f-db76f0c68349/turn/019fbc79-97ac-7ac0-a764-d389ff72fe8b/sha256/50b21f7b0afde50475c687dc8b6bb2135a8430a268246aaef32340cc1b2a8718
+  activation:
+    disposition: preserved
+    reason: Exact 1.0.6 live activation remains a verified historical fact and is
+      not undone by this retirement.
+    resolution_ref: user:session/019fbbe3-53ee-75c0-8a5f-db76f0c68349/turn/019fbc79-97ac-7ac0-a764-d389ff72fe8b/sha256/50b21f7b0afde50475c687dc8b6bb2135a8430a268246aaef32340cc1b2a8718
+  route:
+    disposition: superseded
+    reason: The obsolete 1.0.6 route is replaced by the confirmed 1.0.7 flow-repair
+      route and is not represented as falsely completed.
+    resolution_ref: user:session/019fbbe3-53ee-75c0-8a5f-db76f0c68349/turn/019fbc79-97ac-7ac0-a764-d389ff72fe8b/sha256/50b21f7b0afde50475c687dc8b6bb2135a8430a268246aaef32340cc1b2a8718
+  handoff:
+    disposition: superseded
+    reason: The 1.0.6 handoff is replaced by the confirmed 1.0.7 implementation and
+      exact-build pre-install gate.
+    resolution_ref: user:session/019fbbe3-53ee-75c0-8a5f-db76f0c68349/turn/019fbc79-97ac-7ac0-a764-d389ff72fe8b/sha256/50b21f7b0afde50475c687dc8b6bb2135a8430a268246aaef32340cc1b2a8718
+proposal_sha256: dc35ec86820e65e0f96c9067056a9a6b493f79aa17a5c629c8c244b35a624aab
+retirement_confirmation:
+  id: C-PLAN-RETIREMENT
+  description: Approve retirement of the exact obsolete Plan without claiming completion.
+  status: accepted
+  ref: user:session/019fbbe3-53ee-75c0-8a5f-db76f0c68349/turn/019fbc79-97ac-7ac0-a764-d389ff72fe8b/sha256/50b21f7b0afde50475c687dc8b6bb2135a8430a268246aaef32340cc1b2a8718
+  accepted_at: '2026-08-01T08:46:41Z'
+  evidence_sha256: dc35ec86820e65e0f96c9067056a9a6b493f79aa17a5c629c8c244b35a624aab
+  intervention:
+    kind: external_authority
+    blocks:
+    - route
+    basis_ref: project:confirmation-basis/dc35ec86820e65e0f96c9067056a9a6b493f79aa17a5c629c8c244b35a624aab
+    basis_sha256: dc35ec86820e65e0f96c9067056a9a6b493f79aa17a5c629c8c244b35a624aab
+archive_path: .work-governance/_Plan/.retirements/RET-20260801-001/original.md
+staged_plan: .work-governance/_Plan/.retirements/RET-20260801-001/staging/retired-plan.md
+retired_plan_sha256: 2ef99309bdfac6ee5242e21e00ca444b678481be4a86d39b11c22a453f425d5a
+completed_operations:
+- retirement-source-plan
+- retirement-index-removal
