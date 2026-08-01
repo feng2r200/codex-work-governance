@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -41,6 +42,7 @@ RECONCILE_UPGRADE_ID_RE = re.compile(r"^RCU-\d{8}-\d{3}$")
 ROLLOVER_CONFIRMATION_PAYLOAD_VERSION = 2
 UNKNOWN_ID_RE = re.compile(r"^U-\d{3}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 STRICT_INITIAL_INTAKE_REQUIRED = True
 TARGET_REF_RE = re.compile(
     r"^(route|delivery|activation|task:T-\d{3}|obligation:O-\d{3}|"
@@ -226,6 +228,8 @@ BOOTSTRAP_ACTION_REVISION = 5
 SUPPORTED_BOOTSTRAP_ACTION_REVISIONS = {2, 3, 4, BOOTSTRAP_ACTION_REVISION}
 BOOTSTRAP_CLAIM_NAME = "bootstrap-claim.json"
 BOOTSTRAP_CAPABILITY_NAME = "bootstrap-capability.json"
+SESSIONS_DIR_NAME = "sessions"
+LOCK_TIMEOUT_SECONDS = 15.0
 LEGACY_ADOPTION_NAME = "legacy-adoption.json"
 BOOTSTRAP_STAGING_NAME = ".work-governance.bootstrap"
 BOOTSTRAP_CLAIM_KEYS = {
@@ -622,6 +626,50 @@ def bootstrap_state_path(root: Path) -> Path:
     return governance_root(root) / "bootstrap-state.json"
 
 
+def session_state_dir(root: Path, session_id: str) -> Path:
+    """Return a bounded project-local directory for one Codex session."""
+    if SESSION_ID_RE.fullmatch(session_id) is None:
+        raise WorkctlError("SESSION_ID_INVALID")
+    return runtime_dir(root) / SESSIONS_DIR_NAME / session_id
+
+
+def session_receipt_path(root: Path, session_id: str) -> Path:
+    """Return the canonical READY receipt path for one Codex session."""
+    return session_state_dir(root, session_id) / "bootstrap-state.json"
+
+
+def session_capability_path(root: Path, session_id: str) -> Path:
+    """Return the bootstrap-only capability path for one Codex session."""
+    return session_state_dir(root, session_id) / BOOTSTRAP_CAPABILITY_NAME
+
+
+def scoped_session_paths(root: Path, name: str) -> list[Path]:
+    """List regular session control paths without following session-root symlinks."""
+    sessions = runtime_dir(root) / SESSIONS_DIR_NAME
+    if not sessions.exists() and not sessions.is_symlink():
+        return []
+    if sessions.is_symlink() or not sessions.is_dir():
+        raise WorkctlError("SESSION_STATE_ROOT_INVALID")
+    paths: list[Path] = []
+    for child in sorted(sessions.iterdir(), key=lambda item: item.name):
+        if child.is_symlink() or not child.is_dir() or SESSION_ID_RE.fullmatch(child.name) is None:
+            raise WorkctlError("SESSION_STATE_ENTRY_INVALID")
+        candidate = child / name
+        if candidate.exists() or candidate.is_symlink():
+            paths.append(candidate)
+    return paths
+
+
+def ready_receipt_paths(root: Path, *, allow_bootstrapping: bool) -> list[Path]:
+    """Return legacy plus session-scoped receipt candidates."""
+    paths = [bootstrap_state_path(root)]
+    paths.extend(scoped_session_paths(root, "bootstrap-state.json"))
+    if allow_bootstrapping:
+        paths.append(bootstrap_capability_path(root))
+        paths.extend(scoped_session_paths(root, BOOTSTRAP_CAPABILITY_NAME))
+    return paths
+
+
 def load_controller_receipt_v2(
     path: Path,
     *,
@@ -685,11 +733,12 @@ def load_controller_receipt_v2(
 
 
 def load_ready_receipt_v2(root: Path) -> dict[str, Any] | None:
-    """Load and structurally validate the current session-bound READY receipt."""
-    return load_controller_receipt_v2(
-        bootstrap_state_path(root),
-        allow_bootstrapping=False,
-    )
+    """Load one structurally valid READY receipt for read-only compatibility."""
+    for path in ready_receipt_paths(root, allow_bootstrapping=False):
+        receipt = load_controller_receipt_v2(path, allow_bootstrapping=False)
+        if receipt is not None:
+            return receipt
+    return None
 
 
 def bootstrap_capability_path(root: Path) -> Path:
@@ -766,9 +815,7 @@ def validate_current_ready_receipt(
     """Bind a command to the latest READY receipt and exact runtime bundle."""
     if not isinstance(supplied_sha256, str) or SHA256_RE.fullmatch(supplied_sha256) is None:
         raise WorkctlError("BOOTSTRAP_RECEIPT_REQUIRED")
-    candidates = [bootstrap_state_path(root)]
-    if allow_bootstrapping:
-        candidates.append(bootstrap_capability_path(root))
+    candidates = ready_receipt_paths(root, allow_bootstrapping=allow_bootstrapping)
     regular_candidates = [path for path in candidates if not path.is_symlink() and path.is_file()]
     receipt_path = next(
         (path for path in regular_candidates if sha256_file(path) == supplied_sha256),
@@ -3410,7 +3457,7 @@ def durable_unlink(path: Path) -> None:
 
 @contextlib.contextmanager
 def lock(root: Path) -> Iterator[None]:
-    """Hold the stable layout-1 controller lock for one short mutation."""
+    """Hold the stable controller lock with bounded contention diagnostics."""
     ensure_governance_ownership(root)
     lock_path = workctl_lock_path(root)
     governance = governance_root(root)
@@ -3420,8 +3467,58 @@ def lock(root: Path) -> Iterator[None]:
     if lock_path.is_symlink() or (lock_path.exists() and not lock_path.is_file()):
         raise WorkctlError("LAYOUT_STABLE_LOCK_INVALID")
     with lock_path.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        raw_timeout = os.environ.get("WORK_GOVERNANCE_LOCK_TIMEOUT_SECONDS")
         try:
+            timeout = LOCK_TIMEOUT_SECONDS if raw_timeout is None else float(raw_timeout)
+        except ValueError as exc:
+            raise WorkctlError("WORKCTL_LOCK_TIMEOUT_CONFIG_INVALID") from exc
+        if not 0.05 <= timeout <= 60.0:
+            raise WorkctlError("WORKCTL_LOCK_TIMEOUT_CONFIG_INVALID")
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    handle.seek(0)
+                    raw_holder = handle.read(2048)
+                    try:
+                        holder: object = json.loads(raw_holder) if raw_holder else {}
+                    except json.JSONDecodeError:
+                        holder = {}
+                    holder_pid = (
+                        str(holder.get("pid"))
+                        if isinstance(holder, dict) and holder.get("pid") is not None
+                        else "unavailable"
+                    )
+                    holder_acquired_at = (
+                        str(holder.get("acquired_at"))
+                        if isinstance(holder, dict) and holder.get("acquired_at") is not None
+                        else "unavailable"
+                    )
+                    raise WorkctlError(
+                        "WORKCTL_LOCK_TIMEOUT: "
+                        f"timeout_seconds={timeout:g} "
+                        f"holder_pid={holder_pid} "
+                        f"holder_acquired_at={holder_acquired_at}"
+                    ) from None
+                time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+        try:
+            handle.seek(0)
+            handle.truncate()
+            json.dump(
+                {
+                    "schema_version": 1,
+                    "pid": os.getpid(),
+                    "acquired_at": utc_now(),
+                },
+                handle,
+                sort_keys=True,
+            )
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
             yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
@@ -5068,9 +5165,19 @@ def cmd_intake_status(args: argparse.Namespace) -> None:
     )
 
 
-def current_turn_receipt_path(root: Path) -> Path:
-    """Return the ignored runtime receipt for the newest submitted user turn."""
-    return runtime_dir(root) / "current-turn-receipt.json"
+def current_turn_receipt_path(root: Path, session_id: str | None = None) -> Path:
+    """Return the newest turn receipt for one session or the legacy location."""
+    if session_id is None:
+        return runtime_dir(root) / "current-turn-receipt.json"
+    return session_state_dir(root, session_id) / "current-turn-receipt.json"
+
+
+def current_turn_receipt_paths(root: Path) -> list[Path]:
+    """Return legacy plus all session-scoped current-turn receipt candidates."""
+    return [
+        current_turn_receipt_path(root),
+        *scoped_session_paths(root, "current-turn-receipt.json"),
+    ]
 
 
 def turn_receipt_digest(payload: Mapping[str, object]) -> str:
@@ -5086,6 +5193,48 @@ def turn_receipt_digest(payload: Mapping[str, object]) -> str:
     )
 
 
+def controller_receipt_digest(payload: Mapping[str, object]) -> str:
+    """Hash one READY receipt using the hook's exact durable JSON encoding."""
+    return sha256_bytes((json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+
+
+def session_receipt_for_turn(
+    root: Path,
+    supplied_turn_sha256: str,
+    *,
+    require_current_controller: bool,
+) -> dict[str, Any]:
+    """Resolve the session receipt bound to an exact current-turn digest."""
+    if SHA256_RE.fullmatch(supplied_turn_sha256) is None:
+        raise WorkctlError("TURN_RECEIPT_INVALID")
+    raw: object | None = None
+    for path in current_turn_receipt_paths(root):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            candidate: object = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(candidate, dict) and candidate.get("receipt_sha256") == supplied_turn_sha256:
+            raw = candidate
+            break
+    if raw is None and any(
+        not path.is_symlink() and path.is_file() for path in current_turn_receipt_paths(root)
+    ):
+        raise WorkctlError("TURN_RECEIPT_SUPERSEDED")
+    if not isinstance(raw, dict) or not isinstance(raw.get("session_id"), str):
+        raise WorkctlError("TURN_RECEIPT_INVALID")
+    session_id = str(raw["session_id"])
+    scoped = session_receipt_path(root, session_id)
+    legacy = bootstrap_state_path(root)
+    receipt_path = scoped if scoped.is_file() and not scoped.is_symlink() else legacy
+    return validate_current_ready_receipt(
+        root,
+        sha256_file(receipt_path),
+        require_current_controller=require_current_controller,
+    )
+
+
 def load_current_turn_receipt(
     root: Path,
     *,
@@ -5093,7 +5242,12 @@ def load_current_turn_receipt(
     session_receipt: Mapping[str, object],
 ) -> dict[str, object]:
     """Validate and return the current UserPromptSubmit receipt."""
-    path = current_turn_receipt_path(root)
+    session_id_value = session_receipt.get("session_id")
+    if not isinstance(session_id_value, str):
+        raise WorkctlError("TURN_RECEIPT_INVALID")
+    scoped = current_turn_receipt_path(root, session_id_value)
+    legacy = current_turn_receipt_path(root)
+    path = scoped if scoped.is_file() and not scoped.is_symlink() else legacy
     if path.is_symlink() or not path.is_file():
         raise WorkctlError("TURN_RECEIPT_REQUIRED")
     try:
@@ -5126,7 +5280,7 @@ def load_current_turn_receipt(
         or receipt.get("schema_version") != 1
         or receipt.get("kind") != "work-governance-current-turn-receipt"
         or receipt.get("plugin_build") != session_receipt.get("plugin_build")
-        or receipt.get("session_start_receipt_sha256") != sha256_file(bootstrap_state_path(root))
+        or receipt.get("session_start_receipt_sha256") != controller_receipt_digest(session_receipt)
         or session_id != session_receipt.get("session_id")
         or not isinstance(session_id, str)
         or not session_id
@@ -5380,8 +5534,11 @@ def intake_record_digest(payload: Mapping[str, object]) -> str:
 
 
 def intake_records(frontmatter: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Return well-shaped intake records or an empty list."""
+    """Return the legacy chain or the bounded protocol-v2 current record."""
     intake = frontmatter.get("intake", {})
+    if isinstance(intake, dict) and intake.get("protocol_version") == 2:
+        current = intake.get("current")
+        return [cast(dict[str, Any], current)] if isinstance(current, dict) else []
     records = intake.get("records", []) if isinstance(intake, dict) else []
     return [item for item in records if isinstance(item, dict)] if isinstance(records, list) else []
 
@@ -5391,11 +5548,30 @@ def intake_contract_errors(frontmatter: Mapping[str, Any]) -> list[str]:
     intake = frontmatter.get("intake")
     if intake is None:
         return []
-    if not isinstance(intake, dict) or intake.get("protocol_version") != 1:
-        return ["intake.protocol_version must equal 1"]
-    raw_records = intake.get("records")
-    if not isinstance(raw_records, list) or not raw_records:
-        return ["intake.records must be a non-empty list"]
+    if not isinstance(intake, dict) or intake.get("protocol_version") not in {1, 2}:
+        return ["intake.protocol_version must equal 1 or 2"]
+    protocol_version = intake["protocol_version"]
+    if protocol_version == 1:
+        raw_records = intake.get("records")
+        if not isinstance(raw_records, list) or not raw_records:
+            return ["intake.records must be a non-empty list"]
+    else:
+        if set(intake) != {"protocol_version", "current", "history"}:
+            return ["intake protocol 2 fields are invalid"]
+        current = intake.get("current")
+        history = intake.get("history")
+        if not isinstance(current, dict):
+            return ["intake.current must be a mapping"]
+        if (
+            not isinstance(history, dict)
+            or set(history) != {"storage", "head_sha256", "record_count"}
+            or history.get("storage") != "project-local-immutable"
+            or history.get("head_sha256") != current.get("record_sha256")
+            or not isinstance(history.get("record_count"), int)
+            or cast(int, history["record_count"]) < 1
+        ):
+            return ["intake.history anchor is invalid"]
+        raw_records = [current]
     errors: list[str] = []
     previous: str | None = None
     request_refs: set[str] = set()
@@ -5416,12 +5592,12 @@ def intake_contract_errors(frontmatter: Mapping[str, Any]) -> list[str]:
             "recorded_at",
             "record_sha256",
         }
-        allowed = required | {"current_unknown_id"}
+        allowed = required | {"current_unknown_id", "supersedes_record_sha256"}
         request_ref = item.get("request_ref")
         request_sha256 = item.get("request_sha256")
         record_sha256 = item.get("record_sha256")
         targets = item.get("targets")
-        if set(item) != required and set(item) != allowed:
+        if not required.issubset(item) or not set(item).issubset(allowed):
             errors.append(f"{label} has invalid fields")
         if (
             not isinstance(request_ref, str)
@@ -5430,7 +5606,7 @@ def intake_contract_errors(frontmatter: Mapping[str, Any]) -> list[str]:
             or not request_ref.endswith(f"/sha256/{request_sha256}")
         ):
             errors.append(f"{label} request identity is invalid")
-        elif request_ref in request_refs:
+        elif protocol_version == 1 and request_ref in request_refs:
             errors.append(f"{label} request_ref must be unique")
         else:
             request_refs.add(request_ref)
@@ -5450,8 +5626,15 @@ def intake_contract_errors(frontmatter: Mapping[str, Any]) -> list[str]:
         basis = item.get("decision_basis_sha256")
         if not isinstance(basis, str) or SHA256_RE.fullmatch(basis) is None:
             errors.append(f"{label} decision_basis_sha256 is invalid")
-        if item.get("previous_record_sha256") != previous:
+        prior_digest = item.get("previous_record_sha256")
+        if protocol_version == 1 and prior_digest != previous:
             errors.append(f"{label} previous_record_sha256 breaks the chain")
+        if (
+            protocol_version == 2
+            and prior_digest is not None
+            and (not isinstance(prior_digest, str) or SHA256_RE.fullmatch(prior_digest) is None)
+        ):
+            errors.append(f"{label} previous_record_sha256 is invalid")
         if not isinstance(item.get("recorded_at"), str) or not item.get("recorded_at"):
             errors.append(f"{label} recorded_at is required")
         if (
@@ -5466,8 +5649,57 @@ def intake_contract_errors(frontmatter: Mapping[str, Any]) -> list[str]:
             item.get("current_unknown_id"), str
         ):
             errors.append(f"{label} {item.get('decision')} requires current_unknown_id")
+        supersedes = item.get("supersedes_record_sha256")
+        if "supersedes_record_sha256" in item and (
+            not isinstance(supersedes, str) or SHA256_RE.fullmatch(supersedes) is None
+        ):
+            errors.append(f"{label} supersedes_record_sha256 is invalid")
         previous = record_sha256 if isinstance(record_sha256, str) else None
     return errors
+
+
+def intake_history_dir(root: Path, plan_id: str) -> Path:
+    """Return the ignored immutable history directory for one canonical Plan."""
+    if PLAN_ID_RE.fullmatch(plan_id) is None:
+        raise WorkctlError("INTAKE_HISTORY_PLAN_ID_INVALID")
+    return runtime_dir(root) / "intake-history" / plan_id
+
+
+def persist_intake_history_record(
+    root: Path,
+    plan_id: str,
+    record: Mapping[str, object],
+) -> None:
+    """Create one content-addressed intake history record without overwriting bytes."""
+    record_sha256 = record.get("record_sha256")
+    if (
+        not isinstance(record_sha256, str)
+        or SHA256_RE.fullmatch(record_sha256) is None
+        or intake_record_digest(record) != record_sha256
+    ):
+        raise WorkctlError("INTAKE_HISTORY_RECORD_INVALID")
+    history = intake_history_dir(root, plan_id)
+    reject_symlink_components(root, history)
+    history.mkdir(parents=True, exist_ok=True)
+    target = history / f"{record_sha256}.json"
+    content = (json.dumps(record, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode(
+        "utf-8"
+    )
+    if target.exists() or target.is_symlink():
+        if target.is_symlink() or not target.is_file() or target.read_bytes() != content:
+            raise WorkctlError("INTAKE_HISTORY_RECORD_CONFLICT")
+        return
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            target.unlink()
+        raise
+    fsync_directory(history)
 
 
 def intake_state(frontmatter: Mapping[str, Any]) -> str:
@@ -5496,9 +5728,9 @@ def require_current_intake(
         return
     if turn_receipt_sha256 is None or expected_intake_sha256 is None:
         raise WorkctlError("TURN_RECEIPT_REQUIRED")
-    session_receipt = validate_current_ready_receipt(
+    session_receipt = session_receipt_for_turn(
         root,
-        sha256_file(bootstrap_state_path(root)),
+        turn_receipt_sha256,
         require_current_controller=True,
     )
     turn_receipt = load_current_turn_receipt(
@@ -5855,58 +6087,83 @@ def cmd_plan_intake_record(args: argparse.Namespace) -> None:
         }
         if current_unknown_id is not None:
             record_core["current_unknown_id"] = current_unknown_id
+        prior_records = intake_records(doc.frontmatter)
         existing = next(
             (
                 record
-                for record in intake_records(doc.frontmatter)
+                for record in prior_records
                 if record.get("request_ref") == manifest["request_ref"]
             ),
             None,
         )
+        transitioned = False
         if existing is not None:
             existing_core = {
                 key: cast(object, existing[key]) for key in record_core if key in existing
             }
-            if existing_core != record_core:
-                raise WorkctlError("INTAKE_REQUEST_CONFLICT")
-            print(
-                "PLAN_INTAKE_REPLAY "
-                f"record_sha256={existing.get('record_sha256')} "
-                f"revision={doc.frontmatter['revision']}"
+            if existing_core == record_core:
+                print(
+                    "PLAN_INTAKE_REPLAY "
+                    f"record_sha256={existing.get('record_sha256')} "
+                    f"revision={doc.frontmatter['revision']}"
+                )
+                return
+            transitioned = bool(
+                existing.get("decision") in {"ask", "explore"}
+                and manifest.get("decision") == "proceed"
+                and existing.get("decision_basis_sha256") != basis
+                and existing.get("targets") == targets
+                and existing.get("request_sha256") == manifest.get("request_sha256")
             )
-            return
+            if not transitioned:
+                raise WorkctlError("INTAKE_REQUEST_CONFLICT")
         require_expected_revision(doc.frontmatter, args.expected_revision)
-        intake = doc.frontmatter.setdefault(
-            "intake",
-            {"protocol_version": 1, "records": []},
-        )
-        if (
-            not isinstance(intake, dict)
-            or intake.get("protocol_version") != 1
-            or not isinstance(intake.get("records"), list)
-        ):
+        intake = doc.frontmatter.get("intake")
+        if not isinstance(intake, dict) or intake.get("protocol_version") not in {1, 2}:
             raise WorkctlError("INTAKE_CONTRACT_INVALID")
-        records = cast(list[dict[str, object]], intake["records"])
-        previous = (
-            records[-1].get("record_sha256") if records and isinstance(records[-1], dict) else None
-        )
-        record = {
+        previous = prior_records[-1].get("record_sha256") if prior_records else None
+        record: dict[str, object] = {
             **record_core,
             "previous_record_sha256": previous,
             "recorded_at": manifest["created_at"],
         }
+        if transitioned and existing is not None:
+            record["supersedes_record_sha256"] = existing["record_sha256"]
         record["record_sha256"] = intake_record_digest(record)
-        records.append(record)
+        plan_id = str(doc.frontmatter["plan_id"])
+        for prior in prior_records:
+            persist_intake_history_record(root, plan_id, prior)
+        persist_intake_history_record(root, plan_id, record)
+        prior_count = (
+            cast(int, cast(dict[str, object], intake["history"])["record_count"])
+            if intake.get("protocol_version") == 2
+            and isinstance(intake.get("history"), dict)
+            and isinstance(cast(dict[str, object], intake["history"]).get("record_count"), int)
+            else len(prior_records)
+        )
+        doc.frontmatter["intake"] = {
+            "protocol_version": 2,
+            "current": record,
+            "history": {
+                "storage": "project-local-immutable",
+                "head_sha256": record["record_sha256"],
+                "record_count": prior_count + 1,
+            },
+        }
         bump_revision(
             doc.frontmatter,
             kind="intake-recorded",
-            rationale=f"Record intake for {manifest['request_ref']}.",
+            rationale=(
+                f"Transition intake for {manifest['request_ref']}."
+                if transitioned
+                else f"Record intake for {manifest['request_ref']}."
+            ),
         )
         require_valid_candidate(doc)
         write_atomic(doc.path, dump_plan(doc))
+        result_kind = "PLAN_INTAKE_TRANSITIONED" if transitioned else "PLAN_INTAKE_RECORDED"
         print(
-            "PLAN_INTAKE_RECORDED "
-            f"record_sha256={record['record_sha256']} "
+            f"{result_kind} record_sha256={record['record_sha256']} "
             f"revision={doc.frontmatter['revision']}"
         )
 
@@ -9502,29 +9759,35 @@ def current_request_matches(
     records = intake_records(frontmatter)
     if not records or records[-1].get("record_sha256") != expected_intake_sha256:
         return False
-    session_receipt = load_ready_receipt_v2(root)
-    if session_receipt is None:
-        return False
-    path = current_turn_receipt_path(root)
-    if path.is_symlink() or not path.is_file():
-        return False
-    try:
-        raw: object = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return False
-    if not isinstance(raw, dict) or not isinstance(raw.get("receipt_sha256"), str):
-        return False
-    try:
-        turn = load_current_turn_receipt(
-            root,
-            supplied_sha256=str(raw["receipt_sha256"]),
-            session_receipt=cast(Mapping[str, object], session_receipt),
-        )
-    except WorkctlError:
-        return False
-    return records[-1].get("request_ref") == turn.get("request_ref") and records[-1].get(
-        "decision_basis_sha256"
-    ) == decision_basis_sha256(frontmatter)
+    for path in current_turn_receipt_paths(root):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            raw: object = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(raw, dict) or not isinstance(raw.get("receipt_sha256"), str):
+            continue
+        if records[-1].get("request_ref") != raw.get("request_ref"):
+            continue
+        try:
+            session_receipt = session_receipt_for_turn(
+                root,
+                str(raw["receipt_sha256"]),
+                require_current_controller=False,
+            )
+            turn = load_current_turn_receipt(
+                root,
+                supplied_sha256=str(raw["receipt_sha256"]),
+                session_receipt=cast(Mapping[str, object], session_receipt),
+            )
+        except WorkctlError:
+            continue
+        if records[-1].get("request_ref") == turn.get("request_ref") and records[-1].get(
+            "decision_basis_sha256"
+        ) == decision_basis_sha256(frontmatter):
+            return True
+    return False
 
 
 def require_confirmation_turn_ref(
@@ -9536,9 +9799,11 @@ def require_confirmation_turn_ref(
     """Bind a schema-v4 confirmation decision to the trusted current user turn."""
     if not isinstance(turn_receipt_sha256, str):
         raise WorkctlError("TURN_RECEIPT_REQUIRED")
-    session_receipt = load_ready_receipt_v2(root)
-    if session_receipt is None:
-        raise WorkctlError("BOOTSTRAP_RECEIPT_REQUIRED")
+    session_receipt = session_receipt_for_turn(
+        root,
+        turn_receipt_sha256,
+        require_current_controller=True,
+    )
     turn = load_current_turn_receipt(
         root,
         supplied_sha256=turn_receipt_sha256,
@@ -14002,9 +14267,9 @@ def prepare_rollover(
     target_contract_sha256: str | None = None
     if STRICT_INITIAL_INTAKE_REQUIRED:
         proposal = embedded_initial_intake(manifest)
-        session_receipt = validate_current_ready_receipt(
+        session_receipt = session_receipt_for_turn(
             root,
-            sha256_file(bootstrap_state_path(root)),
+            str(proposal["turn_receipt_sha256"]),
             require_current_controller=True,
         )
         validate_current_intake_proposal(

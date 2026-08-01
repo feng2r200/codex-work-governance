@@ -89,14 +89,15 @@ from Plan authority:
 Only `layout status|validate|migrate|recover` are available until
 `LAYOUT_READY`. During SessionStart, these layout mutations may use only the
 exact controller and digest bound by the current ignored
-`runtime/bootstrap-capability.json`; that capability never authorizes Plan
+`runtime/sessions/<session_id>/bootstrap-capability.json`; that capability never authorizes Plan
 writes. No-Plan bootstrap does not create a Plan or index.
 
 Schema-v4 Plans carry:
 
 - a goal statement and measurable success conditions;
 - a revisioned, confirmation-bound demand contract;
-- append-only intake protocol v1 records bound to trusted current turns;
+- a bounded protocol-v2 current intake anchor backed by project-local
+  immutable history, with protocol-v1 compatibility;
 - first-class unknowns with owner, impact, exact blockers, expected evidence,
   and task-level compatibility projection;
 - pending confirmations with a typed `intervention.kind`, exact `blocks`,
@@ -241,7 +242,9 @@ Allowed structural changes:
 - `intake receipt`: produce a normalized read-only proposal for the current
   trusted turn and exact target set.
 - `plan intake record`: append the proposal idempotently; conflicting content
-  for the same request reference is rejected.
+  for the same request reference is rejected, except for a basis-changing
+  `ask|explore -> proceed` supersession. The Plan retains one current anchor;
+  full canonical records remain in project-local immutable runtime history.
 - `plan evidence record --manifest ...`: canonicalize bounded typed evidence
   metadata under the active Plan and return its exact path and SHA256.
 - `plan confirm`: resolve a pending gate as `accepted` or `declined` with a

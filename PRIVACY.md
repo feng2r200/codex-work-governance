@@ -28,12 +28,20 @@ schema v2 includes the Codex session identifier, absolute local paths to the
 snapshotted controller and lifecycle skill, and hashes binding those files to
 the installed Plugin payload. The runtime bundle is retained so the session
 uses the same controller even if the Plugin cache entry is replaced or
-removed. A newer receipt supersedes older sessions for writes.
+removed. Canonical bootstrap and current-turn receipts are isolated below
+`runtime/sessions/<session_id>/`; one session cannot supersede another. The
+root and old runtime receipt paths remain compatibility surfaces for older
+installed sessions and do not override a current session-scoped receipt.
 
-The ignored `runtime/bootstrap-capability.json` uses the same bounded session,
-runtime-path, and hash fields while SessionStart is bootstrapping. It is
-restricted to layout mutation, replaced by a newer SessionStart, and never
-serves as Plan-write readiness.
+The ignored `runtime/sessions/<session_id>/bootstrap-capability.json` uses the
+same bounded session, runtime-path, and hash fields while SessionStart is
+bootstrapping. It is restricted to layout mutation, replaced only within that
+session, and never serves as Plan-write readiness.
+
+Full trusted-turn intake records are locally ignored and content-addressed
+under `runtime/intake-history/<plan-id>/`. They retain only the same minimal
+decision fields represented by the bounded current Plan anchor; raw prompt
+content is not copied into those records.
 
 Blocked bootstrap evidence may include the bounded SessionStart source and
 session identifier supplied by Codex so a failure can be correlated without

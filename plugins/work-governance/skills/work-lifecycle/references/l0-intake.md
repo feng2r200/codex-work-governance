@@ -63,6 +63,15 @@ progress summaries, and "the next phase" are not user-intervention boundaries.
 Keep rationale minimal. Never copy raw prompt content, credentials, tokens, or
 other secrets into a Plan intake record.
 
+The active Plan stores one bounded `intake.current` record plus the immutable
+history head and count. Full canonical records are content-addressed under the
+ignored project-local runtime history. Protocol-v1 Plans remain readable and
+migrate on their next successful intake write. A repeated request is an exact
+replay unless a changed decision basis materially transitions `ask` or
+`explore` to `proceed`; the new record must link the superseded record.
+Changing only rationale, targets, or other content under the same basis is a
+conflict and fails closed.
+
 When a current user instruction or decision will become future execution
 authority, capture its strongest available provenance. Prefer
 `user:session/<SessionId>/turn/<TurnId>/sha256/<digest>`, where the digest binds
