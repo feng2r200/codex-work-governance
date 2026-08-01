@@ -6614,6 +6614,274 @@ def test_schema_rejects_unverifiable_activation_evidence(tmp_path: Path) -> None
     assert "activation evidence requires a SHA256 digest" in validation.stderr
 
 
+def activation_closeout_fixture(
+    plan_id: str,
+    *,
+    explicit_binding: bool,
+    exclusion_count: int = 1,
+) -> dict[str, Any]:
+    """Build one schema-v4 live route ready for observed activation evidence."""
+    frontmatter = schema_v4_admission_plan(plan_id)
+    frontmatter["obligations"] = []
+    frontmatter["tasks"] = []
+    frontmatter["validations"] = []
+    frontmatter["artifacts"] = []
+    live_confirmation = {
+        "id": "C-LIVE",
+        "description": "Activate the exact candidate.",
+        "status": "accepted",
+        "ref": "user:live-accepted",
+        "accepted_at": "2026-08-01T10:00:00+00:00",
+        "intervention": {
+            "kind": "external_authority",
+            "blocks": ["activation", "route"],
+            "basis_ref": "evidence:exact-live-candidate",
+            "basis_sha256": "b" * 64,
+        },
+    }
+    cast(list[dict[str, Any]], frontmatter["confirmations"]["required"]).append(live_confirmation)
+    descriptions = [f"Switch live plugin surface {number}." for number in range(exclusion_count)]
+    frontmatter["scope"]["exclude"] = [
+        {
+            "description": description,
+            "disposition": "pending_confirmation",
+            "confirmation_id": "C-LIVE",
+        }
+        for description in descriptions
+    ]
+    frontmatter["delivery"] = {
+        "status": "complete",
+        "boundary": "immutable-local-candidate",
+        "evidence_ref": "git:exact-candidate",
+    }
+    activation: dict[str, Any] = {
+        "status": "pending_confirmation",
+        "current_ref": "plugin:work-governance@1.0.6+codex.old",
+        "target_ref": "plugin:work-governance@1.0.7+codex.exact",
+        "confirmation_id": "C-LIVE",
+    }
+    if explicit_binding:
+        activation["resolves_exclusions"] = descriptions
+    frontmatter["activation"] = activation
+    frontmatter["route"] = {
+        "route_status": "active",
+        "slice_status": "live-authorized",
+        "next_phase": "Activate and close the exact route.",
+        "validation_standard": "Observed runtime identity matches the frozen target.",
+        "confirmation_gate": "C-LIVE",
+    }
+    frontmatter["handoff"] = {
+        "route_status": "active",
+        "next_step": "Activate and close the exact route.",
+    }
+    return frontmatter
+
+
+def record_test_evidence(
+    cwd: Path,
+    plan_id: str,
+    *,
+    subject: str,
+    observed_ref: str | None = None,
+) -> dict[str, Any]:
+    """Record one canonical subject-specific test evidence manifest."""
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "kind": "work-governance-evidence",
+        "plan_id": plan_id,
+        "subject": subject,
+        "created_at": "2026-08-01T10:01:00+00:00",
+        "producer_ref": "runtime:activation-closeout-test",
+        "items": [{"ref": f"runtime:{subject}-result", "sha256": "c" * 64}],
+    }
+    if observed_ref is not None:
+        payload["observed_ref"] = observed_ref
+    manifest = cwd / f"{subject}-evidence.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    return cast(
+        dict[str, Any],
+        json.loads(
+            run_workctl(
+                cwd,
+                "plan",
+                "evidence",
+                "record",
+                "--manifest",
+                str(manifest),
+            ).stdout
+        ),
+    )
+
+
+def test_activation_resolves_explicit_exclusion_and_atomic_closeout(
+    tmp_path: Path,
+) -> None:
+    """Observed activation and terminal Plan closeout need no structural extra turn."""
+    plan_id = "PLAN-20260801-201"
+    admit_schema_v4_test_plan(
+        tmp_path,
+        activation_closeout_fixture(plan_id, explicit_binding=True),
+        transaction_id="ADM-20260801-201",
+    )
+    admitted, _ = read_plan_by_id(tmp_path, plan_id)
+    assert admitted["scope"]["exclude"][0]["disposition"] == "pending_confirmation"
+
+    run_workctl(
+        tmp_path,
+        "plan",
+        "activation-promote",
+        "--state",
+        "in_progress",
+        "--confirmation",
+        "C-LIVE",
+        "--expected-revision",
+        "1",
+    )
+    target_ref = "plugin:work-governance@1.0.7+codex.exact"
+    activation_evidence = record_test_evidence(
+        tmp_path,
+        plan_id,
+        subject="activation",
+        observed_ref=target_ref,
+    )
+    run_workctl(
+        tmp_path,
+        "plan",
+        "activation-promote",
+        "--state",
+        "active",
+        "--confirmation",
+        "C-LIVE",
+        "--evidence-manifest",
+        str(activation_evidence["path"]),
+        "--expected-revision",
+        "2",
+    )
+    activated, _ = read_plan_by_id(tmp_path, plan_id)
+    exclusion = activated["scope"]["exclude"][0]
+    assert exclusion["disposition"] == "completed"
+    assert exclusion["resolution_ref"] == "user:live-accepted"
+
+    closeout_evidence = record_test_evidence(tmp_path, plan_id, subject="closeout")
+    completed = run_workctl(
+        tmp_path,
+        "plan",
+        "complete",
+        "--finalize-route",
+        "--confirmation",
+        "C-LIVE",
+        "--evidence-manifest",
+        str(closeout_evidence["path"]),
+        "--expected-revision",
+        "3",
+    )
+    final, _ = read_plan_by_id(tmp_path, plan_id)
+
+    assert "PLAN_COMPLETED revision=4" in completed.stdout
+    assert final["status"] == "complete"
+    assert final["route"]["route_status"] == "terminal"
+    assert final["route"]["confirmation_gate"] == "none"
+    assert final["handoff"] == {"route_status": "terminal", "next_step": "none"}
+    assert final["revision_history"][-1]["confirmation_id"] == "C-LIVE"
+
+
+def test_activation_legacy_single_match_reconciles_exclusion(tmp_path: Path) -> None:
+    """A legacy Plan gets compatibility only for one exact confirmation match."""
+    plan_id = "PLAN-20260801-202"
+    admit_schema_v4_test_plan(
+        tmp_path,
+        activation_closeout_fixture(plan_id, explicit_binding=False),
+        transaction_id="ADM-20260801-202",
+    )
+    run_workctl(
+        tmp_path,
+        "plan",
+        "activation-promote",
+        "--state",
+        "in_progress",
+        "--confirmation",
+        "C-LIVE",
+        "--expected-revision",
+        "1",
+    )
+    evidence = record_test_evidence(
+        tmp_path,
+        plan_id,
+        subject="activation",
+        observed_ref="plugin:work-governance@1.0.7+codex.exact",
+    )
+    run_workctl(
+        tmp_path,
+        "plan",
+        "activation-promote",
+        "--state",
+        "active",
+        "--confirmation",
+        "C-LIVE",
+        "--evidence-manifest",
+        str(evidence["path"]),
+        "--expected-revision",
+        "2",
+    )
+    activated, _ = read_plan_by_id(tmp_path, plan_id)
+
+    assert activated["scope"]["exclude"][0]["disposition"] == "completed"
+    assert "resolves_exclusions" not in activated["activation"]
+
+
+def test_activation_legacy_ambiguous_exclusions_fail_closed(tmp_path: Path) -> None:
+    """Compatibility must not guess when multiple exclusions share one gate."""
+    plan_id = "PLAN-20260801-203"
+    admit_schema_v4_test_plan(
+        tmp_path,
+        activation_closeout_fixture(
+            plan_id,
+            explicit_binding=False,
+            exclusion_count=2,
+        ),
+        transaction_id="ADM-20260801-203",
+    )
+    run_workctl(
+        tmp_path,
+        "plan",
+        "activation-promote",
+        "--state",
+        "in_progress",
+        "--confirmation",
+        "C-LIVE",
+        "--expected-revision",
+        "1",
+    )
+    evidence = record_test_evidence(
+        tmp_path,
+        plan_id,
+        subject="activation",
+        observed_ref="plugin:work-governance@1.0.7+codex.exact",
+    )
+    blocked = run_workctl(
+        tmp_path,
+        "plan",
+        "activation-promote",
+        "--state",
+        "active",
+        "--confirmation",
+        "C-LIVE",
+        "--evidence-manifest",
+        str(evidence["path"]),
+        "--expected-revision",
+        "2",
+        check=False,
+    )
+    unchanged, _ = read_plan_by_id(tmp_path, plan_id)
+
+    assert "ACTIVATION_EXCLUSION_BINDING_REQUIRED" in blocked.stderr
+    assert unchanged["activation"]["status"] == "in_progress"
+    assert all(
+        exclusion["disposition"] == "pending_confirmation"
+        for exclusion in unchanged["scope"]["exclude"]
+    )
+
+
 def test_activation_transition_rejects_wrong_confirmation(tmp_path: Path) -> None:
     """An unrelated accepted gate cannot authorize activation."""
     init_plan(tmp_path)
@@ -9620,6 +9888,131 @@ def test_accepted_bootstrap_placeholder_classifies_only_matching_decision_digest
     assert live["intervention"]["basis_sha256"] == "a" * 64
 
 
+def test_pending_strict_external_gate_rebinds_only_exact_basis(
+    tmp_path: Path,
+) -> None:
+    """A pre-candidate gate may update its basis without changing its authority."""
+    frontmatter = schema_v4_admission_plan("PLAN-20260731-107")
+    frontmatter["confirmations"]["required"].append(
+        {
+            "id": "C-LIVE",
+            "description": "Authorize only the immutable live candidate.",
+            "status": "pending",
+            "intervention": {
+                "kind": "external_authority",
+                "blocks": ["task:T-001", "activation", "route"],
+                "basis_ref": "evidence:preliminary-live-basis",
+                "basis_sha256": "a" * 64,
+            },
+        }
+    )
+    plan_id = admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id="ADM-20260731-107",
+    )
+    classification = {
+        "schema_version": 1,
+        "kind": "confirmation-intervention-classification",
+        "plan_id": plan_id,
+        "confirmation_id": "C-LIVE",
+        "supersedes_basis_sha256": "c" * 64,
+        "intervention": {
+            "kind": "external_authority",
+            "blocks": ["task:T-001", "activation", "route"],
+            "basis_ref": "evidence:exact-live-basis",
+            "basis_sha256": "b" * 64,
+        },
+    }
+    path = tmp_path / "classification.yaml"
+    path.write_text(yaml.safe_dump(classification, sort_keys=False), encoding="utf-8")
+    mismatch = run_workctl(
+        tmp_path,
+        "plan",
+        "confirmation",
+        "classify",
+        "--manifest",
+        str(path),
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+    classification["supersedes_basis_sha256"] = "a" * 64
+    path.write_text(yaml.safe_dump(classification, sort_keys=False), encoding="utf-8")
+    rebound = run_workctl(
+        tmp_path,
+        "plan",
+        "confirmation",
+        "classify",
+        "--manifest",
+        str(path),
+        "--expected-revision",
+        "1",
+    )
+    updated, _ = read_plan_by_id(tmp_path, plan_id)
+    live = next(item for item in updated["confirmations"]["required"] if item["id"] == "C-LIVE")
+
+    assert "CONFIRMATION_STRICT_REBIND_MISMATCH" in mismatch.stderr
+    assert "CONFIRMATION_REBOUND C-LIVE revision=2" in rebound.stdout
+    assert live["status"] == "pending"
+    assert live["intervention"]["basis_ref"] == "evidence:exact-live-basis"
+    assert live["intervention"]["basis_sha256"] == "b" * 64
+
+
+def test_pending_strict_gate_rebind_cannot_change_protected_targets(
+    tmp_path: Path,
+) -> None:
+    """Basis refresh never widens or narrows the decision's blocked targets."""
+    frontmatter = schema_v4_admission_plan("PLAN-20260731-108")
+    frontmatter["confirmations"]["required"].append(
+        {
+            "id": "C-LIVE",
+            "description": "Authorize only the immutable live candidate.",
+            "status": "pending",
+            "intervention": {
+                "kind": "external_authority",
+                "blocks": ["task:T-001", "activation", "route"],
+                "basis_ref": "evidence:preliminary-live-basis",
+                "basis_sha256": "a" * 64,
+            },
+        }
+    )
+    plan_id = admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id="ADM-20260731-108",
+    )
+    classification = {
+        "schema_version": 1,
+        "kind": "confirmation-intervention-classification",
+        "plan_id": plan_id,
+        "confirmation_id": "C-LIVE",
+        "supersedes_basis_sha256": "a" * 64,
+        "intervention": {
+            "kind": "external_authority",
+            "blocks": ["activation", "route"],
+            "basis_ref": "evidence:exact-live-basis",
+            "basis_sha256": "b" * 64,
+        },
+    }
+    path = tmp_path / "classification.yaml"
+    path.write_text(yaml.safe_dump(classification, sort_keys=False), encoding="utf-8")
+
+    rejected = run_workctl(
+        tmp_path,
+        "plan",
+        "confirmation",
+        "classify",
+        "--manifest",
+        str(path),
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+
+    assert "CONFIRMATION_STRICT_REBIND_MISMATCH" in rejected.stderr
+
+
 def independent_validation_fixture() -> dict[str, Any]:
     """Build three pending review modes with only artifact_review blocking T-001."""
     pending_route_review = {
@@ -9660,6 +10053,165 @@ def independent_validation_fixture() -> dict[str, Any]:
             },
         ],
     }
+
+
+def local_task_plan_challenge_fixture(plan_id: str) -> dict[str, Any]:
+    """Build a Plan whose only task blocker is one pending Plan challenge."""
+    frontmatter = schema_v4_admission_plan(plan_id)
+    contract = independent_validation_fixture()
+    reviews = cast(list[dict[str, Any]], contract["reviews"])
+    reviews[0]["blocks"] = ["task:T-001", "delivery", "activation", "route"]
+    reviews[1]["blocks"] = ["activation", "route"]
+    frontmatter["independent_validation"] = contract
+    return frontmatter
+
+
+def test_pending_plan_challenge_is_advisory_for_ordinary_local_task(
+    tmp_path: Path,
+) -> None:
+    """Unavailable Plan challenge must not stall reversible local implementation."""
+    frontmatter = local_task_plan_challenge_fixture("PLAN-20260801-101")
+    plan_id = admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id="ADM-20260801-101",
+    )
+
+    started = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-revision",
+        "1",
+    )
+    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+
+    assert "TASK_UPDATED T-001 in_progress" in started.stdout
+    assert status["plan_id"] == plan_id
+    assert any(
+        blocker == "independent review blocks route: plan_challenge"
+        for blocker in status["closeout_readiness"]["blockers"]
+    )
+
+
+def test_irp_stocklens_review_shape_can_start_t002_without_replanning(
+    tmp_path: Path,
+) -> None:
+    """The observed rev-24 target shape resumes T-002 under advisory challenge."""
+    frontmatter = schema_v4_admission_plan("PLAN-20260801-105")
+    frontmatter["title"] = "Stock verification workbench target-shaped fixture"
+    frontmatter["tasks"] = [
+        {
+            "id": "T-001",
+            "description": "Fix the verified target baseline.",
+            "status": "verified",
+            "depends_on": [],
+            "unknowns": [],
+            "expected_evidence_delta": "The target baseline is fixed.",
+        },
+        {
+            "id": "T-002",
+            "description": "Write versioned product and API truth.",
+            "status": "pending",
+            "depends_on": ["T-001"],
+            "unknowns": [],
+            "expected_evidence_delta": "Versioned product truth is reviewable.",
+        },
+    ]
+    contract = independent_validation_fixture()
+    reviews = cast(list[dict[str, Any]], contract["reviews"])
+    reviews[0]["blocks"] = ["task:T-002", "delivery", "route"]
+    reviews[1]["blocks"] = ["delivery", "route"]
+    frontmatter["independent_validation"] = contract
+    admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id="ADM-20260801-105",
+    )
+
+    started = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-002",
+        "--expected-revision",
+        "1",
+    )
+
+    assert "TASK_UPDATED T-002 in_progress" in started.stdout
+
+
+@pytest.mark.parametrize("protected_kind", ["route", "confirmation"])
+def test_pending_plan_challenge_still_blocks_protected_tasks(
+    tmp_path: Path,
+    protected_kind: str,
+) -> None:
+    """Route-scoped and confirmation-gated work never use the advisory release."""
+    plan_suffix = "102" if protected_kind == "route" else "103"
+    frontmatter = local_task_plan_challenge_fixture(f"PLAN-20260801-{plan_suffix}")
+    task = cast(list[dict[str, Any]], frontmatter["tasks"])[0]
+    if protected_kind == "route":
+        task["completion_scope"] = "route"
+    else:
+        task["requires_confirmation"] = "C-ADMISSION"
+    admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id=f"ADM-20260801-{plan_suffix}",
+    )
+
+    blocked = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+
+    assert "INDEPENDENT_REVIEW_REQUIRED" in blocked.stderr
+
+
+def test_pending_plan_challenge_high_finding_still_blocks_local_task(
+    tmp_path: Path,
+) -> None:
+    """A concrete high finding is stronger than reviewer-availability fallback."""
+    frontmatter = local_task_plan_challenge_fixture("PLAN-20260801-104")
+    reviews = cast(
+        list[dict[str, Any]],
+        cast(dict[str, Any], frontmatter["independent_validation"])["reviews"],
+    )
+    reviews[0]["findings"] = [
+        {
+            "id": "F-HIGH",
+            "severity": "high",
+            "status": "open",
+            "description": "The local task can violate the confirmed contract.",
+        }
+    ]
+    admit_schema_v4_test_plan(
+        tmp_path,
+        frontmatter,
+        transaction_id="ADM-20260801-104",
+    )
+
+    blocked = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+
+    assert "INDEPENDENT_REVIEW_REQUIRED" in blocked.stderr
 
 
 def record_review_evidence(

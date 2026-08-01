@@ -3559,6 +3559,7 @@ def append_revision_record(
         record["confirmation_id"] = confirmation_id
     if evidence_manifest is not None:
         record["evidence_manifest"] = evidence_manifest
+    record["decision_basis_sha256"] = decision_basis_sha256(frontmatter)
     history.append(record)
 
 
@@ -4548,6 +4549,58 @@ def validate_frontmatter(
                     if not isinstance(activation.get(field), str) or not activation.get(field):
                         errors.append(f"activation.{field} must be a non-empty string")
                 activation_confirmation = activation.get("confirmation_id")
+                resolves_exclusions = activation.get("resolves_exclusions")
+                if resolves_exclusions is not None:
+                    if (
+                        not isinstance(resolves_exclusions, list)
+                        or not resolves_exclusions
+                        or not all(
+                            isinstance(description, str) and description
+                            for description in resolves_exclusions
+                        )
+                        or len(resolves_exclusions) != len(set(resolves_exclusions))
+                    ):
+                        errors.append(
+                            "activation.resolves_exclusions must be a unique non-empty list"
+                        )
+                    else:
+                        exclusions_by_name = {
+                            str(exclusion["description"]): exclusion
+                            for exclusion in structured_exclusions
+                            if isinstance(exclusion, dict)
+                            and isinstance(exclusion.get("description"), str)
+                        }
+                        activation_decision = (
+                            confirmations(frontmatter).get(activation_confirmation)
+                            if isinstance(activation_confirmation, str)
+                            else None
+                        )
+                        for description in resolves_exclusions:
+                            exclusion = exclusions_by_name.get(description)
+                            if exclusion is None:
+                                errors.append(
+                                    "activation.resolves_exclusions names an unknown exclusion"
+                                )
+                                continue
+                            if exclusion.get("confirmation_id") != activation_confirmation:
+                                errors.append(
+                                    "activation.resolves_exclusions confirmation mismatch"
+                                )
+                            if activation_status == "active":
+                                if exclusion.get("disposition") != "completed":
+                                    errors.append(
+                                        "active activation requires bound exclusions completed"
+                                    )
+                                elif not isinstance(activation_decision, dict) or exclusion.get(
+                                    "resolution_ref"
+                                ) != activation_decision.get("ref"):
+                                    errors.append(
+                                        "active activation exclusion resolution_ref mismatch"
+                                    )
+                            elif exclusion.get("disposition") != "pending_confirmation":
+                                errors.append(
+                                    "inactive activation bound exclusions must remain pending"
+                                )
                 if activation_status in {"pending_confirmation", "in_progress"}:
                     if activation_confirmation not in confirmation_ids:
                         errors.append("activation.confirmation_id must name a known confirmation")
@@ -4818,10 +4871,26 @@ def validate_frontmatter(
                         errors.append(
                             f"revision_history {record_revision} evidence_manifest must be typed"
                         )
+                    revision_basis = record.get("decision_basis_sha256")
+                    if revision_basis is not None and (
+                        not isinstance(revision_basis, str)
+                        or SHA256_RE.fullmatch(revision_basis) is None
+                    ):
+                        errors.append(
+                            f"revision_history {record_revision} decision basis must be SHA256"
+                        )
                 if history_revisions != sorted(set(history_revisions)):
                     errors.append("revision_history revisions must be unique and increasing")
                 elif history_revisions and history_revisions[-1] != revision:
                     errors.append("revision_history must end at the current revision")
+                latest_history = history[-1] if history else None
+                if (
+                    isinstance(latest_history, dict)
+                    and latest_history.get("decision_basis_sha256") is not None
+                    and latest_history.get("decision_basis_sha256")
+                    != decision_basis_sha256(frontmatter)
+                ):
+                    errors.append("current revision decision basis binding is stale")
             if intake_state(frontmatter) == "CURRENT_BASIS":
                 latest = intake_records(frontmatter)[-1]
                 try:
@@ -6037,6 +6106,67 @@ def transaction_binding_digest(
     )
 
 
+def current_revision_binds_decision_basis(
+    frontmatter: Mapping[str, Any],
+    basis: str,
+) -> bool:
+    """Require the current basis to come from the latest controller revision."""
+    history = frontmatter.get("revision_history", [])
+    latest = history[-1] if isinstance(history, list) and history else None
+    return bool(
+        isinstance(latest, dict)
+        and latest.get("revision") == frontmatter.get("revision")
+        and latest.get("kind") != "intake-recorded"
+        and latest.get("decision_basis_sha256") == basis
+    )
+
+
+def refresh_intake_for_atomic_controller_transition(
+    frontmatter: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, object]]:
+    """Refresh one trusted proceed after an in-memory atomic structural change."""
+    prior_records = intake_records(frontmatter)
+    if not prior_records:
+        raise WorkctlError("INTAKE_RECORD_REQUIRED")
+    existing = prior_records[-1]
+    if existing.get("decision") != "proceed":
+        raise WorkctlError("INTAKE_DECISION_NOT_PROCEED")
+    record: dict[str, object] = {
+        "request_ref": existing["request_ref"],
+        "request_sha256": existing["request_sha256"],
+        "classification": "plan_controlled",
+        "targets": existing["targets"],
+        "decision": "proceed",
+        "rationale": existing["rationale"],
+        "decision_basis_sha256": decision_basis_sha256(frontmatter),
+        "previous_record_sha256": existing["record_sha256"],
+        "recorded_at": utc_now(),
+        "supersedes_record_sha256": existing["record_sha256"],
+    }
+    if isinstance(existing.get("current_unknown_id"), str):
+        record["current_unknown_id"] = existing["current_unknown_id"]
+    record["record_sha256"] = intake_record_digest(record)
+    intake = frontmatter.get("intake")
+    prior_count = (
+        cast(int, cast(dict[str, object], intake["history"])["record_count"])
+        if isinstance(intake, dict)
+        and intake.get("protocol_version") == 2
+        and isinstance(intake.get("history"), dict)
+        and isinstance(cast(dict[str, object], intake["history"]).get("record_count"), int)
+        else len(prior_records)
+    )
+    frontmatter["intake"] = {
+        "protocol_version": 2,
+        "current": record,
+        "history": {
+            "storage": "project-local-immutable",
+            "head_sha256": record["record_sha256"],
+            "record_count": prior_count + 1,
+        },
+    }
+    return prior_records, record
+
+
 def cmd_plan_intake_record(args: argparse.Namespace) -> None:
     """Append one current-turn intake record, with idempotent exact replay."""
     root = project_root()
@@ -6091,12 +6221,13 @@ def cmd_plan_intake_record(args: argparse.Namespace) -> None:
         existing = next(
             (
                 record
-                for record in prior_records
+                for record in reversed(prior_records)
                 if record.get("request_ref") == manifest["request_ref"]
             ),
             None,
         )
         transitioned = False
+        refreshed = False
         if existing is not None:
             existing_core = {
                 key: cast(object, existing[key]) for key in record_core if key in existing
@@ -6115,7 +6246,17 @@ def cmd_plan_intake_record(args: argparse.Namespace) -> None:
                 and existing.get("targets") == targets
                 and existing.get("request_sha256") == manifest.get("request_sha256")
             )
-            if not transitioned:
+            refreshed = bool(
+                existing.get("decision") == "proceed"
+                and manifest.get("decision") == "proceed"
+                and existing.get("decision_basis_sha256") != basis
+                and existing.get("targets") == targets
+                and existing.get("request_sha256") == manifest.get("request_sha256")
+                and existing.get("rationale") == manifest.get("rationale")
+                and existing.get("current_unknown_id") == current_unknown_id
+                and current_revision_binds_decision_basis(doc.frontmatter, basis)
+            )
+            if not transitioned and not refreshed:
                 raise WorkctlError("INTAKE_REQUEST_CONFLICT")
         require_expected_revision(doc.frontmatter, args.expected_revision)
         intake = doc.frontmatter.get("intake")
@@ -6127,7 +6268,7 @@ def cmd_plan_intake_record(args: argparse.Namespace) -> None:
             "previous_record_sha256": previous,
             "recorded_at": manifest["created_at"],
         }
-        if transitioned and existing is not None:
+        if (transitioned or refreshed) and existing is not None:
             record["supersedes_record_sha256"] = existing["record_sha256"]
         record["record_sha256"] = intake_record_digest(record)
         plan_id = str(doc.frontmatter["plan_id"])
@@ -6156,12 +6297,22 @@ def cmd_plan_intake_record(args: argparse.Namespace) -> None:
             rationale=(
                 f"Transition intake for {manifest['request_ref']}."
                 if transitioned
-                else f"Record intake for {manifest['request_ref']}."
+                else (
+                    f"Refresh intake for {manifest['request_ref']}."
+                    if refreshed
+                    else f"Record intake for {manifest['request_ref']}."
+                )
             ),
         )
         require_valid_candidate(doc)
         write_atomic(doc.path, dump_plan(doc))
-        result_kind = "PLAN_INTAKE_TRANSITIONED" if transitioned else "PLAN_INTAKE_RECORDED"
+        result_kind = (
+            "PLAN_INTAKE_TRANSITIONED"
+            if transitioned
+            else "PLAN_INTAKE_REFRESHED"
+            if refreshed
+            else "PLAN_INTAKE_RECORDED"
+        )
         print(
             f"{result_kind} record_sha256={record['record_sha256']} "
             f"revision={doc.frontmatter['revision']}"
@@ -10324,13 +10475,15 @@ def load_confirmation_classification_manifest(path: Path) -> dict[str, Any]:
     if path.is_symlink() or not path.is_file():
         raise WorkctlError("CONFIRMATION_CLASSIFICATION_MANIFEST_MISSING")
     manifest = load_yaml_file(path)
-    if set(manifest) != {
+    required = {
         "schema_version",
         "kind",
         "plan_id",
         "confirmation_id",
         "intervention",
-    }:
+    }
+    optional = {"supersedes_basis_sha256"}
+    if not required.issubset(manifest) or set(manifest) - required - optional:
         raise WorkctlError("CONFIRMATION_CLASSIFICATION_MANIFEST_INVALID")
     intervention = manifest.get("intervention")
     if (
@@ -10342,13 +10495,20 @@ def load_confirmation_classification_manifest(path: Path) -> dict[str, Any]:
         or not str(manifest["confirmation_id"]).startswith("C-")
         or not isinstance(intervention, dict)
         or set(intervention) - {"kind", "blocks", "basis_ref", "basis_sha256"}
+        or (
+            "supersedes_basis_sha256" in manifest
+            and (
+                not isinstance(manifest["supersedes_basis_sha256"], str)
+                or SHA256_RE.fullmatch(str(manifest["supersedes_basis_sha256"])) is None
+            )
+        )
     ):
         raise WorkctlError("CONFIRMATION_CLASSIFICATION_MANIFEST_INVALID")
     return manifest
 
 
 def cmd_plan_confirmation_classify(args: argparse.Namespace) -> None:
-    """Repair one legacy pending gate or exact accepted bootstrap placeholder."""
+    """Classify a legacy gate or rebind one undecided external basis exactly."""
     root = project_root()
     manifest = load_confirmation_classification_manifest(Path(args.manifest).resolve())
     with lock(root):
@@ -10370,9 +10530,26 @@ def cmd_plan_confirmation_classify(args: argparse.Namespace) -> None:
         errors = intervention_errors(doc.frontmatter, candidate)
         if errors:
             raise WorkctlError(f"INVALID_INTERVENTION_CONTRACT: {'; '.join(errors)}")
+        rebound = False
         if status == "pending":
             if existing is not None and not intervention_placeholder(target):
-                raise WorkctlError("CONFIRMATION_ALREADY_STRICT")
+                supersedes_basis_sha256 = manifest.get("supersedes_basis_sha256")
+                if (
+                    existing.get("kind") != "external_authority"
+                    or replacement.get("kind") != existing.get("kind")
+                    or replacement.get("blocks") != existing.get("blocks")
+                    or not isinstance(supersedes_basis_sha256, str)
+                    or supersedes_basis_sha256 != existing.get("basis_sha256")
+                ):
+                    raise WorkctlError("CONFIRMATION_STRICT_REBIND_MISMATCH")
+                new_basis_sha256 = replacement.get("basis_sha256")
+                if (
+                    not isinstance(new_basis_sha256, str)
+                    or new_basis_sha256 == supersedes_basis_sha256
+                    or replacement.get("basis_ref") == existing.get("basis_ref")
+                ):
+                    raise WorkctlError("CONFIRMATION_STRICT_REBIND_NO_CHANGE")
+                rebound = True
         elif status == "accepted" and intervention_placeholder(target):
             if replacement.get("kind") != "external_authority" or target.get(
                 "evidence_sha256"
@@ -10389,7 +10566,8 @@ def cmd_plan_confirmation_classify(args: argparse.Namespace) -> None:
         )
         require_valid_candidate(doc)
         write_atomic(doc.path, dump_plan(doc))
-        print(f"CONFIRMATION_CLASSIFIED {confirmation_id} revision={doc.frontmatter['revision']}")
+        event = "CONFIRMATION_REBOUND" if rebound else "CONFIRMATION_CLASSIFIED"
+        print(f"{event} {confirmation_id} revision={doc.frontmatter['revision']}")
 
 
 def cmd_plan_confirm(args: argparse.Namespace) -> None:
@@ -11186,6 +11364,33 @@ def review_has_risk_acceptance(
     )
 
 
+def pending_plan_challenge_is_advisory(
+    frontmatter: Mapping[str, Any],
+    review: Mapping[str, Any],
+    target: str,
+) -> bool:
+    """Release only an ordinary local task from an unfinished Plan challenge."""
+    if review.get("mode") != "plan_challenge" or review.get("state") != "pending":
+        return False
+    if not target.startswith("task:"):
+        return False
+    task_id = target.removeprefix("task:")
+    raw_tasks = frontmatter.get("tasks", [])
+    task = (
+        next(
+            (item for item in raw_tasks if isinstance(item, dict) and item.get("id") == task_id),
+            None,
+        )
+        if isinstance(raw_tasks, list)
+        else None
+    )
+    return bool(
+        isinstance(task, dict)
+        and task.get("completion_scope", "local") == "local"
+        and not task.get("requires_confirmation")
+    )
+
+
 def review_releases_target(
     root: Path,
     frontmatter: Mapping[str, Any],
@@ -11196,6 +11401,8 @@ def review_releases_target(
     if unresolved_blocking_findings(review):
         return False
     state = review.get("state")
+    if pending_plan_challenge_is_advisory(frontmatter, review, target):
+        return True
     if state in {"verified", "degraded"} and not recorded_review_integrity_valid(
         root,
         frontmatter,
@@ -11955,6 +12162,44 @@ def cmd_plan_delivery_complete(args: argparse.Namespace) -> None:
         print(f"DELIVERY_COMPLETED revision={doc.frontmatter['revision']}")
 
 
+def activation_exclusions_to_resolve(
+    frontmatter: dict[str, Any],
+    activation: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Resolve an explicit binding or one unambiguous legacy live exclusion."""
+    confirmation_id = activation.get("confirmation_id")
+    explicit = activation.get("resolves_exclusions")
+    exclusions = exclusions_by_description(frontmatter)
+    if explicit is None:
+        legacy_matches = [
+            exclusion
+            for exclusion in exclusions.values()
+            if exclusion.get("confirmation_id") == confirmation_id
+            and exclusion.get("disposition") == "pending_confirmation"
+        ]
+        if len(legacy_matches) > 1:
+            raise WorkctlError("ACTIVATION_EXCLUSION_BINDING_REQUIRED")
+        return legacy_matches
+    if (
+        not isinstance(explicit, list)
+        or not explicit
+        or not all(isinstance(description, str) and description for description in explicit)
+        or len(explicit) != len(set(explicit))
+    ):
+        raise WorkctlError("INVALID_ACTIVATION_EXCLUSION_BINDING")
+    result: list[dict[str, Any]] = []
+    for description in explicit:
+        exclusion = exclusions.get(description)
+        if (
+            exclusion is None
+            or exclusion.get("confirmation_id") != confirmation_id
+            or exclusion.get("disposition") != "pending_confirmation"
+        ):
+            raise WorkctlError(f"ACTIVATION_EXCLUSION_BINDING_MISMATCH: {description}")
+        result.append(exclusion)
+    return result
+
+
 def cmd_plan_activation_promote(args: argparse.Namespace) -> None:
     """Promote activation through intake- and confirmation-bound states."""
     root = project_root()
@@ -11973,7 +12218,7 @@ def cmd_plan_activation_promote(args: argparse.Namespace) -> None:
         if not isinstance(activation, dict):
             raise WorkctlError("INVALID_ACTIVATION")
         require_independent_target(root, doc.frontmatter, "activation")
-        require_matching_decision(
+        decision = require_matching_decision(
             doc.frontmatter,
             activation.get("confirmation_id"),
             args.confirmation,
@@ -12019,6 +12264,12 @@ def cmd_plan_activation_promote(args: argparse.Namespace) -> None:
                 "checked_at": utc_now(),
                 "sha256": evidence_sha256,
             }
+            for exclusion in activation_exclusions_to_resolve(
+                doc.frontmatter,
+                activation,
+            ):
+                exclusion["disposition"] = "completed"
+                exclusion["resolution_ref"] = decision["ref"]
         bump_revision(
             doc.frontmatter,
             confirmation_id=args.confirmation,
@@ -12276,9 +12527,10 @@ def closeout_readiness(
         for description in unresolved_exclusions(frontmatter):
             blockers.append(f"scope exclusion is unresolved: {description}")
     if frontmatter.get("schema_version") == 4:
-        current_intake_state = intake_state(frontmatter)
-        if current_intake_state != "CURRENT_BASIS":
-            blockers.append(f"intake is {current_intake_state}")
+        if STRICT_INITIAL_INTAKE_REQUIRED:
+            current_intake_state = intake_state(frontmatter)
+            if current_intake_state != "CURRENT_BASIS":
+                blockers.append(f"intake is {current_intake_state}")
         for unknown_id in legacy_unknown_ids(frontmatter):
             blockers.append(f"legacy unknown contract: {unknown_id}")
         intervention_state = intervention_contract_state(frontmatter)
@@ -12344,7 +12596,7 @@ def cmd_plan_closeout_check(args: argparse.Namespace) -> None:
 
 
 def cmd_plan_complete(args: argparse.Namespace) -> None:
-    """Mark a Plan complete only after full route closeout."""
+    """Mark a Plan complete, optionally finalizing a ready route atomically."""
     root = project_root()
     with lock(root):
         report = require_governed_authority(root)
@@ -12368,24 +12620,75 @@ def cmd_plan_complete(args: argparse.Namespace) -> None:
                 plan_id=str(doc.frontmatter["plan_id"]),
                 subject="closeout",
             )
-        readiness = closeout_readiness(doc.frontmatter, report, validate_plan(root))
         require_independent_target(root, doc.frontmatter, "route")
+        if args.confirmation and not args.finalize_route:
+            raise WorkctlError("FINALIZE_ROUTE_REQUIRED_FOR_CONFIRMATION")
+        finalized_atomically = False
+        atomic_intake_history: tuple[list[dict[str, Any]], dict[str, object]] | None = None
+        if args.finalize_route:
+            require_slice_revision_confirmation(
+                doc.frontmatter,
+                args.confirmation,
+                {"accepted", "declined"},
+            )
+            route = doc.frontmatter.get("route")
+            handoff = doc.frontmatter.get("handoff")
+            if not isinstance(route, dict) or not isinstance(handoff, dict):
+                raise WorkctlError("INVALID_TERMINAL_ROUTE")
+            route["route_status"] = "terminal"
+            route["slice_status"] = "complete"
+            route["next_phase"] = "none"
+            route["confirmation_gate"] = "none"
+            handoff["route_status"] = "terminal"
+            handoff["next_step"] = "none"
+            if STRICT_INITIAL_INTAKE_REQUIRED:
+                atomic_intake_history = refresh_intake_for_atomic_controller_transition(
+                    doc.frontmatter
+                )
+            doc.frontmatter["status"] = "complete"
+            if evidence_ref is not None and evidence_sha256 is not None:
+                doc.frontmatter["completion_evidence"] = {
+                    "ref": evidence_ref,
+                    "sha256": evidence_sha256,
+                    "completed_at": utc_now(),
+                }
+            bump_revision(
+                doc.frontmatter,
+                confirmation_id=args.confirmation,
+                evidence_manifest=evidence_ref,
+                rationale="Atomically finalize the route and complete the Plan.",
+            )
+            finalized_atomically = True
+            validation_errors = validate_frontmatter(
+                doc.frontmatter,
+                reject_blocking_artifacts=True,
+            )
+        else:
+            validation_errors = validate_plan(root)
+        readiness = closeout_readiness(doc.frontmatter, report, validation_errors)
         if not readiness["ready"]:
             raise WorkctlError(
                 f"CLOSEOUT_BLOCKED: {'; '.join(str(item) for item in readiness['blockers'])}"
             )
-        doc.frontmatter["status"] = "complete"
-        if evidence_ref is not None and evidence_sha256 is not None:
-            doc.frontmatter["completion_evidence"] = {
-                "ref": evidence_ref,
-                "sha256": evidence_sha256,
-                "completed_at": utc_now(),
-            }
-        bump_revision(
-            doc.frontmatter,
-            evidence_manifest=evidence_ref,
-            rationale="Complete the Plan after evidence-bound closeout.",
-        )
+        if not finalized_atomically:
+            doc.frontmatter["status"] = "complete"
+            if evidence_ref is not None and evidence_sha256 is not None:
+                doc.frontmatter["completion_evidence"] = {
+                    "ref": evidence_ref,
+                    "sha256": evidence_sha256,
+                    "completed_at": utc_now(),
+                }
+            bump_revision(
+                doc.frontmatter,
+                evidence_manifest=evidence_ref,
+                rationale="Complete the Plan after evidence-bound closeout.",
+            )
+        if atomic_intake_history is not None:
+            prior_records, refreshed_record = atomic_intake_history
+            plan_id = str(doc.frontmatter["plan_id"])
+            for prior in prior_records:
+                persist_intake_history_record(root, plan_id, prior)
+            persist_intake_history_record(root, plan_id, refreshed_record)
         require_valid_candidate(doc)
         write_atomic(doc.path, dump_plan(doc))
         print(f"PLAN_COMPLETED revision={doc.frontmatter['revision']}")
@@ -15071,6 +15374,8 @@ def build_parser() -> argparse.ArgumentParser:
     complete = plan_sub.add_parser("complete")
     complete.add_argument("--expected-revision", type=int, required=True)
     complete.add_argument("--evidence-manifest")
+    complete.add_argument("--finalize-route", action="store_true")
+    complete.add_argument("--confirmation")
     add_current_intake_args(complete)
     complete.set_defaults(func=cmd_plan_complete)
     revise = plan_sub.add_parser("revise")

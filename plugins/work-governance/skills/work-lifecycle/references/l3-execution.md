@@ -32,6 +32,14 @@ During execution:
 - never promote `.work-governance/logs` content into Plan facts without
   confirmation.
 
+For a `NO_PLAN_INTERRUPTION`, record the parent resume anchor in the reply-level
+working context, execute only the bounded unrelated request, and resume the
+same dependency-ready Plan target automatically when it ends. For aligned
+insertions, update priority in place when the contract is unchanged; use Plan
+adaptation or contract revision only when the insertion materially changes the
+route contract. Do not make the user restate or re-confirm an unchanged parent
+goal merely because work arrived out of the original order.
+
 An ordinary command failure, evidence gap, or reversible implementation
 adjustment remains Agent-owned. Diagnose the falsifiable cause, change an
 input or hypothesis, and continue within the confirmed contract. Enter L5 and

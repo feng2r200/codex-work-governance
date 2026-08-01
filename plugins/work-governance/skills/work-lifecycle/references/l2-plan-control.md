@@ -133,15 +133,19 @@ Controller gates:
 - confirmation references must exist and be accepted before high-impact steps;
 - schema-v4 pending confirmations must be `STRICT_READY`; legacy pending gates
   remain readable but cannot decide, advance, or close out until classified;
-- every target named by a required independent review stays blocked until the
-  review is verified by a controller-authenticated platform attestor and has no
-  unresolved blocker/high findings, or is degraded and separately covered by
-  exact evidence-bound risk authority. This controller exposes no authenticated
-  attestor and therefore rejects `verified` instead of trusting caller-authored
-  evidence. A degraded review reserves one exact risk-confirmation ID before
-  the confirmation exists, then requires that exact pending confirmation to be
-  created and decided after the review; it cannot adopt a pre-existing or
-  unrelated authority;
+- every high-impact target named by a required independent review stays blocked
+  until the review is verified by a controller-authenticated platform attestor
+  and has no unresolved blocker/high findings, or is degraded and separately
+  covered by exact evidence-bound risk authority. A pending `plan_challenge`
+  without blocker/high findings is advisory only for an ordinary local task
+  whose `completion_scope` is local and which has no `requires_confirmation`;
+  it never releases delivery, activation, route, a route-scoped task, or a
+  confirmation-gated task. Other pending review modes remain blocking. This
+  controller exposes no authenticated attestor and therefore rejects `verified`
+  instead of trusting caller-authored evidence. A degraded review reserves one
+  exact risk-confirmation ID before the confirmation exists, then requires that
+  exact pending confirmation to be created and decided after the review; it
+  cannot adopt a pre-existing or unrelated authority;
 - suspect, quarantined, or rollback-pending artifacts block closeout;
 - only a task that explicitly lists affected IDs in `resolves_artifacts` may
   progress while all blocking artifacts are `suspect`; quarantine and
@@ -243,8 +247,10 @@ Allowed structural changes:
   trusted turn and exact target set.
 - `plan intake record`: append the proposal idempotently; conflicting content
   for the same request reference is rejected, except for a basis-changing
-  `ask|explore -> proceed` supersession. The Plan retains one current anchor;
-  full canonical records remain in project-local immutable runtime history.
+  `ask|explore -> proceed` supersession or a same-request `proceed` refresh
+  after controller-authorized basis drift with identical request, targets,
+  rationale, and unknown binding. The Plan retains one current anchor; full
+  canonical records remain in project-local immutable runtime history.
 - `plan evidence record --manifest ...`: canonicalize bounded typed evidence
   metadata under the active Plan and return its exact path and SHA256.
 - `plan confirm`: resolve a pending gate as `accepted` or `declined` with a
@@ -263,7 +269,10 @@ Allowed structural changes:
   caller-authored evidence never satisfy the gate.
 - `plan closeout-check|complete`: compute full route readiness and set Plan
   status complete only through the dedicated closeout command; `plan revise`
-  cannot assign complete directly.
+  cannot assign complete directly. When every non-route obligation is ready,
+  `plan complete --finalize-route --confirmation C-...` binds the accepted
+  current slice gate and atomically terminalizes route and handoff with Plan
+  completion, avoiding a structural intermediate state that would stale intake.
 - `plan verify-entry`: mark one obligation or validation verified only with a
   typed evidence reference, reviewed SHA256, and accepted current-slice gate.
 - `plan finalize-artifact`: change an artifact to final only with the same
@@ -278,7 +287,19 @@ Allowed structural changes:
   gate and optionally replace the matching `+codex.pending` plugin placeholder
   with an exact cachebuster while entering `in_progress`; promotion to `active`
   requires canonical evidence whose `observed_ref` equals the frozen target.
-  Generic Plan patches and the active transition cannot rebind that target.
+  `activation.resolves_exclusions` may bind exact exclusion descriptions to the
+  same confirmation; only the successful `active` transition marks them
+  `completed` with that decision ref. Legacy Plans without the field receive
+  this reconciliation only when exactly one pending exclusion matches the
+  activation confirmation; multiple matches fail closed. Gate acceptance alone
+  never resolves an exclusion. Generic Plan patches and the active transition
+  cannot rebind that target.
+- When an undecided external-authority gate was created before its immutable
+  candidate existed, re-run `plan confirmation classify` with the exact same
+  `kind` and `blocks`, the previous `supersedes_basis_sha256`, and a changed
+  exact `basis_ref` plus `basis_sha256`. This may rebind only a still-pending
+  strict gate. It cannot change protected targets, revise an accepted decision,
+  or serve as evidence that the external action happened.
 - `task start|block|verify|skip`: update task state.
 - `log append`: preserve local process detail without granting it completion
   authority.

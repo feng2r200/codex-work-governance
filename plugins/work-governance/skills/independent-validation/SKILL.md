@@ -41,8 +41,18 @@ request. Validation challenges claims; it does not own the parent Plan.
   delivery/activation state, current runtime evidence, and proposed completion
   wording. Challenge any route that is internally closed but externally
   unapplied.
-- If independence is unavailable, disclose the downgrade and lower conclusion
-  strength for high-impact work unless the user accepts the risk.
+- If independence is unavailable, disclose `VALIDATOR_UNAVAILABLE`; absence of
+  a reviewer is an availability fact, not evidence that the artifact itself is
+  low confidence. Keep high-impact completion blocked unless the exact degraded
+  risk is accepted.
+- Make reviewer acquisition bounded: one initial attempt and at most one retry
+  after materially changing the review input, context, or mechanism. If neither
+  returns a final review, report `VALIDATOR_UNAVAILABLE` rather than inventing a
+  confidence score or requesting an open-ended retry loop. A deterministic
+  self-challenge may support only ordinary reversible local tasks; delivery,
+  activation, route closeout, external actions, and any task with a confirmation
+  gate remain blocked, as do all targets covered by an open blocker or high
+  finding.
 - For layout/bootstrap claims, inspect the exact Plugin build, READY receipt,
   version contract, local evidence record, offline command evidence, and both
   layout and Plan-authority axes. A hook's self-report is not sufficient.
