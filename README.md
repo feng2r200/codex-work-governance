@@ -124,6 +124,15 @@ and committed migration proofs are versionable. The exact
 `bootstrap-state.json`, and `workctl.lock`. A No-Plan bootstrap creates the
 layout contract and local infrastructure but no Plan or index.
 
+Canonical runtime identity is session-scoped under
+`.work-governance/runtime/sessions/<session_id>/`: `bootstrap-state.json`,
+`bootstrap-capability.json`, and `current-turn-receipt.json`. The root
+bootstrap receipt and the old runtime capability/current-turn paths remain
+compatibility surfaces for older installed sessions; a newer session never
+overwrites a READY or current-turn compatibility record owned by another
+session. Always use the exact receipt digest emitted by the hook instead of
+deriving a path or choosing the newest file.
+
 The SessionStart hook is a short wakener. Its standard-library runner
 fingerprints the bootstrap action, installed Plugin payload, and relevant
 project layout inputs. Before issuing READY it snapshots the exact controller
@@ -131,19 +140,25 @@ and `work-lifecycle` skill into
 `.work-governance/runtime/plugin-builds/<plugin-manifest-sha256>/`, then binds
 receipt schema v2 to those paths and hashes plus the current session. It
 first writes an ignored
-`.work-governance/runtime/bootstrap-capability.json` with
+`.work-governance/runtime/sessions/<session_id>/bootstrap-capability.json` with
 `BOOTSTRAPPING` state. That capability authorizes only the exact bundled
 controller to perform layout migration or recovery for this SessionStart; it
-cannot authorize Plan or other ordinary writes. A newer SessionStart replaces
-it, so an older capability fails closed.
+cannot authorize Plan or other ordinary writes. A same-session SessionStart
+replaces it, so an older capability for that session fails closed; capabilities
+from different sessions neither authorize nor supersede one another.
 The hook then prewarms the controller's pinned PEP 723 dependency
 in `.work-governance/cache/uv`, trying the existing cache offline before using
 permitted dependency access, disables Python downloads, and runs migration,
 validation, and status commands offline. Exact Plugin builds and incremental
-state live only in the ignored `bootstrap-state.json`; detailed command evidence
-stays under `.work-governance/evidence/`. The runtime snapshot remains
+state live in the ignored session-scoped bootstrap receipt; detailed command
+evidence stays under `.work-governance/evidence/`. The runtime snapshot remains
 available if the Codex Plugin cache entry is replaced or removed after
 SessionStart.
+
+When a same-session compaction emits another SessionStart and the trusted
+runtime identity is unchanged, the hook preserves the exact READY receipt
+bytes. The active turn therefore remains valid. A structural or build identity
+change produces a new receipt and correctly invalidates the prior turn.
 
 The local bootstrap action revision and the versioned legacy layout-migration
 revision are independent. Bootstrap action revision 5 introduces the runtime
@@ -170,8 +185,9 @@ prefix is valid only for layout commands and is not a READY receipt. Do not
 reinterpret such output as a hook-trust failure. Restore the reported
 precondition and obtain a current `READY` receipt in a fresh session.
 
-Every trusted `UserPromptSubmit` atomically replaces
-`.work-governance/runtime/current-turn-receipt.json`. The ignored receipt binds
+Every trusted `UserPromptSubmit` atomically replaces its session-scoped
+`.work-governance/runtime/sessions/<session_id>/current-turn-receipt.json`.
+The ignored receipt binds
 the installed build, current SessionStart receipt hash, official `session_id`
 and `turn_id`, exact UTF-8 prompt SHA256, project root, and
 `request_ref=user:session/<session>/turn/<turn>/sha256/<prompt-sha256>`. A new
@@ -192,8 +208,9 @@ uv run --no-project --offline --cache-dir .work-governance/cache/uv \
 ```
 
 Use the same absolute controller and receipt digest for subsequent commands.
-Every write is bound to the newest receipt; after another SessionStart, an old
-session receives `BOOTSTRAP_RECEIPT_SUPERSEDED`. The bootstrap-only capability
+Every write is bound to that session's receipt; after a replacement
+SessionStart for the same session, the old receipt is superseded. An unrelated
+session cannot supersede it. The bootstrap-only capability
 described above is a separate fail-closed channel for SessionStart layout
 mutation and never satisfies this READY requirement.
 
@@ -217,6 +234,21 @@ Non-simple No-Plan work keeps only the current runtime receipt and visible
 reply; it does not call the Plan controller or persist an intake record.
 Intake rationale records only a minimal decision summary; never copy raw prompt
 content, credentials, tokens, or other secrets into the Plan.
+
+Protocol-v2 Plans keep one bounded `intake.current` anchor and a history head
+plus count. Complete canonical records are stored as ignored,
+content-addressed files below
+`.work-governance/runtime/intake-history/<plan-id>/`. Existing protocol-v1
+Plans remain valid and migrate on their next intake write. A same-request
+`ask|explore -> proceed` transition is accepted only when its decision basis
+changes and the new record explicitly supersedes the prior digest;
+rationale-only or same-basis mutation remains `INTAKE_REQUEST_CONFLICT`.
+
+Controller writes wait only for the configured bounded interval on
+`.work-governance/workctl.lock`. Timeout diagnostics include the last observed
+holder PID and acquisition time when available. Tests may reduce the interval
+with `WORK_GOVERNANCE_LOCK_TIMEOUT_SECONDS`; normal callers use the supported
+default.
 
 The controller uses `.work-governance/_Plan/index.yaml` only to locate the
 active Plan. `.work-governance/_Plan/<plan-id>.md` frontmatter is the sole
@@ -266,7 +298,8 @@ New Plans use schema v4 to make these concerns first-class:
 
 - a stable goal statement and measurable success conditions;
 - a revisioned demand contract bound to an accepted confirmation;
-- append-only, hash-chained intake records for trusted user turns;
+- a bounded current intake anchor backed by project-local immutable,
+  hash-linked records for trusted user turns;
 - open or resolved unknowns with `owner`, `impact`, authoritative `blocks`,
   and non-empty expected evidence;
 - task-level expected evidence deltas;

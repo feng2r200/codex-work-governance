@@ -17,6 +17,7 @@ from typing import cast
 GOVERNANCE_DIR = ".work-governance"
 SESSION_RECEIPT_NAME = "bootstrap-state.json"
 TURN_RECEIPT_NAME = "current-turn-receipt.json"
+SESSIONS_DIR_NAME = "sessions"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
@@ -150,8 +151,10 @@ def validate_session_receipt(
     expected_session_id: str,
     expected_plugin_build: str,
 ) -> tuple[dict[str, object], str]:
-    """Validate the current READY SessionStart receipt and runtime bundle."""
-    receipt_path = project_root / GOVERNANCE_DIR / SESSION_RECEIPT_NAME
+    """Validate this session's READY receipt and exact runtime bundle."""
+    scoped = session_state_dir(project_root, expected_session_id) / SESSION_RECEIPT_NAME
+    legacy = project_root / GOVERNANCE_DIR / SESSION_RECEIPT_NAME
+    receipt_path = scoped if scoped.is_file() and not scoped.is_symlink() else legacy
     receipt = load_json_object(receipt_path, "SESSION_RECEIPT_REQUIRED")
     if (
         receipt.get("schema_version") != 2
@@ -206,6 +209,13 @@ def validate_session_receipt(
     return receipt, sha256_file(receipt_path)
 
 
+def session_state_dir(project_root: Path, session_id: str) -> Path:
+    """Return one bounded session directory without permitting control-path escape."""
+    path = project_root / GOVERNANCE_DIR / "runtime" / SESSIONS_DIR_NAME / session_id
+    reject_symlink_components(project_root, path)
+    return path
+
+
 def canonical_receipt_sha256(payload: Mapping[str, object]) -> str:
     """Hash the canonical receipt projection that excludes its self digest."""
     projected = {key: value for key, value in payload.items() if key != "receipt_sha256"}
@@ -245,9 +255,9 @@ def atomic_write_json(path: Path, payload: Mapping[str, object]) -> None:
             temporary.unlink()
 
 
-def invalidate_prior_turn_receipt(project_root: Path) -> Path:
-    """Atomically replace any prior receipt with a fail-closed tombstone."""
-    turn_receipt_path = project_root / GOVERNANCE_DIR / "runtime" / TURN_RECEIPT_NAME
+def invalidate_prior_turn_receipt(project_root: Path, session_id: str) -> Path:
+    """Atomically replace only this session's prior receipt with a tombstone."""
+    turn_receipt_path = session_state_dir(project_root, session_id) / TURN_RECEIPT_NAME
     reject_symlink_components(project_root, turn_receipt_path.parent)
     atomic_write_json(
         turn_receipt_path,
@@ -258,6 +268,20 @@ def invalidate_prior_turn_receipt(project_root: Path) -> Path:
         },
     )
     return turn_receipt_path
+
+
+def install_legacy_turn_receipt_if_safe(
+    project_root: Path,
+    receipt: Mapping[str, object],
+) -> None:
+    """Maintain a single-session compatibility file without crossing sessions."""
+    legacy = project_root / GOVERNANCE_DIR / "runtime" / TURN_RECEIPT_NAME
+    reject_symlink_components(project_root, legacy)
+    if legacy.exists() or legacy.is_symlink():
+        current = load_json_object(legacy, "TURN_RECEIPT_TARGET_INVALID")
+        if current.get("session_id") != receipt.get("session_id"):
+            return
+    atomic_write_json(legacy, receipt)
 
 
 def emit_context(message: str) -> None:
@@ -281,14 +305,16 @@ def main() -> int:
         project_root = discover_project_root(
             Path(raw_cwd) if isinstance(raw_cwd, str) and raw_cwd else Path.cwd()
         )
-        turn_receipt_path = invalidate_prior_turn_receipt(project_root)
-        prior_invalidated = True
-        validate_hook_input(hook_input)
         session_id = required_string(
             hook_input,
             "session_id",
             "TURN_SESSION_ID_REQUIRED",
         )
+        if IDENTIFIER_RE.fullmatch(session_id) is None:
+            raise TurnReceiptError("TURN_IDENTITY_INVALID")
+        turn_receipt_path = invalidate_prior_turn_receipt(project_root, session_id)
+        prior_invalidated = True
+        validate_hook_input(hook_input)
         turn_id = required_string(hook_input, "turn_id", "TURN_ID_REQUIRED")
         prompt = cast(str, hook_input["prompt"])
         plugin_root = installed_plugin_root()
@@ -314,6 +340,7 @@ def main() -> int:
         }
         receipt["receipt_sha256"] = canonical_receipt_sha256(receipt)
         atomic_write_json(turn_receipt_path, receipt)
+        install_legacy_turn_receipt_if_safe(project_root, receipt)
         emit_context(
             "WORK_GOVERNANCE_TURN_RECEIPT READY; "
             f"request_ref={request_ref}; "
@@ -333,7 +360,11 @@ def main() -> int:
         if not prior_invalidated:
             try:
                 fallback_root = project_root or discover_project_root(Path.cwd())
-                invalidate_prior_turn_receipt(fallback_root)
+                fallback_session = (
+                    hook_input.get("session_id") if "hook_input" in locals() else None
+                )
+                if isinstance(fallback_session, str) and IDENTIFIER_RE.fullmatch(fallback_session):
+                    invalidate_prior_turn_receipt(fallback_root, fallback_session)
             except (OSError, TurnReceiptError):
                 pass
         reason = str(exc).replace("\n", " ")[:400]
