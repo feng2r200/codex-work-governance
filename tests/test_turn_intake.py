@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -62,13 +63,14 @@ def run_session_hook(
     session_id: str,
     *,
     source: str = "startup",
+    plugin_root: Path = PLUGIN_ROOT,
 ) -> dict[str, object]:
     """Run the real SessionStart hook for one temporary project."""
     environment = dict(os.environ)
-    environment["PLUGIN_ROOT"] = str(PLUGIN_ROOT)
+    environment["PLUGIN_ROOT"] = str(plugin_root)
     environment["PATH"] = str(fake_bin) + os.pathsep + environment.get("PATH", "")
     result = subprocess.run(
-        [sys.executable, str(SESSION_HOOK)],
+        [sys.executable, str(plugin_root / "hooks" / "session_start.py")],
         input=json.dumps(
             {
                 "session_id": session_id,
@@ -93,6 +95,7 @@ def run_turn_hook(
     session_id: str,
     turn_id: str,
     prompt: str,
+    plugin_root: Path = PLUGIN_ROOT,
 ) -> dict[str, object]:
     """Run the real UserPromptSubmit hook against the current SessionStart receipt."""
     return run_raw_turn_hook(
@@ -102,16 +105,21 @@ def run_turn_hook(
             "cwd": str(project),
             "hook_event_name": "UserPromptSubmit",
             "prompt": prompt,
-        }
+        },
+        plugin_root=plugin_root,
     )
 
 
-def run_raw_turn_hook(payload: dict[str, object]) -> dict[str, object]:
+def run_raw_turn_hook(
+    payload: dict[str, object],
+    *,
+    plugin_root: Path = PLUGIN_ROOT,
+) -> dict[str, object]:
     """Run the prompt hook with one exact JSON input object."""
     environment = dict(os.environ)
-    environment["PLUGIN_ROOT"] = str(PLUGIN_ROOT)
+    environment["PLUGIN_ROOT"] = str(plugin_root)
     result = subprocess.run(
-        [sys.executable, str(TURN_HOOK)],
+        [sys.executable, str(plugin_root / "hooks" / "user_prompt_submit.py")],
         input=json.dumps(payload, ensure_ascii=False),
         text=True,
         capture_output=True,
@@ -321,6 +329,7 @@ def prepare_admitted_project(
     tmp_path: Path,
     *,
     unknowns: list[dict[str, object]] | None = None,
+    prepared_plan: dict[str, object] | None = None,
     admission_env: dict[str, str] | None = None,
     expect_admission_success: bool = True,
 ) -> tuple[Path, str]:
@@ -332,9 +341,9 @@ def prepare_admitted_project(
     project.mkdir()
     session_id = "session-intake"
     run_session_hook(project, fake_bin, session_id)
-    plan_id = "PLAN-20260729-001"
-    plan = strict_admission_plan(plan_id, unknowns=unknowns)
-    unknown_items = unknowns or []
+    plan = prepared_plan or strict_admission_plan("PLAN-20260729-001", unknowns=unknowns)
+    plan_id = cast(str, plan["plan_id"])
+    unknown_items = cast(list[dict[str, object]], plan.get("unknowns", []))
     candidate = project / "candidate.md"
     candidate.write_text(
         f"---\n{yaml.safe_dump(plan, sort_keys=False)}---\n# Intake test Plan\n",
@@ -388,7 +397,7 @@ def prepare_admitted_project(
     manifest = {
         "schema_version": 1,
         "kind": "plan-admission",
-        "transaction_id": "ADM-20260729-001",
+        "transaction_id": plan_id.replace("PLAN-", "ADM-"),
         "prepared_plan": candidate.name,
         "plan_id": plan_id,
         "plan_sha256": sha256_bytes(candidate.read_bytes()),
@@ -1173,6 +1182,67 @@ def test_session_receipts_are_isolated_and_compaction_preserves_active_turn(
 
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["request_ref"] == alpha_turn_receipt["request_ref"]
+
+
+def test_same_session_resumes_on_candidate_after_older_build_receipt(
+    tmp_path: Path,
+) -> None:
+    """A reopened session replaces its old build authority and accepts a fresh turn."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    install_fake_uv(fake_bin)
+    project = tmp_path / "project"
+    project.mkdir()
+    old_plugin = tmp_path / "old-plugin"
+    shutil.copytree(PLUGIN_ROOT, old_plugin)
+    old_manifest_path = old_plugin / ".codex-plugin" / "plugin.json"
+    old_manifest = read_json_object(old_manifest_path)
+    old_manifest["version"] = "1.0.6+codex.old-session-probe"
+    old_manifest_path.write_text(
+        json.dumps(old_manifest, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    candidate_manifest = read_json_object(PLUGIN_ROOT / ".codex-plugin" / "plugin.json")
+    candidate_build = cast(str, candidate_manifest["version"])
+    session_id = "reopened-older-build-session"
+
+    run_session_hook(project, fake_bin, session_id, plugin_root=old_plugin)
+    run_turn_hook(
+        project,
+        session_id=session_id,
+        turn_id="old-turn",
+        prompt="old build request",
+        plugin_root=old_plugin,
+    )
+    session_path = (
+        project / ".work-governance" / "runtime" / "sessions" / session_id / "bootstrap-state.json"
+    )
+    old_receipt_bytes = session_path.read_bytes()
+    old_receipt = read_json_object(session_path)
+
+    resumed = run_session_hook(project, fake_bin, session_id, source="resume")
+    candidate_receipt = read_json_object(session_path)
+    run_turn_hook(
+        project,
+        session_id=session_id,
+        turn_id="candidate-turn",
+        prompt="continue the existing goal on the candidate",
+    )
+    candidate_turn = read_json_object(session_path.parent / "current-turn-receipt.json")
+    controller_status = json.loads(run_controller(project, "intake", "status").stdout)
+    hook_specific = cast(dict[str, object], resumed["hookSpecificOutput"])
+    context = cast(str, hook_specific["additionalContext"])
+
+    assert candidate_build.startswith("1.0.7+codex.")
+    assert old_receipt["plugin_build"] == "1.0.6+codex.old-session-probe"
+    assert candidate_receipt["plugin_build"] == candidate_build
+    assert session_path.read_bytes() != old_receipt_bytes
+    assert candidate_receipt["controller_ref"] != old_receipt["controller_ref"]
+    assert candidate_turn["plugin_build"] == candidate_build
+    assert candidate_turn["session_start_receipt_sha256"] == sha256_bytes(session_path.read_bytes())
+    assert controller_status["authority_state"] == "UNMANAGED_EMPTY"
+    assert f"build={candidate_build}" in context
+    assert "WORK_GOVERNANCE_BOOTSTRAP READY" in context
 
 
 def test_turn_hook_invalidates_prior_receipt_before_field_validation(tmp_path: Path) -> None:
@@ -1991,6 +2061,204 @@ def test_same_request_material_transition_uses_bounded_immutable_history(
     )
     assert rejected.returncode == 2
     assert "INTAKE_REQUEST_CONFLICT" in rejected.stderr
+
+
+def test_same_request_proceed_refreshes_after_controller_basis_change(
+    tmp_path: Path,
+) -> None:
+    """One trusted proceed can refresh after a controller-owned structural write."""
+    project, session_id = prepare_admitted_project(tmp_path)
+    first, _manifest, turn_sha256 = issue_intake(
+        project,
+        session_id=session_id,
+        turn_id="turn-proceed-refresh",
+        decision="proceed",
+        targets=["route"],
+        expected_revision=1,
+    )
+    first_frontmatter = read_plan_frontmatter(project, "PLAN-20260729-001")
+    first_record = intake_records_for_assertion(first_frontmatter)[-1]
+
+    run_controller(
+        project,
+        "plan",
+        "unknown",
+        "add",
+        "--unknown-id",
+        "U-001",
+        "--question",
+        "Which optional local note should be retained?",
+        "--owner",
+        "agent",
+        "--impact",
+        "non_blocking",
+        "--expected-evidence",
+        "A local note inspection.",
+        "--expected-revision",
+        "2",
+    )
+    refreshed = json.loads(
+        run_controller(
+            project,
+            "intake",
+            "receipt",
+            "--turn-receipt-sha256",
+            turn_sha256,
+            "--classification",
+            "plan_controlled",
+            "--decision",
+            "proceed",
+            "--rationale",
+            cast(str, first["rationale"]),
+            "--targets",
+            "route",
+        ).stdout
+    )
+    refresh_manifest = project / "proceed-refresh.json"
+    refresh_manifest.write_text(json.dumps(refreshed), encoding="utf-8")
+
+    recorded = run_controller(
+        project,
+        "plan",
+        "intake",
+        "record",
+        "--manifest",
+        str(refresh_manifest),
+        "--expected-revision",
+        "3",
+    )
+    final = read_plan_frontmatter(project, "PLAN-20260729-001")
+    current = intake_records_for_assertion(final)[-1]
+
+    assert "PLAN_INTAKE_REFRESHED" in recorded.stdout
+    assert current["request_ref"] == first_record["request_ref"]
+    assert current["rationale"] == first_record["rationale"]
+    assert current["decision_basis_sha256"] != first_record["decision_basis_sha256"]
+    assert current["supersedes_record_sha256"] == first_record["record_sha256"]
+
+
+def test_same_request_proceed_refresh_rejects_unbound_direct_basis_edit(
+    tmp_path: Path,
+) -> None:
+    """A valid-looking direct Plan edit cannot masquerade as a controller refresh."""
+    project, session_id = prepare_admitted_project(tmp_path)
+    first, _manifest, turn_sha256 = issue_intake(
+        project,
+        session_id=session_id,
+        turn_id="turn-unbound-refresh",
+        decision="proceed",
+        targets=["route"],
+        expected_revision=1,
+    )
+    frontmatter = read_plan_frontmatter(project, "PLAN-20260729-001")
+    cast(dict[str, object], frontmatter["route"])["next_phase"] = "A direct unbound edit."
+    write_plan_frontmatter(project, "PLAN-20260729-001", frontmatter)
+    proposal = json.loads(
+        run_controller(
+            project,
+            "intake",
+            "receipt",
+            "--turn-receipt-sha256",
+            turn_sha256,
+            "--classification",
+            "plan_controlled",
+            "--decision",
+            "proceed",
+            "--rationale",
+            cast(str, first["rationale"]),
+            "--targets",
+            "route",
+        ).stdout
+    )
+    manifest = project / "unbound-refresh.json"
+    manifest.write_text(json.dumps(proposal), encoding="utf-8")
+
+    rejected = run_controller(
+        project,
+        "plan",
+        "intake",
+        "record",
+        "--manifest",
+        str(manifest),
+        "--expected-revision",
+        "2",
+        check=False,
+    )
+
+    assert "INTAKE_REQUEST_CONFLICT" in rejected.stderr
+
+
+def test_atomic_closeout_refreshes_current_intake_without_an_extra_turn(
+    tmp_path: Path,
+) -> None:
+    """Terminal route mutation and intake refresh commit under one trusted request."""
+    plan_id = "PLAN-20260801-301"
+    plan = strict_admission_plan(plan_id)
+    plan["obligations"] = []
+    plan["tasks"] = []
+    plan["validations"] = []
+    plan["artifacts"] = []
+    plan["delivery"] = {
+        "status": "complete",
+        "boundary": "immutable-local-candidate",
+        "evidence_ref": "git:exact-candidate",
+    }
+    cast(dict[str, object], plan["route"])["confirmation_gate"] = "C-ADMISSION"
+    project, _session_id = prepare_admitted_project(tmp_path, prepared_plan=plan)
+    admitted = read_plan_frontmatter(project, plan_id)
+    initial_record = intake_records_for_assertion(admitted)[-1]
+    turn_receipt = read_json_object(
+        project / ".work-governance" / "runtime" / "current-turn-receipt.json"
+    )
+    evidence_input = {
+        "schema_version": 1,
+        "kind": "work-governance-evidence",
+        "plan_id": plan_id,
+        "subject": "closeout",
+        "created_at": "2026-08-01T10:10:00+00:00",
+        "producer_ref": "runtime:strict-atomic-closeout-test",
+        "items": [{"ref": "git:exact-candidate", "sha256": "d" * 64}],
+    }
+    evidence_input_path = project / "closeout-evidence.json"
+    evidence_input_path.write_text(json.dumps(evidence_input), encoding="utf-8")
+    evidence = json.loads(
+        run_controller(
+            project,
+            "plan",
+            "evidence",
+            "record",
+            "--manifest",
+            str(evidence_input_path),
+        ).stdout
+    )
+
+    completed = run_controller(
+        project,
+        "plan",
+        "complete",
+        "--finalize-route",
+        "--confirmation",
+        "C-ADMISSION",
+        "--evidence-manifest",
+        str(evidence["path"]),
+        "--expected-revision",
+        "1",
+        "--turn-receipt-sha256",
+        cast(str, turn_receipt["receipt_sha256"]),
+        "--expected-intake-sha256",
+        cast(str, initial_record["record_sha256"]),
+    )
+    final = read_plan_frontmatter(project, plan_id)
+    current = intake_records_for_assertion(final)[-1]
+    history = cast(dict[str, object], cast(dict[str, object], final["intake"])["history"])
+
+    assert "PLAN_COMPLETED revision=2" in completed.stdout
+    assert final["status"] == "complete"
+    assert cast(dict[str, object], final["route"])["route_status"] == "terminal"
+    assert current["request_ref"] == initial_record["request_ref"]
+    assert current["supersedes_record_sha256"] == initial_record["record_sha256"]
+    assert current["decision_basis_sha256"] != initial_record["decision_basis_sha256"]
+    assert history["record_count"] == 2
 
 
 def test_basis_change_invalidates_prior_intake(tmp_path: Path) -> None:

@@ -3,6 +3,12 @@
 Enter L5 when evidence shows the route, output, scope, dependency, or artifact
 state may no longer serve the goal.
 
+An inserted request or between-slice audit is not automatically a deviation.
+First apply the L0 goal-alignment classifier: unrelated bounded work uses a
+resumable No-Plan interruption, aligned priority changes stay in the current
+Plan, and only an aligned material contract change enters Plan adaptation or
+revision.
+
 Do not enter L5 merely because an implementation attempt failed, a local fact
 is unknown, or more evidence is needed. Those are Agent-owned diagnosis and
 exploration unless they prove a material change to goal, scope, behavior,

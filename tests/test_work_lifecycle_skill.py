@@ -258,6 +258,44 @@ def test_user_decision_refs_prefer_session_turn_and_evidence_hash() -> None:
     assert "Existing typed references remain valid" in normalized_control
 
 
+def test_inserted_requests_route_by_goal_alignment_and_resume_automatically() -> None:
+    """Keep the Plan useful as a map without turning insertion into route churn."""
+    intake = L0_PATH.read_text(encoding="utf-8")
+    execution = L3_PATH.read_text(encoding="utf-8")
+    deviation = L5_PATH.read_text(encoding="utf-8")
+
+    assert "`NO_PLAN_INTERRUPTION`" in intake
+    assert "next-action resume anchor" in intake
+    assert "resume automatically" in intake
+    assert "changes only execution order or priority" in intake
+    assert "materially changes obligations, scope, behavior, cost" in intake
+    assert "same dependency-ready Plan target automatically" in execution
+    assert "is not automatically a deviation" in deviation
+
+
+def test_reviewer_unavailability_and_atomic_closeout_are_bounded() -> None:
+    """Unavailable review must not invent confidence or force an extra turn."""
+    independent = INDEPENDENT_PATH.read_text(encoding="utf-8")
+    control = L2_PATH.read_text(encoding="utf-8")
+    closeout = L6_PATH.read_text(encoding="utf-8")
+
+    assert "one initial attempt and at most one retry" in independent
+    assert "`VALIDATOR_UNAVAILABLE`" in independent
+    assert "ordinary reversible local tasks" in independent
+    assert "pending `plan_challenge`" in control
+    assert "`activation.resolves_exclusions`" in control
+    assert "Gate acceptance alone\n  never resolves an exclusion" in control
+    assert "`plan complete --finalize-route --confirmation C-..." in closeout
+    assert "decision-free extra user turn" in closeout
+
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+    assert "`NO_PLAN_INTERRUPTION`" in skill
+    assert "resume it automatically" in skill
+    assert "`VALIDATOR_UNAVAILABLE`" in skill
+    assert "controller-caused\nPlan revision" in skill
+    assert "accepted external gate records authority" in skill
+
+
 def test_retirement_is_distinct_from_completion_and_excluded_routes_stay_out() -> None:
     """Document the general retirement path without task-specific main-flow scope."""
     skill = SKILL_PATH.read_text(encoding="utf-8")
