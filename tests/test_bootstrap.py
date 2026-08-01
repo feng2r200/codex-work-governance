@@ -1000,7 +1000,10 @@ def test_action_four_sessionstart_upgrades_action_three_scope_residual(
         },
     )
     resumed_commands = read_uv_commands(uv_log)[prior_command_count:]
-    current_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    current_receipt_path = (
+        governance / "runtime" / "sessions" / "action-four-layout-upgrade" / "bootstrap-state.json"
+    )
+    current_receipt = json.loads(current_receipt_path.read_text(encoding="utf-8"))
     current_version = yaml.safe_load(version_path.read_text(encoding="utf-8"))
     _, corrected_raw, _corrected_body = plan.read_text(encoding="utf-8").split("---\n", 2)
     corrected = yaml.safe_load(corrected_raw)
@@ -1126,7 +1129,14 @@ def test_changed_layout_input_reruns_and_fails_closed(tmp_path: Path) -> None:
     output = run_hook(project, fake_bin, uv_log)
 
     receipt = json.loads(
-        (project / ".work-governance" / "bootstrap-state.json").read_text(encoding="utf-8")
+        (
+            project
+            / ".work-governance"
+            / "runtime"
+            / "sessions"
+            / "test-session"
+            / "bootstrap-state.json"
+        ).read_text(encoding="utf-8")
     )
     context = output["hookSpecificOutput"]["additionalContext"]
     assert receipt["status"] == "ENVIRONMENT_BLOCKED"
@@ -1163,7 +1173,6 @@ def test_committed_layout_recovers_interrupted_failure_transaction(
     project.mkdir()
     run_hook(project, fake_bin, uv_log)
     governance = project / ".work-governance"
-    prior_receipt = (governance / "bootstrap-state.json").read_bytes()
     reappeared = project / "_Plan"
     reappeared.mkdir()
     (reappeared / ".workctl.lock").write_text("", encoding="utf-8")
@@ -1174,18 +1183,19 @@ def test_committed_layout_recovers_interrupted_failure_transaction(
         uv_log,
         environment_overrides={"WORK_GOVERNANCE_TEST_INTERRUPT_FAILURE_AFTER_JOURNAL": "1"},
     )
-    journal = governance / "runtime" / "bootstrap-failure-journal.json"
+    session_dir = governance / "runtime" / "sessions" / "test-session"
+    journal = session_dir / "bootstrap-failure-journal.json"
 
     assert (
         "BOOTSTRAP_TEST_INTERRUPTED_FAILURE_INSTALL"
         in (interrupted["hookSpecificOutput"]["additionalContext"])
     )
     assert journal.is_file()
-    assert (governance / "bootstrap-state.json").read_bytes() == prior_receipt
+    assert not (governance / "bootstrap-state.json").exists()
 
     shutil.rmtree(reappeared)
     recovered = run_hook(project, fake_bin, uv_log)
-    receipt = json.loads((governance / "bootstrap-state.json").read_text(encoding="utf-8"))
+    receipt = json.loads((session_dir / "bootstrap-state.json").read_text(encoding="utf-8"))
     blocked_evidence = [
         json.loads(path.read_text(encoding="utf-8"))
         for path in (governance / "evidence" / "bootstrap").glob("*.json")
@@ -1256,7 +1266,11 @@ def test_committed_layout_bootstraps_missing_local_directories(tmp_path: Path) -
     reappeared.mkdir()
     (reappeared / ".workctl.lock").write_text("", encoding="utf-8")
     blocked = run_hook(project, fake_bin, uv_log)
-    blocked_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    blocked_receipt = json.loads(
+        (governance / "runtime" / "sessions" / "test-session" / "bootstrap-state.json").read_text(
+            encoding="utf-8"
+        )
+    )
     evidence_path = project / blocked_receipt["evidence_ref"].removeprefix("evidence:")
 
     assert "LAYOUT_MIGRATION_NOT_READY" in (blocked["hookSpecificOutput"]["additionalContext"])
@@ -1335,6 +1349,54 @@ def test_invalid_hook_input_has_short_fail_closed_output(tmp_path: Path) -> None
     assert "ENVIRONMENT_BLOCKED" in (output["hookSpecificOutput"]["additionalContext"])
     assert not (tmp_path / ".work-governance").exists()
     assert read_uv_commands(uv_log) == []
+
+
+def test_failed_new_session_does_not_invalidate_another_session_ready_receipt(
+    tmp_path: Path,
+) -> None:
+    """A beta bootstrap failure cannot revoke alpha's scoped or legacy READY state."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv_log = tmp_path / "uv.jsonl"
+    install_fake_uv(fake_bin, uv_log)
+    project = tmp_path / "project"
+    project.mkdir()
+    alpha_payload = {
+        "session_id": "session-alpha",
+        "cwd": str(project),
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+    }
+
+    run_hook(project, fake_bin, uv_log, payload=alpha_payload)
+    governance = project / ".work-governance"
+    alpha_receipt = governance / "runtime" / "sessions" / "session-alpha" / "bootstrap-state.json"
+    legacy_receipt = governance / "bootstrap-state.json"
+    alpha_bytes = alpha_receipt.read_bytes()
+    legacy_bytes = legacy_receipt.read_bytes()
+
+    blocked = run_hook(
+        project,
+        fake_bin,
+        uv_log,
+        payload={
+            "session_id": "session-beta",
+            "cwd": str(project),
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+        },
+        environment_overrides={"WORK_GOVERNANCE_TEST_FAIL_PROJECT_INPUT_DIGEST": "1"},
+    )
+
+    assert (
+        "BOOTSTRAP_TEST_PROJECT_INPUT_DIGEST_FAILED"
+        in blocked["hookSpecificOutput"]["additionalContext"]
+    )
+    assert alpha_receipt.read_bytes() == alpha_bytes
+    assert legacy_receipt.read_bytes() == legacy_bytes
+    assert not (
+        governance / "runtime" / "sessions" / "session-beta" / "bootstrap-state.json"
+    ).exists()
 
 
 def test_bootstrap_never_adopts_a_preexisting_unclaimed_root(tmp_path: Path) -> None:
@@ -1764,10 +1826,10 @@ def test_real_uv_bootstrap_then_network_denied_offline_resume(
     assert all("--offline" in command["command"] for command in evidence_payload["commands"])
 
 
-def test_runtime_bundle_survives_plugin_cache_loss_and_blocks_superseded_receipt(
+def test_runtime_bundle_survives_plugin_cache_loss_and_preserves_other_session(
     tmp_path: Path,
 ) -> None:
-    """The exact session bundle survives cache loss; an old session cannot write."""
+    """Each exact session bundle survives cache loss and remains independently usable."""
     installed = tmp_path / "plugin-cache" / "work-governance"
     installed.parent.mkdir()
     shutil.copytree(PLUGIN_ROOT, installed)
@@ -1790,8 +1852,15 @@ def test_runtime_bundle_survives_plugin_cache_loss_and_blocks_superseded_receipt
             "source": "startup",
         },
     )
-    receipt_path = project / ".work-governance" / "bootstrap-state.json"
-    old_receipt_sha256 = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+    old_receipt_path = (
+        project
+        / ".work-governance"
+        / "runtime"
+        / "sessions"
+        / "observed-session-old"
+        / "bootstrap-state.json"
+    )
+    old_receipt_sha256 = hashlib.sha256(old_receipt_path.read_bytes()).hexdigest()
     run_hook(
         project,
         fake_bin,
@@ -1803,6 +1872,14 @@ def test_runtime_bundle_survives_plugin_cache_loss_and_blocks_superseded_receipt
             "hook_event_name": "SessionStart",
             "source": "resume",
         },
+    )
+    receipt_path = (
+        project
+        / ".work-governance"
+        / "runtime"
+        / "sessions"
+        / "observed-session-current"
+        / "bootstrap-state.json"
     )
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     current_receipt_sha256 = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
@@ -1818,7 +1895,7 @@ def test_runtime_bundle_survives_plugin_cache_loss_and_blocks_superseded_receipt
         hashlib.sha256(bundle_manifest.read_bytes()).hexdigest()
         == receipt["runtime_manifest_sha256"]
     )
-    superseded = subprocess.run(
+    preserved = subprocess.run(
         [
             sys.executable,
             str(controller),
@@ -1849,7 +1926,6 @@ def test_runtime_bundle_survives_plugin_cache_loss_and_blocks_superseded_receipt
         check=False,
     )
 
-    assert superseded.returncode == 2
-    assert "BOOTSTRAP_RECEIPT_SUPERSEDED" in superseded.stderr
+    assert preserved.returncode == 0, preserved.stderr
     assert intake.returncode == 0
     assert json.loads(intake.stdout)["intake_state"] == "INTAKE_READY"

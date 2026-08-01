@@ -56,7 +56,13 @@ raise SystemExit(result.returncode)
     return wrapper
 
 
-def run_session_hook(project: Path, fake_bin: Path, session_id: str) -> dict[str, object]:
+def run_session_hook(
+    project: Path,
+    fake_bin: Path,
+    session_id: str,
+    *,
+    source: str = "startup",
+) -> dict[str, object]:
     """Run the real SessionStart hook for one temporary project."""
     environment = dict(os.environ)
     environment["PLUGIN_ROOT"] = str(PLUGIN_ROOT)
@@ -68,7 +74,7 @@ def run_session_hook(project: Path, fake_bin: Path, session_id: str) -> dict[str
                 "session_id": session_id,
                 "cwd": str(project),
                 "hook_event_name": "SessionStart",
-                "source": "startup",
+                "source": source,
             }
         ),
         text=True,
@@ -132,6 +138,14 @@ def read_plan_frontmatter(project: Path, plan_id: str) -> dict[str, object]:
     payload: object = yaml.safe_load(raw)
     assert isinstance(payload, dict)
     return cast(dict[str, object], payload)
+
+
+def intake_records_for_assertion(frontmatter: dict[str, object]) -> list[dict[str, object]]:
+    """Read legacy intake records or the bounded protocol-v2 current anchor."""
+    intake = cast(dict[str, object], frontmatter["intake"])
+    if intake.get("protocol_version") == 2:
+        return [cast(dict[str, object], intake["current"])]
+    return cast(list[dict[str, object]], intake["records"])
 
 
 def write_plan_frontmatter(
@@ -857,10 +871,7 @@ def test_schema_v4_risk_acceptance_requires_the_current_receipt_bound_user_turn(
         expected_revision=1,
     )
     review_frontmatter = read_plan_frontmatter(project, plan_id)
-    review_records = cast(
-        list[dict[str, object]],
-        cast(dict[str, object], review_frontmatter["intake"])["records"],
-    )
+    review_records = intake_records_for_assertion(review_frontmatter)
     review_intake_sha256 = cast(str, review_records[-1]["record_sha256"])
     evidence_input = project / "degraded-review-evidence.json"
     evidence_input.write_text(
@@ -967,10 +978,7 @@ def test_schema_v4_risk_acceptance_requires_the_current_receipt_bound_user_turn(
         expected_revision=4,
     )
     frontmatter = read_plan_frontmatter(project, plan_id)
-    records = cast(
-        list[dict[str, object]],
-        cast(dict[str, object], frontmatter["intake"])["records"],
-    )
+    records = intake_records_for_assertion(frontmatter)
     intake_sha256 = cast(str, records[-1]["record_sha256"])
     fabricated = run_controller(
         project,
@@ -1080,6 +1088,93 @@ def test_turn_hook_hashes_exact_utf8_prompt_and_atomically_replaces(
     assert not list(turn_receipt.parent.glob(f".{turn_receipt.name}.*"))
 
 
+def test_session_receipts_are_isolated_and_compaction_preserves_active_turn(
+    tmp_path: Path,
+) -> None:
+    """Another session and same-session compact cannot supersede a valid turn."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    install_fake_uv(fake_bin)
+    project = tmp_path / "project"
+    project.mkdir()
+
+    run_session_hook(project, fake_bin, "session-alpha")
+    alpha_session = (
+        project
+        / ".work-governance"
+        / "runtime"
+        / "sessions"
+        / "session-alpha"
+        / "bootstrap-state.json"
+    )
+    run_turn_hook(
+        project,
+        session_id="session-alpha",
+        turn_id="turn-alpha",
+        prompt="alpha request",
+    )
+    alpha_turn = alpha_session.parent / "current-turn-receipt.json"
+    alpha_session_bytes = alpha_session.read_bytes()
+    alpha_turn_bytes = alpha_turn.read_bytes()
+
+    run_session_hook(project, fake_bin, "session-beta")
+    run_turn_hook(
+        project,
+        session_id="session-beta",
+        turn_id="turn-beta",
+        prompt="beta request",
+    )
+    beta_session = (
+        project
+        / ".work-governance"
+        / "runtime"
+        / "sessions"
+        / "session-beta"
+        / "bootstrap-state.json"
+    )
+    beta_turn = beta_session.parent / "current-turn-receipt.json"
+
+    assert alpha_session.read_bytes() == alpha_session_bytes
+    assert alpha_turn.read_bytes() == alpha_turn_bytes
+    assert beta_session.is_file()
+    assert beta_turn.is_file()
+
+    run_session_hook(project, fake_bin, "session-alpha", source="compact")
+
+    assert alpha_session.read_bytes() == alpha_session_bytes
+    assert alpha_turn.read_bytes() == alpha_turn_bytes
+    alpha_receipt = read_json_object(alpha_session)
+    alpha_turn_receipt = read_json_object(alpha_turn)
+    controller = project / cast(str, alpha_receipt["controller_ref"])
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(controller),
+            "--receipt-sha256",
+            sha256_bytes(alpha_session_bytes),
+            "intake",
+            "receipt",
+            "--turn-receipt-sha256",
+            cast(str, alpha_turn_receipt["receipt_sha256"]),
+            "--classification",
+            "no_plan",
+            "--decision",
+            "proceed",
+            "--rationale",
+            "The isolated turn remains current after compaction.",
+            "--targets",
+            "route",
+        ],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["request_ref"] == alpha_turn_receipt["request_ref"]
+
+
 def test_turn_hook_invalidates_prior_receipt_before_field_validation(tmp_path: Path) -> None:
     """Even malformed later-turn input atomically invalidates the prior receipt."""
     fake_bin = tmp_path / "bin"
@@ -1094,7 +1189,14 @@ def test_turn_hook_invalidates_prior_receipt_before_field_validation(tmp_path: P
         turn_id="turn-valid",
         prompt="first governed request",
     )
-    turn_path = project / ".work-governance" / "runtime" / "current-turn-receipt.json"
+    turn_path = (
+        project
+        / ".work-governance"
+        / "runtime"
+        / "sessions"
+        / "session-alpha"
+        / "current-turn-receipt.json"
+    )
     prior = read_json_object(turn_path)
     prior_sha256 = cast(str, prior["receipt_sha256"])
 
@@ -1221,7 +1323,8 @@ def test_no_plan_intake_remains_runtime_only(tmp_path: Path) -> None:
 
     assert proposal["classification"] == "no_plan"
     assert after_files - before_files == {
-        Path(".work-governance/runtime/current-turn-receipt.json")
+        Path(".work-governance/runtime/current-turn-receipt.json"),
+        Path(".work-governance/runtime/sessions/session-alpha/current-turn-receipt.json"),
     }
     assert not (project / ".work-governance" / "_Plan").exists()
     assert not any((project / ".work-governance" / "logs").iterdir())
@@ -1289,10 +1392,7 @@ def test_strict_admission_injects_and_binds_initial_intake(
     """Admission stages the first record and binds every trusted identity axis."""
     project, _session_id = prepare_admitted_project(tmp_path)
     frontmatter = read_plan_frontmatter(project, "PLAN-20260729-001")
-    records = cast(
-        list[dict[str, object]],
-        cast(dict[str, object], frontmatter["intake"])["records"],
-    )
+    records = intake_records_for_assertion(frontmatter)
     journal = read_json_object(
         project
         / ".work-governance"
@@ -1362,10 +1462,7 @@ def test_rollover_successor_is_strict_and_transaction_bound(tmp_path: Path) -> N
 
     assert "ROLLOVER_COMMITTED" in applied.stdout
     successor = read_plan_frontmatter(project, "PLAN-20260730-001")
-    records = cast(
-        list[dict[str, object]],
-        cast(dict[str, object], successor["intake"])["records"],
-    )
+    records = intake_records_for_assertion(successor)
     journal = yaml.safe_load(
         (project / ".work-governance" / "_Plan" / ".rollovers" / "ROL-20260730-001.yaml").read_text(
             encoding="utf-8"
@@ -1475,10 +1572,7 @@ def test_rollover_confirmation_digest_survives_current_turn_intake_refresh(
         str(manifest_path),
     )
     successor = read_plan_frontmatter(project, "PLAN-20260730-001")
-    records = cast(
-        list[dict[str, object]],
-        cast(dict[str, object], successor["intake"])["records"],
-    )
+    records = intake_records_for_assertion(successor)
 
     assert refreshed_dry_run["proposal_sha256"] == initial_dry_run["proposal_sha256"]
     assert "ROLLOVER_COMMITTED" in applied.stdout
@@ -1646,10 +1740,7 @@ def test_schema_v3_upgrade_injects_strict_initial_intake(tmp_path: Path) -> None
 
     assert "PLAN_CONTRACT_UPGRADE_COMMITTED" in upgraded.stdout
     frontmatter = read_plan_frontmatter(project, "PLAN-20260729-001")
-    records = cast(
-        list[dict[str, object]],
-        cast(dict[str, object], frontmatter["intake"])["records"],
-    )
+    records = intake_records_for_assertion(frontmatter)
     journal = read_json_object(
         project
         / ".work-governance"
@@ -1766,12 +1857,140 @@ def test_plan_intake_records_form_hash_chain_and_replay_idempotently(
     frontmatter = read_plan_frontmatter(project, "PLAN-20260729-001")
     intake = frontmatter["intake"]
     assert isinstance(intake, dict)
-    records = cast(dict[str, object], intake)["records"]
-    assert isinstance(records, list)
-    first_record = cast(dict[str, object], records[-2])
-    second_record = cast(dict[str, object], records[-1])
+    assert cast(dict[str, object], intake)["protocol_version"] == 2
+    second_record = cast(dict[str, object], cast(dict[str, object], intake)["current"])
+    first_record_path = (
+        project
+        / ".work-governance"
+        / "runtime"
+        / "intake-history"
+        / "PLAN-20260729-001"
+        / f"{second_record['previous_record_sha256']}.json"
+    )
+    first_record = read_json_object(first_record_path)
     assert second_record["previous_record_sha256"] == first_record["record_sha256"]
     assert frontmatter["revision"] == 3
+
+
+def test_same_request_material_transition_uses_bounded_immutable_history(
+    tmp_path: Path,
+) -> None:
+    """Explore may become proceed after basis resolution without growing the Plan."""
+    project, session_id = prepare_admitted_project(tmp_path)
+    frontmatter = read_plan_frontmatter(project, "PLAN-20260729-001")
+    frontmatter["unknowns"] = [
+        {
+            "id": "U-001",
+            "question": "Which local invariant applies?",
+            "status": "open",
+            "owner": "agent",
+            "impact": "blocking",
+            "blocks": ["route"],
+            "expected_evidence": "A local inspection resolves the invariant.",
+        }
+    ]
+    write_plan_frontmatter(project, "PLAN-20260729-001", frontmatter)
+    explore, _manifest, turn_sha256 = issue_intake(
+        project,
+        session_id=session_id,
+        turn_id="turn-transition",
+        decision="explore",
+        targets=["route"],
+        current_unknown_id="U-001",
+        expected_revision=1,
+    )
+    explored = read_plan_frontmatter(project, "PLAN-20260729-001")
+    unknown = cast(list[dict[str, object]], explored["unknowns"])[0]
+    unknown.update(
+        {
+            "status": "resolved",
+            "resolution": "The local invariant is confirmed.",
+            "evidence_manifest": "evidence:runtime/local-invariant.json",
+            "resolved_at": "2026-08-01T00:00:00Z",
+        }
+    )
+    write_plan_frontmatter(project, "PLAN-20260729-001", explored)
+
+    turn_path = (
+        project
+        / ".work-governance"
+        / "runtime"
+        / "sessions"
+        / session_id
+        / "current-turn-receipt.json"
+    )
+    proceed = json.loads(
+        run_controller(
+            project,
+            "intake",
+            "receipt",
+            "--turn-receipt-sha256",
+            turn_sha256,
+            "--classification",
+            "plan_controlled",
+            "--decision",
+            "proceed",
+            "--rationale",
+            "The locally owned blocker is resolved.",
+            "--targets",
+            "route",
+        ).stdout
+    )
+    assert proceed["request_ref"] == explore["request_ref"]
+    proceed_manifest = project / "transition-proceed.json"
+    proceed_manifest.write_text(json.dumps(proceed), encoding="utf-8")
+    recorded = run_controller(
+        project,
+        "plan",
+        "intake",
+        "record",
+        "--manifest",
+        str(proceed_manifest),
+        "--expected-revision",
+        "2",
+    )
+
+    final = read_plan_frontmatter(project, "PLAN-20260729-001")
+    intake = cast(dict[str, object], final["intake"])
+    current = cast(dict[str, object], intake["current"])
+    history = cast(dict[str, object], intake["history"])
+    history_root = project / ".work-governance" / "runtime" / "intake-history" / "PLAN-20260729-001"
+
+    assert "PLAN_INTAKE_TRANSITIONED" in recorded.stdout
+    assert intake["protocol_version"] == 2
+    assert current["decision"] == "proceed"
+    assert current["supersedes_record_sha256"]
+    assert history["record_count"] == 3
+    assert history["head_sha256"] == current["record_sha256"]
+    assert len(list(history_root.glob("*.json"))) == 3
+    assert read_json_object(turn_path)["receipt_sha256"] == turn_sha256
+
+    conflict = dict(proceed)
+    conflict["rationale"] = "Rationale-only mutation is not material."
+    conflict.pop("intake_sha256")
+    conflict["intake_sha256"] = sha256_bytes(
+        json.dumps(
+            conflict,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    )
+    conflict_path = project / "transition-conflict.json"
+    conflict_path.write_text(json.dumps(conflict), encoding="utf-8")
+    rejected = run_controller(
+        project,
+        "plan",
+        "intake",
+        "record",
+        "--manifest",
+        str(conflict_path),
+        "--expected-revision",
+        "3",
+        check=False,
+    )
+    assert rejected.returncode == 2
+    assert "INTAKE_REQUEST_CONFLICT" in rejected.stderr
 
 
 def test_basis_change_invalidates_prior_intake(tmp_path: Path) -> None:
@@ -1786,8 +2005,7 @@ def test_basis_change_invalidates_prior_intake(tmp_path: Path) -> None:
         expected_revision=1,
     )
     frontmatter = read_plan_frontmatter(project, "PLAN-20260729-001")
-    intake = cast(dict[str, object], frontmatter["intake"])
-    record = cast(dict[str, object], cast(list[object], intake["records"])[-1])
+    record = intake_records_for_assertion(frontmatter)[-1]
     intake_sha256 = cast(str, record["record_sha256"])
     run_controller(
         project,
@@ -1841,8 +2059,7 @@ def test_route_proceed_crosses_ready_tasks_and_evidence_until_structure_changes(
         expected_revision=1,
     )
     frontmatter = read_plan_frontmatter(project, "PLAN-20260729-001")
-    intake = cast(dict[str, object], frontmatter["intake"])
-    record = cast(dict[str, object], cast(list[object], intake["records"])[-1])
+    record = intake_records_for_assertion(frontmatter)[-1]
     intake_sha256 = cast(str, record["record_sha256"])
 
     def task_transition(action: str, task_id: str, revision: int) -> None:
@@ -2079,10 +2296,7 @@ def test_unrelated_task_advances_under_exact_current_intake(tmp_path: Path) -> N
         expected_revision=1,
     )
     frontmatter = read_plan_frontmatter(project, "PLAN-20260729-001")
-    records = cast(
-        list[dict[str, object]],
-        cast(dict[str, object], frontmatter["intake"])["records"],
-    )
+    records = intake_records_for_assertion(frontmatter)
 
     started = run_controller(
         project,
@@ -2113,10 +2327,7 @@ def test_non_task_advancement_commands_enforce_their_exact_targets(tmp_path: Pat
         expected_revision=1,
     )
     frontmatter = read_plan_frontmatter(project, "PLAN-20260729-001")
-    records = cast(
-        list[dict[str, object]],
-        cast(dict[str, object], frontmatter["intake"])["records"],
-    )
+    records = intake_records_for_assertion(frontmatter)
     intake_sha256 = cast(str, records[-1]["record_sha256"])
     adaptation_path = tmp_path / "adaptation.yaml"
     adaptation_path.write_text(
@@ -2242,8 +2453,7 @@ def test_activation_start_binds_exact_target_before_runtime_evidence(tmp_path: P
         expected_revision=1,
     )
     recorded = read_plan_frontmatter(project, plan_id)
-    intake = cast(dict[str, object], recorded["intake"])
-    record = cast(dict[str, object], cast(list[object], intake["records"])[-1])
+    record = intake_records_for_assertion(recorded)[-1]
     intake_sha256 = cast(str, record["record_sha256"])
     exact_target = "plugin:work-governance@1.0.4+codex.20260730014019"
 
@@ -2461,8 +2671,7 @@ def test_activation_target_binding_rejects_drift(
         expected_revision=1,
     )
     recorded = read_plan_frontmatter(project, plan_id)
-    intake = cast(dict[str, object], recorded["intake"])
-    record = cast(dict[str, object], cast(list[object], intake["records"])[-1])
+    record = intake_records_for_assertion(recorded)[-1]
     intake_sha256 = cast(str, record["record_sha256"])
 
     result = run_controller(
@@ -2554,8 +2763,7 @@ def test_ask_record_cannot_advance_and_new_turn_cannot_reuse_prior_decision(
         expected_revision=1,
     )
     frontmatter = read_plan_frontmatter(project, "PLAN-20260729-001")
-    intake = cast(dict[str, object], frontmatter["intake"])
-    record = cast(dict[str, object], cast(list[object], intake["records"])[-1])
+    record = intake_records_for_assertion(frontmatter)[-1]
     record_sha256 = cast(str, record["record_sha256"])
     ask_blocked = run_controller(
         project,

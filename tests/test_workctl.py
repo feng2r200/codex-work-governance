@@ -4038,6 +4038,106 @@ with lock_path.open("w", encoding="utf-8") as handle:
     assert run_workctl(tmp_path, "plan", "validate").stdout.strip() == "PLAN_VALID"
 
 
+def test_exclusive_lock_times_out_with_holder_diagnostics(tmp_path: Path) -> None:
+    """Contention is bounded and reports the current holder metadata."""
+    init_plan(tmp_path)
+    lock_path = tmp_path / ".work-governance" / "workctl.lock"
+    holder_ready_path = tmp_path / "holder-ready"
+    release_path = tmp_path / "release-holder"
+    holder_script = """
+import fcntl
+import json
+import pathlib
+import sys
+import time
+
+lock_path = pathlib.Path(sys.argv[1])
+ready_path = pathlib.Path(sys.argv[2])
+release_path = pathlib.Path(sys.argv[3])
+with lock_path.open("w", encoding="utf-8") as handle:
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    json.dump({"pid": 4242, "acquired_at": "2026-08-01T00:00:00Z"}, handle)
+    handle.flush()
+    ready_path.write_text("ready", encoding="utf-8")
+    deadline = time.monotonic() + 3
+    while not release_path.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+"""
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            holder_script,
+            str(lock_path),
+            str(holder_ready_path),
+            str(release_path),
+        ],
+        cwd=tmp_path,
+    )
+    deadline = time.monotonic() + 2
+    while not holder_ready_path.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert holder_ready_path.exists()
+
+    started_at = time.monotonic()
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "revise",
+        "--status",
+        "validating",
+        "--expected-revision",
+        "1",
+        check=False,
+        env={"WORK_GOVERNANCE_LOCK_TIMEOUT_SECONDS": "0.2"},
+    )
+    elapsed = time.monotonic() - started_at
+    release_path.write_text("release\n", encoding="utf-8")
+    assert holder.wait(timeout=2) == 0
+
+    assert result.returncode == 2
+    assert elapsed < 1.5
+    assert "WORKCTL_LOCK_TIMEOUT" in result.stderr
+    assert "holder_pid=4242" in result.stderr
+    assert "holder_acquired_at=2026-08-01T00:00:00Z" in result.stderr
+
+
+def test_exclusive_lock_replaces_stale_holder_metadata(tmp_path: Path) -> None:
+    """Unlocked stale diagnostics never block and are replaced on acquisition."""
+    init_plan(tmp_path)
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["tasks"] = [{"id": "T-001", "description": "Task", "status": "pending"}]
+    write_plan(tmp_path, frontmatter, body)
+    lock_path = tmp_path / ".work-governance" / "workctl.lock"
+    lock_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "pid": 4242,
+                "acquired_at": "2026-07-31T00:00:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    revised = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-revision",
+        "1",
+    )
+    observed = json.loads(lock_path.read_text(encoding="utf-8"))
+
+    assert "TASK_UPDATED T-001 in_progress revision=2" in revised.stdout
+    assert observed["schema_version"] == 1
+    assert observed["pid"] != 4242
+    assert observed["acquired_at"] != "2026-07-31T00:00:00Z"
+
+
 def test_suspect_artifact_blocks_validation_and_task_progress(tmp_path: Path) -> None:
     init_plan(tmp_path)
     frontmatter, body = read_plan(tmp_path)
