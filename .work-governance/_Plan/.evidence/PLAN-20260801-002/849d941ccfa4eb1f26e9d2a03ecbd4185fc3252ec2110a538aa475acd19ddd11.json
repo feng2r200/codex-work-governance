@@ -1,0 +1,43 @@
+{
+  "created_at": "2026-08-01T12:48:31Z",
+  "items": [
+    {
+      "ref": "evidence:.work-governance/_Plan/.evidence/PLAN-20260801-002/581c5c730f30dc38b4eb5358844873f73909c83cf935112fdec936fdd23871b3.json",
+      "sha256": "581c5c730f30dc38b4eb5358844873f73909c83cf935112fdec936fdd23871b3"
+    },
+    {
+      "ref": "runtime:/private/tmp/PLAN-20260801-002-live-switch-report.json",
+      "sha256": "7253c054a460ca3ecef04e16df79e16ee7b33a4de2210a21c189aa5c0a22bc34"
+    },
+    {
+      "ref": "runtime:/private/tmp/wg-live-fresh.dasAkb/.work-governance/runtime/sessions/019fbd5a-c216-7820-ade7-8a6b60895a2f/bootstrap-state.json",
+      "sha256": "370ee33d2c38ebb030575dfd71deb0d377c21a8217cb787c4d0a6f3c669c1229"
+    },
+    {
+      "ref": "runtime:/private/tmp/wg-live-fresh.dasAkb/.work-governance/runtime/sessions/019fbd5a-c216-7820-ade7-8a6b60895a2f/current-turn-receipt.json",
+      "sha256": "f37a9bf1c29ee17e47ca276f2e2dec27779a6ad229b0e318dc9d12aede32afe0"
+    },
+    {
+      "ref": "runtime:/private/tmp/wg-live-fresh.dasAkb/.work-governance/evidence/bootstrap/20260801T124436.086156Z-91039.json",
+      "sha256": "28a97d6b191f96df7a95b107d6403560fde52e3c68a617089bac8ff69a1c4435"
+    },
+    {
+      "ref": "plugin:work-governance@1.0.7+codex.20260801093722-manifest",
+      "sha256": "2e96829211fcf8612f5c46bc54aca5e352e6c857feb86ef513f7cf7efc597c88"
+    },
+    {
+      "ref": "project:irp-stocklens-plan-unchanged",
+      "sha256": "83e576a71eed4934be5f5f962d0c9108e13bb0c6631331e1c1fb815c01adbd24"
+    },
+    {
+      "ref": "project:irp-stocklens-plan-index-unchanged",
+      "sha256": "e60c3815c2e5bb55cac2f2b2c5b4643b6cfa9bfc63f53d5ba33861ec6a06b590"
+    }
+  ],
+  "kind": "work-governance-evidence",
+  "observed_ref": "plugin:work-governance@1.0.7+codex.20260801093722",
+  "plan_id": "PLAN-20260801-002",
+  "producer_ref": "user:session/019fbbe3-53ee-75c0-8a5f-db76f0c68349/turn/019fbd4f-bc6f-7680-9191-282b8c68c206/sha256/f8176737a3dc579422c88de39554ecee014e4af5fdd867fa0f111c029a77d720",
+  "schema_version": 1,
+  "subject": "activation"
+}
