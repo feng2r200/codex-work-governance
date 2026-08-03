@@ -39,6 +39,7 @@ RETIREMENT_ID_RE = re.compile(r"^RET-\d{8}-\d{3}$")
 ADMISSION_ID_RE = re.compile(r"^ADM-\d{8}-\d{3}$")
 CONTRACT_UPGRADE_ID_RE = re.compile(r"^UPG-\d{8}-\d{3}$")
 RECONCILE_UPGRADE_ID_RE = re.compile(r"^RCU-\d{8}-\d{3}$")
+STRUCTURAL_REBASE_ID_RE = re.compile(r"^SRB-\d{8}-\d{3}$")
 ROLLOVER_CONFIRMATION_PAYLOAD_VERSION = 2
 UNKNOWN_ID_RE = re.compile(r"^U-\d{3}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -150,6 +151,7 @@ REVISION_KINDS = {
     "adaptation",
     "contract-revision",
     "contract-upgrade",
+    "structural-rebase",
     "confirmation-added",
     "confirmation-classified",
     "confirmation-decided",
@@ -206,6 +208,7 @@ AUTHORITY_BLOCKED_COMMANDS = [
     "plan reconcile-upgrade recover",
     "plan contract upgrade status",
     "plan contract upgrade recover",
+    "plan structural-rebase recover",
     "plan rollover apply",
     "plan rollover recover",
     "plan retire apply",
@@ -2808,6 +2811,25 @@ def incomplete_reconcile_upgrade_journals(root: Path) -> list[Path]:
     return journals
 
 
+def incomplete_structural_rebase_journals(root: Path) -> list[Path]:
+    """Return structural-rebase journals that have not reached committed state."""
+    journals: list[Path] = []
+    for path in runtime_transaction_journals(
+        root,
+        "structural-rebases",
+        STRUCTURAL_REBASE_ID_RE,
+        error="INVALID_STRUCTURAL_REBASE_TRANSACTION_INVENTORY",
+    ):
+        try:
+            payload = load_yaml_file(path)
+        except WorkctlError:
+            journals.append(path)
+            continue
+        if payload.get("status") != "committed":
+            journals.append(path)
+    return journals
+
+
 def ignored_transaction_journals(
     root: Path,
     ignore_journal: Path | None,
@@ -3132,6 +3154,7 @@ def allowed_commands_for_state(state: str) -> list[str]:
             [
                 "plan revise",
                 "plan adapt",
+                "plan structural-rebase apply",
                 "plan intake record",
                 "plan unknown add|classify|resolve",
                 "plan confirm",
@@ -3184,12 +3207,18 @@ def inspect_authority(
         for journal in incomplete_reconcile_upgrade_journals(root)
         if journal.resolve() not in ignored_journals
     ]
+    structural_rebase_journals = [
+        journal
+        for journal in incomplete_structural_rebase_journals(root)
+        if journal.resolve() not in ignored_journals
+    ]
     if (
         migration_journals
         or rollover_journals
         or retirement_journals
         or contract_upgrade_journals
         or reconcile_upgrade_journals
+        or structural_rebase_journals
     ):
         blockers.extend(
             f"incomplete migration journal: {relative_project_path(root, journal)}"
@@ -3210,6 +3239,10 @@ def inspect_authority(
         blockers.extend(
             f"incomplete reconcile-upgrade journal: {relative_project_path(root, journal)}"
             for journal in reconcile_upgrade_journals
+        )
+        blockers.extend(
+            f"incomplete structural-rebase journal: {relative_project_path(root, journal)}"
+            for journal in structural_rebase_journals
         )
         state = "MIGRATION_RECOVERY_REQUIRED"
         return AuthorityReport(state, candidates, blockers, allowed_commands_for_state(state))
@@ -9386,6 +9419,434 @@ def cmd_plan_contract_upgrade_recover(args: argparse.Namespace) -> None:
         resume_contract_upgrade(root, journal)
 
 
+STRUCTURAL_REBASE_CHANGE_FIELDS = {
+    "goal",
+    "scope",
+    "obligations",
+    "tasks",
+    "validations",
+    "route",
+    "handoff",
+    "confirmations",
+    "independent_validation",
+}
+
+
+@dataclass(frozen=True)
+class StructuralRebasePreparation:
+    """Bind a staged same-Plan structural rebase to its immutable inputs."""
+
+    manifest: dict[str, Any]
+    target: PlanDocument
+    source_sha256: str
+    index_sha256: str
+
+
+def structural_rebase_transaction_dir(root: Path, transaction_id: str) -> Path:
+    """Return one ignored structural-rebase transaction directory."""
+    return governance_root(root) / "runtime" / "structural-rebases" / transaction_id
+
+
+def load_structural_rebase_manifest(path: Path) -> dict[str, Any]:
+    """Load the closed envelope for one authenticated Plan structure rebase."""
+    manifest = load_yaml_file(path)
+    required = {
+        "schema_version",
+        "kind",
+        "transaction_id",
+        "plan_id",
+        "expected_revision",
+        "plan_sha256",
+        "index_sha256",
+        "authorization",
+        "rationale",
+        "changes",
+        "confirmation_rebindings",
+    }
+    if set(manifest) != required:
+        raise WorkctlError("INVALID_STRUCTURAL_REBASE_MANIFEST_FIELDS")
+    authorization = manifest.get("authorization")
+    changes = manifest.get("changes")
+    rebindings = manifest.get("confirmation_rebindings")
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("kind") != "plan-structural-rebase"
+        or not isinstance(manifest.get("transaction_id"), str)
+        or STRUCTURAL_REBASE_ID_RE.fullmatch(str(manifest["transaction_id"])) is None
+        or not isinstance(manifest.get("plan_id"), str)
+        or PLAN_ID_RE.fullmatch(str(manifest["plan_id"])) is None
+        or type(manifest.get("expected_revision")) is not int
+        or not isinstance(manifest.get("plan_sha256"), str)
+        or SHA256_RE.fullmatch(str(manifest["plan_sha256"])) is None
+        or not isinstance(manifest.get("index_sha256"), str)
+        or SHA256_RE.fullmatch(str(manifest["index_sha256"])) is None
+        or not isinstance(manifest.get("rationale"), str)
+        or not manifest["rationale"].strip()
+        or not isinstance(changes, dict)
+        or not changes
+        or not set(changes).issubset(STRUCTURAL_REBASE_CHANGE_FIELDS)
+        or not isinstance(rebindings, list)
+        or not all(isinstance(item, str) and item.startswith("C-") for item in rebindings)
+        or len(rebindings) != len(set(rebindings))
+        or not isinstance(authorization, dict)
+        or set(authorization) != {"id", "ref", "accepted_at", "basis_sha256"}
+        or not isinstance(authorization.get("id"), str)
+        or not str(authorization["id"]).startswith("C-")
+        or not valid_reference(authorization.get("ref"))
+        or not isinstance(authorization.get("accepted_at"), str)
+        or not authorization["accepted_at"]
+        or not isinstance(authorization.get("basis_sha256"), str)
+        or SHA256_RE.fullmatch(str(authorization["basis_sha256"])) is None
+    ):
+        raise WorkctlError("INVALID_STRUCTURAL_REBASE_MANIFEST")
+    return manifest
+
+
+def rebase_authorization_confirmation(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Build the audit-only accepted confirmation derived from the manifest."""
+    authorization = cast(dict[str, Any], manifest["authorization"])
+    return {
+        "id": authorization["id"],
+        "description": "Record the exact authority for this recoverable Plan structural rebase.",
+        "status": "accepted",
+        "ref": authorization["ref"],
+        "accepted_at": authorization["accepted_at"],
+        "evidence_sha256": authorization["basis_sha256"],
+        "intervention": {
+            "kind": "plan_contract",
+            "blocks": ["route"],
+            "basis_ref": authorization["ref"],
+            "basis_sha256": authorization["basis_sha256"],
+        },
+    }
+
+
+def validate_structural_rebase_transition(
+    source: Mapping[str, Any], target: Mapping[str, Any], manifest: Mapping[str, Any]
+) -> None:
+    """Reject a rebase that changes status, completed facts, or review evidence."""
+    for field in (
+        "plan_id",
+        "title",
+        "status",
+        "mode",
+        "created_at",
+        "authority",
+        "unknowns",
+        "artifacts",
+        "delivery",
+        "activation",
+    ):
+        if source.get(field) != target.get(field):
+            raise WorkctlError(f"STRUCTURAL_REBASE_IMMUTABLE_FIELD: {field}")
+    for field in ("obligations", "validations"):
+        before = entries_by_id(cast(dict[str, Any], source), field)
+        after = entries_by_id(cast(dict[str, Any], target), field)
+        if set(before) - set(after):
+            raise WorkctlError(f"STRUCTURAL_REBASE_{field.upper()}_REMOVAL")
+        for entry_id, item in before.items():
+            if after[entry_id].get("status") != item.get("status"):
+                raise WorkctlError(f"STRUCTURAL_REBASE_STATUS_IMMUTABLE: {entry_id}")
+        for entry_id in set(after) - set(before):
+            if after[entry_id].get("status") != "pending":
+                raise WorkctlError(f"STRUCTURAL_REBASE_NEW_ENTRY_MUST_BE_PENDING: {entry_id}")
+    before_tasks = tasks_by_id(cast(dict[str, Any], source))
+    after_tasks = tasks_by_id(cast(dict[str, Any], target))
+    if set(before_tasks) - set(after_tasks):
+        raise WorkctlError("STRUCTURAL_REBASE_TASK_REMOVAL")
+    for task_id, task in before_tasks.items():
+        candidate = after_tasks[task_id]
+        if candidate.get("status") != task.get("status"):
+            raise WorkctlError(f"STRUCTURAL_REBASE_STATUS_IMMUTABLE: {task_id}")
+        if candidate.get("requires_confirmation") != task.get("requires_confirmation"):
+            raise WorkctlError(f"STRUCTURAL_REBASE_TASK_GATE_IMMUTABLE: {task_id}")
+    for task_id in set(after_tasks) - set(before_tasks):
+        if after_tasks[task_id].get("status") != "pending":
+            raise WorkctlError(f"STRUCTURAL_REBASE_NEW_TASK_MUST_BE_PENDING: {task_id}")
+    before_confirmations = confirmations(cast(dict[str, Any], source))
+    after_confirmations = confirmations(cast(dict[str, Any], target))
+    authorization_id = str(cast(dict[str, Any], manifest["authorization"])["id"])
+    rebindings = set(cast(list[str], manifest["confirmation_rebindings"]))
+    if authorization_id in before_confirmations or authorization_id not in after_confirmations:
+        raise WorkctlError("STRUCTURAL_REBASE_AUTHORIZATION_CONFIRMATION_INVALID")
+    for confirmation_id, item in before_confirmations.items():
+        candidate_confirmation = after_confirmations.get(confirmation_id)
+        if candidate_confirmation is None:
+            raise WorkctlError(f"STRUCTURAL_REBASE_CONFIRMATION_REMOVAL: {confirmation_id}")
+        if item.get("status") != "pending" and candidate_confirmation != item:
+            raise WorkctlError(
+                f"STRUCTURAL_REBASE_DECIDED_CONFIRMATION_IMMUTABLE: {confirmation_id}"
+            )
+        if item.get("status") == "pending" and candidate_confirmation != item:
+            if (
+                confirmation_id not in rebindings
+                or candidate_confirmation.get("status") != "pending"
+            ):
+                raise WorkctlError(f"STRUCTURAL_REBASE_REBINDING_FORBIDDEN: {confirmation_id}")
+            if any(
+                key in candidate_confirmation
+                for key in ("ref", "accepted_at", "decided_at", "evidence_sha256")
+            ):
+                raise WorkctlError(
+                    f"STRUCTURAL_REBASE_PENDING_CONFIRMATION_INVALID: {confirmation_id}"
+                )
+    for confirmation_id in rebindings:
+        if confirmation_id not in before_confirmations or before_confirmations[
+            confirmation_id
+        ] == after_confirmations.get(confirmation_id):
+            raise WorkctlError(f"STRUCTURAL_REBASE_REBINDING_UNUSED: {confirmation_id}")
+    for confirmation_id, item in after_confirmations.items():
+        if (
+            confirmation_id not in before_confirmations
+            and confirmation_id != authorization_id
+            and (
+                item.get("status") != "pending"
+                or any(
+                    key in item for key in ("ref", "accepted_at", "decided_at", "evidence_sha256")
+                )
+            )
+        ):
+            raise WorkctlError(f"STRUCTURAL_REBASE_NEW_CONFIRMATION_INVALID: {confirmation_id}")
+    before_review = source.get("independent_validation")
+    after_review = target.get("independent_validation")
+    if before_review != after_review:
+        if not isinstance(before_review, dict) or not isinstance(after_review, dict):
+            raise WorkctlError("STRUCTURAL_REBASE_REVIEW_CONTRACT_IMMUTABLE")
+        if {key: value for key, value in before_review.items() if key != "reviews"} != {
+            key: value for key, value in after_review.items() if key != "reviews"
+        }:
+            raise WorkctlError("STRUCTURAL_REBASE_REVIEW_CONTRACT_IMMUTABLE")
+        before_by_mode = {
+            str(item.get("mode")): item
+            for item in before_review.get("reviews", [])
+            if isinstance(item, dict)
+        }
+        after_by_mode = {
+            str(item.get("mode")): item
+            for item in after_review.get("reviews", [])
+            if isinstance(item, dict)
+        }
+        if set(before_by_mode) != set(after_by_mode):
+            raise WorkctlError("STRUCTURAL_REBASE_REVIEW_MODE_IMMUTABLE")
+        for mode, review in before_by_mode.items():
+            candidate = after_by_mode[mode]
+            if review.get("state") != "pending" or candidate.get("state") != "pending":
+                raise WorkctlError("STRUCTURAL_REBASE_RECORDED_REVIEW_IMMUTABLE")
+            if {key: value for key, value in review.items() if key != "blocks"} != {
+                key: value for key, value in candidate.items() if key != "blocks"
+            }:
+                raise WorkctlError("STRUCTURAL_REBASE_REVIEW_EVIDENCE_IMMUTABLE")
+
+
+def prepare_structural_rebase(
+    root: Path, manifest_path: Path, source: PlanDocument
+) -> StructuralRebasePreparation:
+    """Build the exact same-Plan target before publishing a transaction journal."""
+    manifest = load_structural_rebase_manifest(manifest_path)
+    source_sha256 = sha256_file(source.path)
+    current_index_sha256 = sha256_file(index_path(root))
+    if (
+        source.frontmatter.get("schema_version") != 4
+        or source.frontmatter.get("plan_id") != manifest["plan_id"]
+        or source.frontmatter.get("revision") != manifest["expected_revision"]
+        or source_sha256 != manifest["plan_sha256"]
+        or current_index_sha256 != manifest["index_sha256"]
+    ):
+        raise WorkctlError("STRUCTURAL_REBASE_INPUT_DRIFT")
+    target = PlanDocument(source.path, copy.deepcopy(source.frontmatter), source.body)
+    changes = cast(dict[str, Any], manifest["changes"])
+    for field, value in changes.items():
+        target.frontmatter[field] = copy.deepcopy(value)
+    raw_confirmations = target.frontmatter.get("confirmations")
+    if not isinstance(raw_confirmations, dict) or not isinstance(
+        raw_confirmations.get("required"), list
+    ):
+        raise WorkctlError("STRUCTURAL_REBASE_CONFIRMATIONS_INVALID")
+    authorization = rebase_authorization_confirmation(manifest)
+    raw_confirmations["required"].append(authorization)
+    contract = target.frontmatter.get("contract")
+    if not isinstance(contract, dict) or type(contract.get("revision")) is not int:
+        raise WorkctlError("STRUCTURAL_REBASE_CONTRACT_INVALID")
+    contract["revision"] = int(contract["revision"]) + 1
+    contract["confirmation_id"] = authorization["id"]
+    contract["confirmed_ref"] = authorization["ref"]
+    validate_structural_rebase_transition(source.frontmatter, target.frontmatter, manifest)
+    bump_revision(
+        target.frontmatter,
+        kind="structural-rebase",
+        rationale=str(manifest["rationale"]),
+        confirmation_id=str(authorization["id"]),
+    )
+    require_valid_candidate(target)
+    require_strict_intervention_contract(target.frontmatter)
+    return StructuralRebasePreparation(manifest, target, source_sha256, current_index_sha256)
+
+
+def structural_rebase_proposal(preparation: StructuralRebasePreparation) -> dict[str, Any]:
+    """Return the stable dry-run digest payload for one prepared rebase."""
+    manifest = preparation.manifest
+    return {
+        "transaction_id": manifest["transaction_id"],
+        "plan_id": manifest["plan_id"],
+        "source_plan_sha256": preparation.source_sha256,
+        "index_sha256": preparation.index_sha256,
+        "target_plan_sha256": sha256_bytes(dump_plan(preparation.target).encode()),
+        "authorization_id": manifest["authorization"]["id"],
+        "changed_fields": sorted(manifest["changes"]),
+    }
+
+
+def stage_structural_rebase(
+    root: Path, manifest_path: Path, preparation: StructuralRebasePreparation
+) -> Path:
+    """Durably stage the target Plan before publishing the recovery journal."""
+    transaction_id = str(preparation.manifest["transaction_id"])
+    transaction = structural_rebase_transaction_dir(root, transaction_id)
+    journal_path = transaction / "journal.json"
+    if journal_path.exists():
+        return journal_path
+    staged = transaction / "staging" / preparation.target.path.name
+    target_bytes = dump_plan(preparation.target).encode()
+    validate_partial_transaction_directory(
+        transaction,
+        {relative_project_path(transaction, staged)},
+        error="STRUCTURAL_REBASE_TRANSACTION_CONFLICT",
+    )
+    write_or_validate_staged_bytes(
+        staged, target_bytes, error="STRUCTURAL_REBASE_TRANSACTION_CONFLICT"
+    )
+    journal: dict[str, Any] = {
+        "schema_version": 1,
+        "kind": "plan-structural-rebase",
+        "transaction_id": transaction_id,
+        "status": "prepared",
+        "created_at": utc_now(),
+        "updated_at": utc_now(),
+        "plan_id": preparation.manifest["plan_id"],
+        "source_sha256": preparation.source_sha256,
+        "target_sha256": sha256_bytes(target_bytes),
+        "index_sha256": preparation.index_sha256,
+        "manifest_sha256": sha256_file(manifest_path),
+        "staged_path": relative_project_path(root, staged),
+        "target_path": relative_project_path(root, preparation.target.path),
+    }
+    maybe_interrupt_before_transaction_journal("structural-rebase")
+    write_transaction_journal(journal_path, journal)
+    return journal_path
+
+
+def resume_structural_rebase(root: Path, journal_path: Path) -> None:
+    """Idempotently replace one active Plan only when both source and index match."""
+    journal = load_yaml_file(journal_path)
+    expected = {
+        "schema_version",
+        "kind",
+        "transaction_id",
+        "status",
+        "created_at",
+        "updated_at",
+        "plan_id",
+        "source_sha256",
+        "target_sha256",
+        "index_sha256",
+        "manifest_sha256",
+        "staged_path",
+        "target_path",
+    }
+    transaction_id = journal.get("transaction_id")
+    plan_id = journal.get("plan_id")
+    if (
+        set(journal) != expected
+        or journal.get("schema_version") != 1
+        or journal.get("kind") != "plan-structural-rebase"
+        or journal.get("status") not in {"prepared", "plan-replaced", "committed"}
+        or not isinstance(transaction_id, str)
+        or STRUCTURAL_REBASE_ID_RE.fullmatch(transaction_id) is None
+        or not isinstance(plan_id, str)
+        or PLAN_ID_RE.fullmatch(plan_id) is None
+        or journal_path != structural_rebase_transaction_dir(root, transaction_id) / "journal.json"
+    ):
+        raise WorkctlError("INVALID_STRUCTURAL_REBASE_JOURNAL")
+    target = checked_project_path(root, str(journal["target_path"]))
+    staged = checked_project_path(root, str(journal["staged_path"]))
+    if (
+        target != plan_dir(root) / f"{plan_id}.md"
+        or staged
+        != structural_rebase_transaction_dir(root, transaction_id) / "staging" / f"{plan_id}.md"
+        or not target.is_file()
+        or not staged.is_file()
+        or target.is_symlink()
+        or staged.is_symlink()
+        or any(
+            SHA256_RE.fullmatch(str(journal[field])) is None
+            for field in ("source_sha256", "target_sha256", "index_sha256", "manifest_sha256")
+        )
+        or sha256_file(staged) != journal["target_sha256"]
+        or sha256_file(index_path(root)) != journal["index_sha256"]
+    ):
+        raise WorkctlError("STRUCTURAL_REBASE_RECOVERY_DRIFT")
+    current_sha256 = sha256_file(target)
+    if journal["status"] == "committed":
+        if current_sha256 != journal["target_sha256"]:
+            raise WorkctlError("STRUCTURAL_REBASE_COMMITTED_STATE_DRIFT")
+        print(f"STRUCTURAL_REBASE_ALREADY_COMMITTED {transaction_id}")
+        return
+    if current_sha256 == journal["source_sha256"]:
+        write_atomic_bytes(target, staged.read_bytes())
+    elif current_sha256 != journal["target_sha256"]:
+        raise WorkctlError("STRUCTURAL_REBASE_TARGET_DRIFT")
+    journal["status"] = "plan-replaced"
+    journal["updated_at"] = utc_now()
+    write_transaction_journal(journal_path, journal)
+    if os.environ.get("WORKCTL_TEST_STRUCTURAL_REBASE_INTERRUPT_AFTER") == "plan-replaced":
+        raise WorkctlError("STRUCTURAL_REBASE_TEST_INTERRUPTED: plan-replaced")
+    target_doc = load_plan(target)
+    require_valid_candidate(target_doc)
+    errors = validate_plan(root, ignore_journal=journal_path)
+    if errors:
+        raise WorkctlError(f"STRUCTURAL_REBASE_APPLIED_BUT_INVALID: {'; '.join(errors)}")
+    journal["status"] = "committed"
+    journal["updated_at"] = utc_now()
+    write_transaction_journal(journal_path, journal)
+    print(f"STRUCTURAL_REBASE_COMMITTED {transaction_id} plan={plan_id}")
+
+
+def cmd_plan_structural_rebase_apply(args: argparse.Namespace) -> None:
+    """Dry-run or apply an exact, confirmation-bound active Plan structural rebase."""
+    root = project_root()
+    manifest_path = Path(args.manifest).resolve()
+    if args.dry_run:
+        require_governed_authority(root)
+        preparation = prepare_structural_rebase(
+            root, manifest_path, load_plan(active_plan_path(root))
+        )
+        proposal = structural_rebase_proposal(preparation)
+        proposal["proposal_sha256"] = sha256_bytes(
+            json.dumps(proposal, sort_keys=True, separators=(",", ":")).encode()
+        )
+        print(json.dumps(proposal, indent=2, sort_keys=True))
+        return
+    with lock(root):
+        require_governed_authority(root)
+        preparation = prepare_structural_rebase(
+            root, manifest_path, load_plan(active_plan_path(root))
+        )
+        resume_structural_rebase(root, stage_structural_rebase(root, manifest_path, preparation))
+
+
+def cmd_plan_structural_rebase_recover(args: argparse.Namespace) -> None:
+    """Recover one named interrupted structural rebase without accepting new input."""
+    root = project_root()
+    transaction_id = args.transaction_id
+    if STRUCTURAL_REBASE_ID_RE.fullmatch(transaction_id) is None:
+        raise WorkctlError("INVALID_STRUCTURAL_REBASE_ID")
+    with lock(root):
+        journal = structural_rebase_transaction_dir(root, transaction_id) / "journal.json"
+        if not journal.is_file():
+            raise WorkctlError("STRUCTURAL_REBASE_JOURNAL_NOT_FOUND")
+        resume_structural_rebase(root, journal)
+
+
 def reconcile_upgrade_transaction_dir(root: Path, workflow_id: str) -> Path:
     """Return one ignored parent workflow transaction directory."""
     return governance_root(root) / "runtime" / "reconcile-upgrades" / workflow_id
@@ -15304,6 +15765,18 @@ def build_parser() -> argparse.ArgumentParser:
     contract_upgrade_recover = contract_upgrade_sub.add_parser("recover")
     contract_upgrade_recover.add_argument("--transaction-id")
     contract_upgrade_recover.set_defaults(func=cmd_plan_contract_upgrade_recover)
+    structural_rebase = plan_sub.add_parser("structural-rebase")
+    structural_rebase_sub = structural_rebase.add_subparsers(
+        dest="structural_rebase_action",
+        required=True,
+    )
+    structural_rebase_apply = structural_rebase_sub.add_parser("apply")
+    structural_rebase_apply.add_argument("--manifest", required=True)
+    structural_rebase_apply.add_argument("--dry-run", action="store_true")
+    structural_rebase_apply.set_defaults(func=cmd_plan_structural_rebase_apply)
+    structural_rebase_recover = structural_rebase_sub.add_parser("recover")
+    structural_rebase_recover.add_argument("--transaction-id", required=True)
+    structural_rebase_recover.set_defaults(func=cmd_plan_structural_rebase_recover)
     unknown = plan_sub.add_parser("unknown")
     unknown_sub = unknown.add_subparsers(dest="unknown_action", required=True)
     unknown_add = unknown_sub.add_parser("add")

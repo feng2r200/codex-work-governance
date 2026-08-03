@@ -11337,3 +11337,230 @@ def test_schema_v4_closeout_keeps_delivery_and_exclusion_gates(
     assert result.returncode == 1
     assert "delivery is not complete" in blockers
     assert any("scope exclusion is unresolved" in blocker for blocker in blockers)
+
+
+def write_structural_rebase_fixture(cwd: Path) -> Path:
+    """Create a governed v4 Plan with pending gates and review mappings to rebase."""
+    init_plan(cwd)
+    frontmatter = schema_v4_admission_plan("PLAN-20260723-001")
+    frontmatter["confirmations"]["required"].append(
+        {
+            "id": "C-GOAL-3",
+            "description": "Authorize goal 3 after goals 1 and 2.",
+            "status": "pending",
+            "intervention": {
+                "kind": "plan_contract",
+                "blocks": ["task:T-001", "route"],
+                "basis_ref": "evidence:pending-goals-1-2",
+                "basis_sha256": "0" * 64,
+            },
+        }
+    )
+    reviews = []
+    for mode in ("plan_challenge", "artifact_review", "evidence_audit"):
+        reviews.append(
+            {
+                "mode": mode,
+                "state": "pending",
+                "blocks": ["task:T-001", "delivery", "route"],
+                "review_context_ref": f"runtime:pending-{mode}",
+                "reviewed_contract_ref": None,
+                "reviewed_contract_sha256": None,
+                "reviewed_artifacts": [],
+                "findings": [],
+                "evidence_ref": f"evidence:pending-{mode}",
+                "evidence_sha256": None,
+            }
+        )
+    frontmatter["independent_validation"] = {
+        "required": True,
+        "state": "pending",
+        "required_modes": ["plan_challenge", "artifact_review", "evidence_audit"],
+        "implementation_context_ref": "runtime:implementation",
+        "reviews": reviews,
+    }
+    write_plan(cwd, frontmatter)
+    source = plan_path(cwd)
+    index = cwd / ".work-governance" / "_Plan" / "index.yaml"
+    target_confirmations = yaml.safe_load(
+        yaml.safe_dump(frontmatter["confirmations"], sort_keys=False)
+    )
+    target_goal = next(
+        item for item in target_confirmations["required"] if item["id"] == "C-GOAL-3"
+    )
+    target_goal["description"] = "Authorize goal 3 after the baseline is active."
+    target_goal["intervention"]["basis_ref"] = "evidence:pending-baseline-production"
+    target_confirmations["required"].append(
+        {
+            "id": "C-POST-PROD-EXPANSION-ACTIVATION",
+            "description": "Authorize post-production incremental activation.",
+            "status": "pending",
+            "intervention": {
+                "kind": "external_authority",
+                "blocks": ["task:T-003", "route"],
+                "basis_ref": "evidence:pending-post-production-expansion",
+            },
+        }
+    )
+    target_reviews = yaml.safe_load(yaml.safe_dump(reviews, sort_keys=False))
+    for review in target_reviews:
+        review["blocks"] = ["task:T-002", "delivery", "route"]
+    manifest = {
+        "schema_version": 1,
+        "kind": "plan-structural-rebase",
+        "transaction_id": "SRB-20260803-001",
+        "plan_id": frontmatter["plan_id"],
+        "expected_revision": frontmatter["revision"],
+        "plan_sha256": sha256_path(source),
+        "index_sha256": sha256_path(index),
+        "authorization": {
+            "id": "C-PLAN-STRUCTURAL-REBASE",
+            "ref": "user:confirmed-structural-rebase",
+            "accepted_at": "2026-08-03T10:00:00+00:00",
+            "basis_sha256": "a" * 64,
+        },
+        "rationale": "Split baseline activation from post-production expansion.",
+        "confirmation_rebindings": ["C-GOAL-3"],
+        "changes": {
+            "goal": {
+                "statement": "Activate a baseline before post-production goals.",
+                "success_conditions": ["Baseline and expansion routes remain independently gated."],
+            },
+            "scope": {"include": ["Activate the baseline first."], "exclude": []},
+            "obligations": [
+                {"id": "O-001", "description": "Deliver the baseline.", "status": "pending"}
+            ],
+            "tasks": [
+                frontmatter["tasks"][0],
+                {
+                    "id": "T-002",
+                    "description": "Review the full expansion release.",
+                    "status": "pending",
+                    "unknowns": [],
+                    "expected_evidence_delta": "The full release becomes independently reviewable.",
+                },
+                {
+                    "id": "T-003",
+                    "description": "Activate the post-production increment.",
+                    "status": "pending",
+                    "unknowns": [],
+                    "requires_confirmation": "C-POST-PROD-EXPANSION-ACTIVATION",
+                    "expected_evidence_delta": (
+                        "The increment has production verification evidence."
+                    ),
+                },
+            ],
+            "validations": frontmatter["validations"],
+            "route": {
+                "route_status": "active",
+                "slice_status": "baseline",
+                "next_phase": "Execute T-001 before expansion.",
+                "validation_standard": "Fresh evidence covers the baseline and expansion gates.",
+                "confirmation_gate": "none",
+            },
+            "handoff": {"route_status": "active", "next_step": "Execute T-001."},
+            "confirmations": target_confirmations,
+            "independent_validation": {
+                "required": True,
+                "state": "pending",
+                "required_modes": ["plan_challenge", "artifact_review", "evidence_audit"],
+                "implementation_context_ref": "runtime:implementation",
+                "reviews": target_reviews,
+            },
+        },
+    }
+    manifest_path = cwd / "structural-rebase.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    return manifest_path
+
+
+def test_structural_rebase_is_stable_and_rebinds_only_pending_controls(tmp_path: Path) -> None:
+    """A dry-run binds the same Plan before an atomic, review-safe rebase."""
+    manifest_path = write_structural_rebase_fixture(tmp_path)
+    first = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "structural-rebase",
+            "apply",
+            "--manifest",
+            str(manifest_path),
+            "--dry-run",
+        ).stdout
+    )
+    second = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "structural-rebase",
+            "apply",
+            "--manifest",
+            str(manifest_path),
+            "--dry-run",
+        ).stdout
+    )
+    assert first == second
+    run_workctl(tmp_path, "plan", "structural-rebase", "apply", "--manifest", str(manifest_path))
+    rebased, _ = read_plan(tmp_path)
+    assert rebased["revision"] == 2
+    assert rebased["contract"]["confirmation_id"] == "C-PLAN-STRUCTURAL-REBASE"
+    assert {item["id"] for item in rebased["tasks"]} == {"T-001", "T-002", "T-003"}
+    assert rebased["independent_validation"]["reviews"][0]["blocks"][0] == "task:T-002"
+    assert (
+        json.loads(
+            (
+                tmp_path
+                / ".work-governance"
+                / "runtime"
+                / "structural-rebases"
+                / "SRB-20260803-001"
+                / "journal.json"
+            ).read_text(encoding="utf-8")
+        )["status"]
+        == "committed"
+    )
+
+
+def test_structural_rebase_recovers_after_the_plan_replace_boundary(tmp_path: Path) -> None:
+    """An interrupted Plan replacement freezes authority until named recovery commits."""
+    manifest_path = write_structural_rebase_fixture(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "plan",
+        "structural-rebase",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+        env={"WORKCTL_TEST_STRUCTURAL_REBASE_INTERRUPT_AFTER": "plan-replaced"},
+    )
+    assert interrupted.returncode == 2
+    assert "STRUCTURAL_REBASE_TEST_INTERRUPTED" in interrupted.stderr
+    during = json.loads(run_workctl(tmp_path, "plan", "authority", "check").stdout)
+    assert during["authority_state"] == "MIGRATION_RECOVERY_REQUIRED"
+    assert "plan structural-rebase recover" in during["allowed_commands"]
+    run_workctl(
+        tmp_path, "plan", "structural-rebase", "recover", "--transaction-id", "SRB-20260803-001"
+    )
+    after = json.loads(run_workctl(tmp_path, "plan", "authority", "check").stdout)
+    assert after["authority_state"] == "GOVERNED_ACTIVE"
+
+
+def test_structural_rebase_rejects_stale_source_before_creating_a_journal(tmp_path: Path) -> None:
+    """A stale source hash fails before the rebase can publish recovery state."""
+    manifest_path = write_structural_rebase_fixture(tmp_path)
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["plan_sha256"] = "0" * 64
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "structural-rebase",
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "STRUCTURAL_REBASE_INPUT_DRIFT" in result.stderr
+    assert not (tmp_path / ".work-governance" / "runtime" / "structural-rebases").exists()
