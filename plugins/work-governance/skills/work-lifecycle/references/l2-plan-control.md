@@ -201,6 +201,20 @@ Allowed structural changes:
   `MIGRATION_RECOVERY_REQUIRED`; ordinary Plan or task writes and fresh
   structural Plan transactions fail closed, while the same bound workflow may
   resume through apply or recover.
+- `plan structural-rebase apply --manifest ... --dry-run`: show the exact
+  same-Plan source and index hashes, derived target hash, authorization ID, and
+  changed fields for one confirmed material route rebase. The manifest may only
+  change declared contract/route fields, add pending work, rebind named pending
+  confirmations, and move still-pending independent-review blocks.
+- `plan structural-rebase apply --manifest ...`: stage the candidate and write
+  a durable journal before atomically replacing the indexed active Plan. The
+  controller derives a new accepted audit confirmation and contract revision
+  from the manifest's exact user authority; completed facts, existing task
+  states, decided confirmations, and recorded review evidence remain immutable.
+- `plan structural-rebase recover --transaction-id ...`: idempotently complete
+  only the named interrupted rebase after rechecking the source/target and index
+  hashes. An incomplete journal reports `MIGRATION_RECOVERY_REQUIRED` and
+  blocks ordinary work until recovery commits.
 - `plan rollover apply --manifest ... --dry-run`: require the indexed source
   Plan to be complete, terminal, and closeout-ready; verify its ID, revision,
   SHA256 and exact index baseline; validate a new schema-v4 successor; and
