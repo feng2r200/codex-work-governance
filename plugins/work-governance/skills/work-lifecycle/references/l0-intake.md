@@ -21,6 +21,12 @@ Build a compact cognition map:
 Prefer exploration over questions when the answer is discoverable locally.
 Ask only the path-changing question when user choice is required.
 
+Routine exploration, a request to continue, a recovered network, or a
+credential-ready notice is not a contract revision by itself. Keep those
+signals in session/runtime evidence and promote them to a Plan unknown only
+when they block a named target or demonstrate a material change to the goal,
+scope, acceptance, safety, or authority boundary.
+
 Classify ownership before deciding:
 
 - facts discoverable from files, code, commands, logs, runtime, or supported

@@ -20,6 +20,9 @@ HOOKS_CONFIG = PLUGIN_ROOT / "hooks" / "hooks.json"
 SESSION_HOOK = PLUGIN_ROOT / "hooks" / "session_start.py"
 TURN_HOOK = PLUGIN_ROOT / "hooks" / "user_prompt_submit.py"
 WORKCTL = PLUGIN_ROOT / "scripts" / "workctl.py"
+STOCKLENS_REPLAY = (
+    REPOSITORY_ROOT / "tests" / "fixtures" / "stocklens_goal_driven_replay.json"
+)
 
 
 def sha256_bytes(payload: bytes) -> str:
@@ -1398,6 +1401,58 @@ def test_no_plan_intake_remains_runtime_only(tmp_path: Path) -> None:
     }
     assert not (project / ".work-governance" / "_Plan").exists()
     assert not any((project / ".work-governance" / "logs").iterdir())
+
+
+def test_redacted_stocklens_replay_keeps_runtime_signals_out_of_plan_revision(
+    tmp_path: Path,
+) -> None:
+    """Explore, continue, and credential-ready signals do not revise the Plan."""
+    replay = read_json_object(STOCKLENS_REPLAY)
+    events = replay.get("events")
+    assert isinstance(events, list)
+    assert replay["secrets"] == "[REDACTED]"
+    project, session_id = prepare_admitted_project(tmp_path)
+    plan_path = project / ".work-governance" / "_Plan" / "PLAN-20260729-001.md"
+    initial_plan_bytes = plan_path.read_bytes()
+    initial = read_plan_frontmatter(project, "PLAN-20260729-001")
+    initial_revision = initial["revision"]
+    initial_intake = initial["intake"]
+
+    for index, event in enumerate(events, start=1):
+        assert isinstance(event, dict)
+        prompt = event.get("prompt")
+        assert isinstance(prompt, str)
+        run_turn_hook(
+            project,
+            session_id=session_id,
+            turn_id=f"turn-replay-{index}",
+            prompt=prompt,
+        )
+        turn = read_json_object(
+            project / ".work-governance" / "runtime" / "current-turn-receipt.json"
+        )
+        proposal = json.loads(
+            run_controller(
+                project,
+                "intake",
+                "receipt",
+                "--turn-receipt-sha256",
+                cast(str, turn["receipt_sha256"]),
+                "--classification",
+                "no_plan",
+                "--decision",
+                "proceed",
+                "--rationale",
+                "The redacted replay signal is runtime-only.",
+                "--targets",
+                "route",
+            ).stdout
+        )
+        assert proposal["classification"] == "no_plan"
+        current = read_plan_frontmatter(project, "PLAN-20260729-001")
+        assert current["revision"] == initial_revision
+        assert current["intake"] == initial_intake
+        assert plan_path.read_bytes() == initial_plan_bytes
 
 
 def test_controller_rejects_superseded_turn_receipt(tmp_path: Path) -> None:
@@ -3093,7 +3148,7 @@ def test_unknown_classify_repairs_task_projection_and_status_axes(
         "PLAN-20260729-001",
         legacy_frontmatter,
     )
-    status_before = json.loads(run_controller(project, "plan", "status").stdout)
+    status_before = json.loads(run_controller(project, "plan", "status", "--full").stdout)
     assert status_before["unknown_contract_state"] == "LEGACY_REPAIR_REQUIRED"
     classification = {
         "schema_version": 1,
@@ -3121,7 +3176,7 @@ def test_unknown_classify_repairs_task_projection_and_status_axes(
         "1",
     )
 
-    status_after = json.loads(run_controller(project, "plan", "status").stdout)
+    status_after = json.loads(run_controller(project, "plan", "status", "--full").stdout)
     tasks = cast(list[dict[str, object]], status_after["tasks"])
     assert status_after["unknown_contract_state"] == "STRICT_READY"
     assert status_after["legacy_unknown_ids"] == []

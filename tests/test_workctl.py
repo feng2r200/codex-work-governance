@@ -129,6 +129,9 @@ def ensure_test_ready_receipt(
     controller = bundle / "workctl.py"
     lifecycle = bundle / "work-lifecycle.SKILL.md"
     controller.write_text(controller_source, encoding="utf-8")
+    module_source = SCRIPT.parent / "workctl_modules"
+    if module_source.is_dir():
+        shutil.copytree(module_source, bundle / "workctl_modules", dirs_exist_ok=True)
     lifecycle.write_bytes(LIFECYCLE_SKILL.read_bytes())
     controller_sha256 = hashlib.sha256(controller.read_bytes()).hexdigest()
     lifecycle_sha256 = hashlib.sha256(lifecycle.read_bytes()).hexdigest()
@@ -202,6 +205,7 @@ def run_workctl(
     *args: str,
     check: bool = True,
     env: dict[str, str] | None = None,
+    input_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     supplied_environment = env or {}
     receipt = None
@@ -224,6 +228,7 @@ def run_workctl(
     result = subprocess.run(
         command,
         cwd=cwd,
+        input=input_text,
         text=True,
         capture_output=True,
         check=False,
@@ -3515,7 +3520,13 @@ def test_plan_init_status_and_active_conflict(tmp_path: Path) -> None:
     status = run_workctl(tmp_path, "plan", "status")
     payload = json.loads(status.stdout)
     assert payload["plan_id"] == "PLAN-20260723-001"
-    assert payload["revision"] == 1
+    assert payload["current_task"] is None
+    assert payload["ready"] == []
+    assert "revision_history" not in payload
+
+    full_status = run_workctl(tmp_path, "plan", "status", "--full")
+    full_payload = json.loads(full_status.stdout)
+    assert full_payload["revision"] == 1
 
     duplicate = run_workctl(
         tmp_path,
@@ -3529,6 +3540,84 @@ def test_plan_init_status_and_active_conflict(tmp_path: Path) -> None:
     )
     assert duplicate.returncode == 2
     assert "PLAN_ADMISSION_REQUIRED" in duplicate.stderr
+
+
+def test_plan_status_default_is_bounded_and_history_is_opt_in(tmp_path: Path) -> None:
+    """Routine status stays compact while the full report remains available."""
+    init_plan(tmp_path)
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["goal"] = {
+        "statement": "A compact status goal.",
+        "success_conditions": ["Do not echo revision history by default."],
+    }
+    frontmatter["tasks"] = [
+        {"id": "T-001", "description": "Ready task", "status": "pending"},
+        {
+            "id": "T-002",
+            "description": "Blocked task",
+            "status": "blocked",
+            "depends_on": ["T-001"],
+        },
+    ]
+    write_plan(tmp_path, frontmatter, body)
+
+    compact = run_workctl(tmp_path, "plan", "status")
+    assert len(compact.stdout.encode()) < 8 * 1024
+    payload = json.loads(compact.stdout)
+    assert set(payload) == {
+        "plan_id",
+        "goal",
+        "current_task",
+        "ready",
+        "blocked",
+        "confirmation_gates",
+        "next_suggestion",
+    }
+    assert payload["ready"] == ["task:T-001"]
+    assert payload["blocked"] == ["task:T-002"]
+    assert payload["next_suggestion"] == "Start task:T-001"
+
+    full = json.loads(run_workctl(tmp_path, "plan", "status", "--full").stdout)
+    assert "revision_history" in full
+
+
+def test_stable_help_and_scheduler_commands_keep_plan_revision_unchanged(
+    tmp_path: Path,
+) -> None:
+    """The public workflow aliases use runtime scheduling without Plan revision churn."""
+    help_result = run_workctl(tmp_path, "help", "plan")
+    help_payload = json.loads(help_result.stdout)
+    assert "plan ready" in help_payload["commands"]
+    assert "plan show [--full]" in help_payload["commands"]
+
+    init_plan(tmp_path)
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["tasks"] = [
+        {"id": "T-001", "description": "First", "status": "pending"},
+        {"id": "T-002", "description": "Second", "status": "pending"},
+    ]
+    write_plan(tmp_path, frontmatter, body)
+    reprioritized = run_workctl(
+        tmp_path,
+        "task",
+        "reprioritize",
+        "--task-id",
+        "T-002",
+        "--priority",
+        "5",
+        "--expected-state-sequence",
+        "0",
+    )
+    assert "TASK_REPRIORITIZED T-002 priority=5 state_sequence=1" in reprioritized.stdout
+    assert read_plan(tmp_path)[0]["revision"] == 1
+    assert json.loads(run_workctl(tmp_path, "plan", "ready").stdout) == [
+        "task:T-002",
+        "task:T-001",
+    ]
+    assert json.loads(run_workctl(tmp_path, "plan", "next").stdout) == {
+        "current_task": "task:T-002",
+        "next_suggestion": "Start task:T-002",
+    }
 
 
 def test_expected_revision_gate(tmp_path: Path) -> None:
@@ -3642,6 +3731,74 @@ def test_pending_task_cannot_be_verified_directly(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "INVALID_TASK_TRANSITION: T-001 pending -> verified" in result.stderr
+
+
+def test_evidence_record_accepts_stdin_without_a_temp_manifest(tmp_path: Path) -> None:
+    """Bounded evidence can be canonicalized directly from standard input."""
+    init_plan(tmp_path)
+    frontmatter, body = read_plan(tmp_path)
+    payload = {
+        "schema_version": 1,
+        "kind": "work-governance-evidence",
+        "plan_id": frontmatter["plan_id"],
+        "subject": "task:T-001",
+        "created_at": "2026-07-29T00:00:00Z",
+        "producer_ref": "project:stdin",
+        "items": [{"ref": "project:result", "sha256": "a" * 64}],
+    }
+
+    result = run_workctl(
+        tmp_path,
+        "plan",
+        "evidence",
+        "record",
+        "--stdin",
+        input_text=json.dumps(payload),
+    )
+    recorded = json.loads(result.stdout)
+    evidence_path = tmp_path / recorded["path"]
+    assert evidence_path.is_file()
+    assert recorded["sha256"] == hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    assert json.loads(evidence_path.read_text(encoding="utf-8")) == payload
+
+
+def test_task_verify_evidence_stdin_records_and_binds_atomically(tmp_path: Path) -> None:
+    """One verify command records canonical evidence and binds it to the task."""
+    init_plan(tmp_path)
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["tasks"] = [
+        {"id": "T-001", "description": "Verify evidence", "status": "in_progress"}
+    ]
+    write_plan(tmp_path, frontmatter, body)
+    payload = {
+        "schema_version": 1,
+        "kind": "work-governance-evidence",
+        "plan_id": frontmatter["plan_id"],
+        "subject": "task:T-001",
+        "created_at": "2026-07-29T00:00:00Z",
+        "producer_ref": "project:atomic-verify",
+        "items": [{"ref": "project:result", "sha256": "b" * 64}],
+    }
+
+    result = run_workctl(
+        tmp_path,
+        "task",
+        "verify",
+        "--task-id",
+        "T-001",
+        "--expected-revision",
+        "1",
+        "--evidence-stdin",
+        input_text=json.dumps(payload),
+    )
+    assert "TASK_UPDATED T-001 verified" in result.stdout
+    revised, _ = read_plan(tmp_path)
+    task = revised["tasks"][0]
+    assert task["status"] == "verified"
+    assert task["evidence_ref"].startswith("evidence:.work-governance/_Plan/.evidence/")
+    assert task["evidence_sha256"]
+    evidence_path = tmp_path / task["evidence_ref"].removeprefix("evidence:")
+    assert json.loads(evidence_path.read_text(encoding="utf-8")) == payload
 
 
 def test_confirmation_gate_blocks_high_impact_task(tmp_path: Path) -> None:
@@ -5045,7 +5202,7 @@ def test_reconcile_archives_both_sources_and_activates_index_last(tmp_path: Path
         "--manifest",
         str(manifest_path),
     )
-    report = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    report = json.loads(run_workctl(tmp_path, "plan", "status", "--full").stdout)
     canonical = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260724-002.md"
     _, raw_frontmatter, _ = canonical.read_text(encoding="utf-8").split("---\n", 2)
     frontmatter = yaml.safe_load(raw_frontmatter)
@@ -6051,7 +6208,7 @@ def test_rollover_preserves_predecessor_and_activates_successor_last(
         "--manifest",
         str(manifest_path),
     )
-    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    status = json.loads(run_workctl(tmp_path, "plan", "status", "--full").stdout)
     index = yaml.safe_load(
         (tmp_path / ".work-governance" / "_Plan" / "index.yaml").read_text(encoding="utf-8")
     )
@@ -6487,7 +6644,7 @@ def test_pending_activation_blocks_terminal_and_no_next_claims(tmp_path: Path) -
 
     assert run_workctl(tmp_path, "plan", "validate").stdout.strip() == "PLAN_VALID"
     closeout = run_workctl(tmp_path, "plan", "closeout-check", check=False)
-    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    status = json.loads(run_workctl(tmp_path, "plan", "status", "--full").stdout)
     blockers = json.loads(closeout.stdout)["blockers"]
 
     assert closeout.returncode == 1
@@ -7812,7 +7969,7 @@ handoff:
     )
 
     closeout = json.loads(run_workctl(tmp_path, "plan", "closeout-check").stdout)
-    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    status = json.loads(run_workctl(tmp_path, "plan", "status", "--full").stdout)
 
     assert "CONFIRMATION_DECIDED C-LIVE-SWITCH declined" in decision.stdout
     assert closeout == {"blockers": [], "ready": True}
@@ -7988,7 +8145,7 @@ handoff:
     )
 
     closeout = json.loads(run_workctl(tmp_path, "plan", "closeout-check").stdout)
-    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    status = json.loads(run_workctl(tmp_path, "plan", "status", "--full").stdout)
 
     assert closeout == {"blockers": [], "ready": True}
     assert status["activation"]["status"] == "active"
@@ -8038,7 +8195,7 @@ def test_accepted_gate_authorizes_action_but_does_not_complete_activation(tmp_pa
     write_plan(tmp_path, frontmatter, body)
 
     validation = run_workctl(tmp_path, "plan", "schema-validate")
-    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    status = json.loads(run_workctl(tmp_path, "plan", "status", "--full").stdout)
 
     assert "PLAN_SCHEMA_VALID" in validation.stdout
     assert status["completion_claims"]["slice_next_action_authorized"] is True
@@ -8969,6 +9126,7 @@ def test_composed_reconciliation_upgrade_blocks_mutation_during_upgrade_cutover(
             tmp_path,
             "plan",
             "status",
+            "--full",
             env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
         ).stdout
     )
@@ -9659,7 +9817,7 @@ def test_pending_confirmation_requires_strict_classification_and_exact_basis(
     plan_file = tmp_path / ".work-governance" / "_Plan" / f"{plan_id}.md"
     write_markdown_plan(plan_file, frontmatter, body)
 
-    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    status = json.loads(run_workctl(tmp_path, "plan", "status", "--full").stdout)
     blocked = run_workctl(
         tmp_path,
         "plan",
@@ -9728,7 +9886,7 @@ def test_pending_confirmation_requires_strict_classification_and_exact_basis(
         "--expected-revision",
         "2",
     )
-    final = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    final = json.loads(run_workctl(tmp_path, "plan", "status", "--full").stdout)
 
     assert status["intervention_contract_state"] == "LEGACY_CLASSIFICATION_REQUIRED"
     assert status["user_intervention"]["state"] == "PLAN_DECISION_REQUIRED"
@@ -9772,7 +9930,7 @@ def test_future_authority_gate_is_information_until_its_target_is_current(
         transaction_id="ADM-20260731-102",
     )
 
-    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    status = json.loads(run_workctl(tmp_path, "plan", "status", "--full").stdout)
 
     assert status["intervention_contract_state"] == "STRICT_READY"
     assert status["user_intervention"]["current_targets"] == ["task:T-001"]
@@ -10086,7 +10244,7 @@ def test_pending_plan_challenge_is_advisory_for_ordinary_local_task(
         "--expected-revision",
         "1",
     )
-    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    status = json.loads(run_workctl(tmp_path, "plan", "status", "--full").stdout)
 
     assert "TASK_UPDATED T-001 in_progress" in started.stdout
     assert status["plan_id"] == plan_id
@@ -10392,7 +10550,7 @@ def test_same_context_review_can_only_record_degraded_and_remains_blocking(
         "2",
         check=False,
     )
-    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    status = json.loads(run_workctl(tmp_path, "plan", "status", "--full").stdout)
 
     assert "INDEPENDENT_REVIEW_CONTEXT_NOT_ISOLATED" in rejected.stderr
     assert "INDEPENDENT_REVIEW_REQUIRED" in blocked.stderr

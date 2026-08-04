@@ -32,6 +32,30 @@ from typing import Any, cast
 
 import yaml
 
+try:
+    from workctl_modules import WORKFLOW_HELP as MODULE_WORKFLOW_HELP
+    from workctl_modules import blocked_task_targets as MODULE_BLOCKED_TASK_TARGETS
+    from workctl_modules import canonical_evidence_bytes as MODULE_CANONICAL_EVIDENCE_BYTES
+    from workctl_modules import next_suggestion as MODULE_NEXT_SUGGESTION
+    from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
+    from workctl_modules import ready_task_targets as MODULE_READY_TASK_TARGETS
+    from workctl_modules.migration import build_v5_contract, build_v5_state, migration_projection
+    from workctl_modules.model import TaskProjection
+    from workctl_modules.storage import canonical_event_bytes, redacted_copy
+except ImportError:  # pragma: no cover - legacy single-file runtime bundles
+    MODULE_WORKFLOW_HELP = None
+    MODULE_BLOCKED_TASK_TARGETS = None
+    MODULE_CANONICAL_EVIDENCE_BYTES = None
+    MODULE_NEXT_SUGGESTION = None
+    MODULE_PARSE_EVIDENCE_BYTES = None
+    MODULE_READY_TASK_TARGETS = None
+    build_v5_contract = None
+    build_v5_state = None
+    migration_projection = None
+    TaskProjection = None
+    canonical_event_bytes = None
+    redacted_copy = None
+
 PLAN_ID_RE = re.compile(r"^PLAN-\d{8}-\d{3}$")
 MIGRATION_ID_RE = re.compile(r"^MIG-\d{8}-\d{3}$")
 ROLLOVER_ID_RE = re.compile(r"^ROL-\d{8}-\d{3}$")
@@ -871,6 +895,32 @@ def validate_current_ready_receipt(
         "lifecycle_ref": receipt["lifecycle_ref"],
         "lifecycle_sha256": receipt["lifecycle_sha256"],
     }
+    module_files = (
+        runtime_manifest.get("module_files")
+        if isinstance(runtime_manifest, dict)
+        else None
+    )
+    if module_files is not None:
+        if not isinstance(module_files, list):
+            raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
+        for entry in module_files:
+            if (
+                not isinstance(entry, dict)
+                or set(entry) != {"path", "sha256"}
+                or not isinstance(entry.get("path"), str)
+                or not isinstance(entry.get("sha256"), str)
+                or not SHA256_RE.fullmatch(entry["sha256"])
+            ):
+                raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
+            module_path = bundle / str(entry["path"])
+            if (
+                module_path.parent.parent != bundle
+                or module_path.is_symlink()
+                or not module_path.is_file()
+                or sha256_file(module_path) != entry["sha256"]
+            ):
+                raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
+        expected_manifest["module_files"] = module_files
     if runtime_manifest != expected_manifest:
         raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
     if require_current_controller and Path(__file__).resolve() != controller:
@@ -1128,6 +1178,32 @@ def uncommitted_governance_footprint_errors(root: Path) -> list[str]:
                         if lifecycle.is_file() and not lifecycle.is_symlink()
                         else None,
                     }
+                    if isinstance(payload, dict) and "module_files" in payload:
+                        module_files = payload["module_files"]
+                        if not isinstance(module_files, list):
+                            errors.append("uncommitted runtime plugin manifest is invalid")
+                            continue
+                        for entry in module_files:
+                            if (
+                                not isinstance(entry, dict)
+                                or set(entry) != {"path", "sha256"}
+                                or not isinstance(entry.get("path"), str)
+                                or not isinstance(entry.get("sha256"), str)
+                                or not SHA256_RE.fullmatch(entry["sha256"])
+                            ):
+                                errors.append("uncommitted runtime plugin manifest is invalid")
+                                break
+                            module_path = bundle / entry["path"]
+                            if (
+                                module_path.parent.parent != bundle
+                                or module_path.is_symlink()
+                                or not module_path.is_file()
+                                or sha256_file(module_path) != entry["sha256"]
+                            ):
+                                errors.append("uncommitted runtime plugin module is invalid")
+                                break
+                        else:
+                            expected["module_files"] = module_files
                     if payload != expected:
                         errors.append("uncommitted runtime plugin bundle is invalid")
         capability = runtime / BOOTSTRAP_CAPABILITY_NAME
@@ -3166,10 +3242,29 @@ def allowed_commands_for_state(state: str) -> list[str]:
                 "plan delivery-complete",
                 "plan activation-promote",
                 "task start|block|verify|skip",
+                "plan ready|next|blocked",
+                "task reprioritize",
+                "evidence record",
+                "migrate inspect|apply|recover",
                 "log append",
             ]
         )
     return commands
+
+
+def incomplete_v5_migration_journals(root: Path) -> list[Path]:
+    """Return unfinished schema-v5 migration journals for authority recovery."""
+    base = v5_migration_base(root)
+    if not base.is_dir():
+        return []
+    result: list[Path] = []
+    for journal in sorted(base.glob("MIG-*/journal.json")):
+        try:
+            if load_yaml_file(journal).get("status") != "committed":
+                result.append(journal)
+        except WorkctlError:
+            result.append(journal)
+    return result
 
 
 def inspect_authority(
@@ -3212,6 +3307,7 @@ def inspect_authority(
         for journal in incomplete_structural_rebase_journals(root)
         if journal.resolve() not in ignored_journals
     ]
+    v5_migration_journals = incomplete_v5_migration_journals(root)
     if (
         migration_journals
         or rollover_journals
@@ -3219,6 +3315,7 @@ def inspect_authority(
         or contract_upgrade_journals
         or reconcile_upgrade_journals
         or structural_rebase_journals
+        or v5_migration_journals
     ):
         blockers.extend(
             f"incomplete migration journal: {relative_project_path(root, journal)}"
@@ -3243,6 +3340,10 @@ def inspect_authority(
         blockers.extend(
             f"incomplete structural-rebase journal: {relative_project_path(root, journal)}"
             for journal in structural_rebase_journals
+        )
+        blockers.extend(
+            f"incomplete schema-v5 migration journal: {relative_project_path(root, journal)}"
+            for journal in v5_migration_journals
         )
         state = "MIGRATION_RECOVERY_REQUIRED"
         return AuthorityReport(state, candidates, blockers, allowed_commands_for_state(state))
@@ -3573,6 +3674,7 @@ def append_revision_record(
     rationale: str,
     confirmation_id: str | None = None,
     evidence_manifest: str | None = None,
+    changed_at: str | None = None,
 ) -> None:
     """Append one immutable schema-v4 revision provenance record."""
     if kind not in REVISION_KINDS:
@@ -3585,7 +3687,7 @@ def append_revision_record(
     record: dict[str, Any] = {
         "revision": revision,
         "kind": kind,
-        "changed_at": utc_now(),
+        "changed_at": changed_at or utc_now(),
         "rationale": rationale,
     }
     if confirmation_id is not None:
@@ -3603,13 +3705,14 @@ def bump_revision(
     rationale: str = "Apply one controller-validated state transition.",
     confirmation_id: str | None = None,
     evidence_manifest: str | None = None,
+    timestamp: str | None = None,
 ) -> None:
     revision = frontmatter.get("revision")
     if not isinstance(revision, int) or revision < 1:
         raise WorkctlError("INVALID_PLAN: revision must be a positive integer")
     next_revision = revision + 1
     frontmatter["revision"] = next_revision
-    frontmatter["updated_at"] = utc_now()
+    frontmatter["updated_at"] = timestamp or utc_now()
     if frontmatter.get("schema_version") == 4:
         append_revision_record(
             frontmatter,
@@ -3618,12 +3721,15 @@ def bump_revision(
             rationale=rationale,
             confirmation_id=confirmation_id,
             evidence_manifest=evidence_manifest,
+            changed_at=timestamp,
         )
 
 
 def contract_state(frontmatter: dict[str, Any]) -> str:
     """Return the schema-cutover state independently from Plan authority."""
     schema_version = frontmatter.get("schema_version")
+    if schema_version == 5:
+        return "PLAN_CONTRACT_READY"
     if schema_version == 4:
         return "PLAN_CONTRACT_READY"
     if schema_version == 3 and frontmatter.get("status") not in {"complete", "retired"}:
@@ -3803,6 +3909,384 @@ def current_advancement_targets(frontmatter: Mapping[str, Any]) -> list[str]:
     return ["route"]
 
 
+def scheduler_state_path(root: Path, plan_id: str) -> Path:
+    """Return the ignored runtime scheduler state path for one active Plan."""
+    scheduler_dir = root / GOVERNANCE_DIR_NAME / "runtime" / "scheduler"
+    reject_symlink_components(root, scheduler_dir)
+    return scheduler_dir / f"{plan_id}.json"
+
+
+def load_scheduler_state(root: Path, plan_id: str) -> dict[str, Any]:
+    """Load a bounded scheduler snapshot without changing the Plan contract."""
+    path = scheduler_state_path(root, plan_id)
+    if not path.exists():
+        return {"schema_version": 1, "plan_id": plan_id, "state_sequence": 0, "priorities": {}}
+    if path.is_symlink() or not path.is_file():
+        raise WorkctlError("SCHEDULER_STATE_INVALID")
+    try:
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise WorkctlError("SCHEDULER_STATE_INVALID") from exc
+    if not isinstance(payload, dict):
+        raise WorkctlError("SCHEDULER_STATE_INVALID")
+    priorities = payload.get("priorities", {})
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("plan_id") != plan_id
+        or type(payload.get("state_sequence")) is not int
+        or payload["state_sequence"] < 0
+        or not isinstance(priorities, dict)
+        or any(
+            not isinstance(key, str) or type(value) is not int
+            for key, value in priorities.items()
+        )
+    ):
+        raise WorkctlError("SCHEDULER_STATE_INVALID")
+    return cast(dict[str, Any], payload)
+
+
+def v5_runtime_dir(root: Path, plan_id: str) -> Path:
+    """Return the durable runtime bundle directory for one schema-v5 Plan."""
+    path = governance_root(root) / "runtime" / "plans" / plan_id
+    reject_symlink_components(root, path)
+    return path
+
+
+def v5_state_path(root: Path, plan_id: str) -> Path:
+    return v5_runtime_dir(root, plan_id) / "state.json"
+
+
+def v5_event_path(root: Path, plan_id: str) -> Path:
+    return v5_runtime_dir(root, plan_id) / "events.jsonl"
+
+
+def v5_state_defaults(frontmatter: Mapping[str, Any]) -> dict[str, Any]:
+    """Build a valid empty runtime state for a newly created v5 contract."""
+    if build_v5_state is None:
+        raise WorkctlError("SCHEMA_V5_RUNTIME_MODULE_UNAVAILABLE")
+    return cast(
+        dict[str, Any],
+        build_v5_state(frontmatter, updated_at=str(frontmatter.get("updated_at", utc_now()))),
+    )
+
+
+def v5_redact_evidence_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Remove credential-bearing fields before strict evidence canonicalization."""
+    sensitive = ("api_key", "apikey", "authorization", "password", "secret", "token")
+
+    def clean(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: clean(item)
+                for key, item in value.items()
+                if not any(part in key.lower() for part in sensitive)
+            }
+        if isinstance(value, list):
+            return [clean(item) for item in value]
+        if isinstance(value, str) and "Bearer " in value:
+            return value.split("Bearer ", 1)[0] + "Bearer [REDACTED]"
+        return value
+
+    return cast(dict[str, Any], clean(dict(payload)))
+
+
+def load_v5_state(root: Path, frontmatter: Mapping[str, Any]) -> dict[str, Any]:
+    """Load and validate the independent v5 state snapshot."""
+    plan_id = str(frontmatter.get("plan_id"))
+    path = v5_state_path(root, plan_id)
+    if path.is_symlink() or not path.is_file():
+        raise WorkctlError("SCHEMA_V5_STATE_MISSING")
+    try:
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WorkctlError("SCHEMA_V5_STATE_INVALID") from exc
+    if not isinstance(payload, dict):
+        raise WorkctlError("SCHEMA_V5_STATE_INVALID")
+    tasks = payload.get("tasks")
+    priorities = payload.get("priorities")
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("kind") != "work-governance-plan-state"
+        or payload.get("plan_id") != plan_id
+        or type(payload.get("state_sequence")) is not int
+        or payload["state_sequence"] < 0
+        or type(payload.get("event_sequence")) is not int
+        or payload["event_sequence"] < 0
+        or not isinstance(tasks, dict)
+        or not isinstance(priorities, dict)
+        or any(type(value) is not int for value in priorities.values())
+    ):
+        raise WorkctlError("SCHEMA_V5_STATE_INVALID")
+    for task_id, task in tasks.items():
+        if (
+            not isinstance(task_id, str)
+            or not isinstance(task, dict)
+            or task.get("status") not in WORK_ITEM_STATES
+        ):
+            raise WorkctlError("SCHEMA_V5_STATE_INVALID")
+    event_path = v5_event_path(root, plan_id)
+    if event_path.is_symlink() or not event_path.is_file():
+        raise WorkctlError("SCHEMA_V5_EVENT_MISSING")
+    event_lines = event_path.read_text(encoding="utf-8").splitlines()
+    expected_events = payload["event_sequence"]
+    if isinstance(payload.get("pending_event"), dict):
+        expected_events -= 1
+    if len(event_lines) != expected_events:
+        raise WorkctlError("SCHEMA_V5_EVENT_SEQUENCE_MISMATCH")
+    return cast(dict[str, Any], payload)
+
+
+def v5_runtime_frontmatter(
+    root: Path,
+    frontmatter: Mapping[str, Any],
+    state: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Overlay runtime task state for scheduling without mutating the contract."""
+    runtime = copy.deepcopy(dict(frontmatter))
+    if state is None:
+        state = load_v5_state(root, frontmatter)
+    state_tasks = state.get("tasks", {})
+    for task in runtime.get("tasks", []) if isinstance(runtime.get("tasks"), list) else []:
+        if not isinstance(task, dict) or not isinstance(task.get("id"), str):
+            continue
+        current = state_tasks.get(task["id"]) if isinstance(state_tasks, dict) else None
+        if isinstance(current, dict):
+            for key, value in current.items():
+                if key != "status" or isinstance(value, str):
+                    task[key] = copy.deepcopy(value)
+    return runtime
+
+
+def v5_read_events(root: Path, plan_id: str) -> list[dict[str, Any]]:
+    """Read the append-only v5 event ledger with canonical JSON validation."""
+    path = v5_event_path(root, plan_id)
+    if path.is_symlink() or not path.is_file():
+        raise WorkctlError("SCHEMA_V5_EVENT_MISSING")
+    events: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            item: object = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise WorkctlError("SCHEMA_V5_EVENT_INVALID") from exc
+        if not isinstance(item, dict) or item.get("plan_id") != plan_id:
+            raise WorkctlError("SCHEMA_V5_EVENT_INVALID")
+        events.append(cast(dict[str, Any], item))
+    return events
+
+
+def v5_append_event(root: Path, plan_id: str, event: Mapping[str, Any]) -> None:
+    """Append one canonical event and fsync the event ledger."""
+    path = v5_event_path(root, plan_id)
+    ensure_directory_durable(path.parent)
+    encoded = (
+        canonical_event_bytes(event)
+        if canonical_event_bytes is not None
+        else (json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    )
+    with path.open("ab") as handle:
+        handle.write(encoded)
+        handle.flush()
+        os.fsync(handle.fileno())
+    fsync_directory(path.parent)
+
+
+def v5_persist_state_transition(
+    root: Path,
+    frontmatter: Mapping[str, Any],
+    state: dict[str, Any],
+    *,
+    event: str,
+    subject: str,
+    payload: Mapping[str, Any],
+) -> None:
+    """Persist state before event, then complete the event with recoverable intent."""
+    plan_id = str(frontmatter["plan_id"])
+    next_event_sequence = int(state["event_sequence"]) + 1
+    next_state_sequence = int(state["state_sequence"]) + 1
+    event_payload = {
+        "schema_version": 1,
+        "kind": "work-governance-plan-event",
+        "plan_id": plan_id,
+        "event_sequence": next_event_sequence,
+        "state_sequence": next_state_sequence,
+        "event": event,
+        "subject": subject,
+        "payload": redacted_copy(dict(payload)) if redacted_copy is not None else dict(payload),
+        "recorded_at": utc_now(),
+    }
+    state["state_sequence"] = next_state_sequence
+    state["event_sequence"] = next_event_sequence
+    state["updated_at"] = utc_now()
+    state["pending_event"] = event_payload
+    write_atomic(v5_state_path(root, plan_id), json.dumps(state, indent=2, sort_keys=True) + "\n")
+    if os.environ.get("WORKCTL_TEST_V5_INTERRUPT_AFTER_STATE") == "1":
+        raise WorkctlError("SCHEMA_V5_TEST_INTERRUPTED_AFTER_STATE")
+    v5_append_event(root, plan_id, event_payload)
+    state.pop("pending_event", None)
+    write_atomic(v5_state_path(root, plan_id), json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def v5_recover_pending_event(root: Path, frontmatter: Mapping[str, Any]) -> None:
+    """Finish a state-first transition left by a process interruption."""
+    plan_id = str(frontmatter["plan_id"])
+    state = load_v5_state(root, frontmatter)
+    pending = state.get("pending_event")
+    if not isinstance(pending, dict):
+        return
+    events = v5_read_events(root, plan_id)
+    if not events or events[-1] != pending:
+        v5_append_event(root, plan_id, pending)
+    state.pop("pending_event", None)
+    write_atomic(v5_state_path(root, plan_id), json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def scheduler_task_projections(frontmatter: Mapping[str, Any]) -> list[Any]:
+    """Convert Plan task mappings to the scheduler module's typed projections."""
+    if TaskProjection is None:
+        return []
+    raw_tasks = frontmatter.get("tasks", [])
+    if not isinstance(raw_tasks, list):
+        return []
+    projections: list[Any] = []
+    for task in raw_tasks:
+        if not isinstance(task, dict) or not isinstance(task.get("id"), str):
+            continue
+        dependencies = task.get("depends_on", [])
+        if not isinstance(dependencies, list) or not all(
+            isinstance(dependency, str) for dependency in dependencies
+        ):
+            dependencies = []
+        projections.append(
+            TaskProjection(
+                task_id=task["id"],
+                status=str(task.get("status", "pending")),
+                dependencies=tuple(dependencies),
+            )
+        )
+    return projections
+
+
+def ready_task_targets(
+    frontmatter: Mapping[str, Any],
+    priorities: Mapping[str, int] | None = None,
+) -> list[str]:
+    """Return every pending task whose hard dependencies are verified."""
+    raw_tasks = frontmatter.get("tasks", [])
+    if not isinstance(raw_tasks, list):
+        return []
+    task_map = {
+        str(task["id"]): task
+        for task in raw_tasks
+        if isinstance(task, dict) and isinstance(task.get("id"), str)
+    }
+    if MODULE_READY_TASK_TARGETS is not None:
+        return MODULE_READY_TASK_TARGETS(
+            scheduler_task_projections(frontmatter),
+            priorities,
+        )
+    ready: list[str] = []
+    for task in raw_tasks:
+        if not isinstance(task, dict) or task.get("status") != "pending":
+            continue
+        dependencies = task.get("depends_on", [])
+        if not isinstance(dependencies, list) or not all(
+            isinstance(dependency, str) for dependency in dependencies
+        ):
+            continue
+        if all(
+            dependency in task_map
+            and task_map[dependency].get("status") in VERIFIED_TASK_STATES
+            for dependency in dependencies
+        ):
+            ready.append(f"task:{task['id']}")
+    priority_map = priorities or {}
+    ready_order = {target: index for index, target in enumerate(ready)}
+    return sorted(
+        ready,
+        key=lambda target: (
+            -priority_map.get(target.removeprefix("task:"), 0),
+            ready_order[target],
+        ),
+    )
+
+
+def blocked_task_targets(frontmatter: Mapping[str, Any]) -> list[str]:
+    """Return explicitly blocked tasks without treating dependency waits as failures."""
+    raw_tasks = frontmatter.get("tasks", [])
+    if not isinstance(raw_tasks, list):
+        return []
+    if MODULE_BLOCKED_TASK_TARGETS is not None:
+        return MODULE_BLOCKED_TASK_TARGETS(scheduler_task_projections(frontmatter))
+    return [
+        f"task:{task['id']}"
+        for task in raw_tasks
+        if isinstance(task, dict)
+        and isinstance(task.get("id"), str)
+        and task.get("status") == "blocked"
+    ]
+
+
+def pending_confirmation_ids(frontmatter: Mapping[str, Any]) -> list[str]:
+    """Return pending confirmation IDs in stable Plan order."""
+    raw = frontmatter.get("confirmations", {})
+    required = raw.get("required", []) if isinstance(raw, dict) else []
+    return [
+        str(item["id"])
+        for item in required
+        if isinstance(item, dict)
+        and isinstance(item.get("id"), str)
+        and item.get("status") == "pending"
+    ]
+
+
+def compact_plan_status(
+    frontmatter: Mapping[str, Any],
+    *,
+    scheduler: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the bounded default status view without revision history."""
+    raw_tasks = frontmatter.get("tasks", [])
+    tasks = raw_tasks if isinstance(raw_tasks, list) else []
+    current = [
+        f"task:{task['id']}"
+        for task in tasks
+        if isinstance(task, dict)
+        and isinstance(task.get("id"), str)
+        and task.get("status") == "in_progress"
+    ]
+    priorities = scheduler.get("priorities", {}) if isinstance(scheduler, Mapping) else None
+    ready = ready_task_targets(frontmatter, cast(Mapping[str, int], priorities or {}))
+    blocked = blocked_task_targets(frontmatter)
+    current_task = current[0] if current else (ready[0] if ready else None)
+    confirmation_gates = pending_confirmation_ids(frontmatter)
+    if MODULE_NEXT_SUGGESTION is not None:
+        next_suggestion = MODULE_NEXT_SUGGESTION(
+            current[0] if current else None,
+            ready,
+            blocked,
+            confirmation_gates,
+        )
+    elif current:
+        next_suggestion = f"Continue {current[0]}"
+    elif ready:
+        next_suggestion = f"Start {ready[0]}"
+    elif confirmation_gates:
+        next_suggestion = "Resolve the pending confirmation gate."
+    elif blocked:
+        next_suggestion = "Resolve a blocked task before advancing."
+    else:
+        next_suggestion = "Inspect the route handoff for the next governed action."
+    return {
+        "plan_id": frontmatter.get("plan_id"),
+        "goal": frontmatter.get("goal", {}),
+        "current_task": current_task,
+        "ready": ready,
+        "blocked": blocked,
+        "confirmation_gates": confirmation_gates,
+        "next_suggestion": next_suggestion,
+    }
+
+
 def user_intervention_projection(frontmatter: Mapping[str, Any]) -> dict[str, Any]:
     """Describe only the user-owned input that blocks the current advancement target."""
     current_targets = current_advancement_targets(frontmatter)
@@ -3953,6 +4437,74 @@ def task_for(frontmatter: dict[str, Any], task_id: str) -> dict[str, Any]:
     return task
 
 
+def set_v5_task_status(args: argparse.Namespace, status: str, doc: PlanDocument) -> None:
+    """Transition one v5 task in runtime state without rewriting the contract."""
+    root = project_root()
+    plan_id = str(doc.frontmatter["plan_id"])
+    expected = args.expected_state_sequence
+    if expected is None:
+        raise WorkctlError("EXPECTED_STATE_SEQUENCE_REQUIRED")
+    v5_recover_pending_event(root, doc.frontmatter)
+    state = load_v5_state(root, doc.frontmatter)
+    if state["state_sequence"] != expected:
+        raise WorkctlError(
+            "STATE_SEQUENCE_MISMATCH: "
+            f"expected {expected}, found {state['state_sequence']}"
+        )
+    task = task_for(doc.frontmatter, args.task_id)
+    state_task = state["tasks"].get(args.task_id)
+    if not isinstance(state_task, dict):
+        raise WorkctlError("SCHEMA_V5_STATE_TASK_MISSING")
+    runtime = v5_runtime_frontmatter(root, doc.frontmatter, state)
+    runtime_task = task_for(runtime, args.task_id)
+    current_status = str(state_task.get("status"))
+    allowed = TASK_TRANSITIONS.get(current_status, set())
+    if status not in allowed:
+        raise WorkctlError(f"INVALID_TASK_TRANSITION: {args.task_id} {current_status} -> {status}")
+    if status in {"in_progress", "verified", "skipped"}:
+        require_dependencies_verified(runtime, runtime_task)
+        require_task_confirmation(doc.frontmatter, task, status)
+    evidence_ref: str | None = None
+    evidence_sha256: str | None = None
+    payload = evidence_payload_from_args(args)
+    if status == "verified":
+        if payload is None:
+            raise WorkctlError("EVIDENCE_MANIFEST_REQUIRED")
+        payload = v5_redact_evidence_payload(payload)
+        evidence_ref, evidence_sha256 = record_evidence_payload(
+            root,
+            plan_id=plan_id,
+            payload=payload,
+            expected_subject=f"task:{args.task_id}",
+        )
+    state_task["status"] = status
+    if args.note:
+        state_task["note"] = (
+            redacted_copy(args.note) if redacted_copy is not None else args.note
+        )
+    if evidence_ref is not None and evidence_sha256 is not None:
+        state_task["evidence_ref"] = evidence_ref
+        state_task["evidence_sha256"] = evidence_sha256
+        state_task["verified_at"] = utc_now()
+    state["current_task"] = (
+        f"task:{args.task_id}" if status == "in_progress" else None
+    )
+    v5_persist_state_transition(
+        root,
+        doc.frontmatter,
+        state,
+        event=f"task.{status}",
+        subject=f"task:{args.task_id}",
+        payload={
+            "status": status,
+            "evidence_ref": evidence_ref,
+            "evidence_sha256": evidence_sha256,
+            "note": args.note,
+        },
+    )
+    print(f"TASK_UPDATED {args.task_id} {status} state_sequence={state['state_sequence']}")
+
+
 def require_dependencies_verified(frontmatter: dict[str, Any], task: dict[str, Any]) -> None:
     all_tasks = tasks_by_id(frontmatter)
     for dep_id in task.get("depends_on", []) or []:
@@ -3965,9 +4517,20 @@ def require_dependencies_verified(frontmatter: dict[str, Any], task: dict[str, A
 
 def set_task_status(args: argparse.Namespace, status: str) -> None:
     root = project_root()
+    if status != "verified" and (
+        getattr(args, "evidence_stdin", False)
+        or getattr(args, "evidence_manifest", None) is not None
+    ):
+        raise WorkctlError("TASK_EVIDENCE_ONLY_ALLOWED_FOR_VERIFY")
     with lock(root):
         require_governed_authority(root)
         doc = load_plan(active_plan_path(root))
+        if doc.frontmatter.get("schema_version") == 5:
+            set_v5_task_status(args, status, doc)
+            return
+        evidence_payload = evidence_payload_from_args(args) if status == "verified" else None
+        if args.expected_revision is None:
+            raise WorkctlError("EXPECTED_REVISION_REQUIRED")
         require_expected_revision(doc.frontmatter, args.expected_revision)
         task = task_for(doc.frontmatter, args.task_id)
         if status != "blocked":
@@ -3993,9 +4556,30 @@ def set_task_status(args: argparse.Namespace, status: str) -> None:
                 f"task:{args.task_id}",
             )
             require_task_confirmation(doc.frontmatter, task, status)
+        evidence_ref: str | None = None
+        evidence_sha256: str | None = None
+        if status == "verified":
+            if evidence_payload is not None:
+                evidence_ref, evidence_sha256 = record_evidence_payload(
+                    root,
+                    plan_id=str(doc.frontmatter["plan_id"]),
+                    payload=evidence_payload,
+                    expected_subject=f"task:{args.task_id}",
+                )
+            elif isinstance(getattr(args, "evidence_manifest", None), str):
+                evidence_ref, evidence_sha256 = verify_evidence_manifest(
+                    root,
+                    args.evidence_manifest,
+                    plan_id=str(doc.frontmatter["plan_id"]),
+                    subject=f"task:{args.task_id}",
+                )
         task["status"] = status
         if args.note:
             task["note"] = args.note
+        if evidence_ref is not None and evidence_sha256 is not None:
+            task["evidence_ref"] = evidence_ref
+            task["evidence_sha256"] = evidence_sha256
+            task["verified_at"] = utc_now()
         bump_revision(doc.frontmatter)
         require_valid_candidate(doc)
         write_atomic(doc.path, dump_plan(doc))
@@ -4222,6 +4806,88 @@ def independent_validation_errors(frontmatter: Mapping[str, Any]) -> list[str]:
     return errors
 
 
+def validate_v5_frontmatter(
+    frontmatter: dict[str, Any],
+    *,
+    reject_blocking_artifacts: bool,
+) -> list[str]:
+    """Validate the durable v5 contract while projecting legacy invariants."""
+    errors: list[str] = []
+    if (
+        type(frontmatter.get("contract_revision")) is not int
+        or frontmatter["contract_revision"] < 1
+    ):
+        errors.append("contract_revision must be a positive integer")
+    if type(frontmatter.get("revision")) is not int or frontmatter["revision"] < 1:
+        errors.append("revision must be a positive integer compatibility value")
+    elif frontmatter["revision"] != frontmatter.get("contract_revision"):
+        errors.append("revision must equal contract_revision for schema_version 5")
+    if "revision_history" in frontmatter:
+        errors.append("revision_history must be stored in the v5 event ledger")
+    for field in ("state_ref", "event_ref", "evidence_store_ref"):
+        if not valid_reference(frontmatter.get(field)):
+            errors.append(f"{field} must be a typed reference")
+    truth_refs = frontmatter.get("truth_refs")
+    if not isinstance(truth_refs, list) or not all(valid_reference(item) for item in truth_refs):
+        errors.append("truth_refs must be a list of typed references")
+    projected = copy.deepcopy(frontmatter)
+    projected["schema_version"] = 4
+    projected["revision_history"] = [
+        {
+            "revision": frontmatter.get("contract_revision", 1),
+            "kind": "controlled-transition",
+            "changed_at": frontmatter.get("updated_at", "v5-contract"),
+            "rationale": "Schema-v5 contract projection; runtime history is in events.jsonl.",
+        }
+    ]
+    for field in (
+        "contract_revision",
+        "state_ref",
+        "event_ref",
+        "evidence_store_ref",
+        "truth_refs",
+    ):
+        projected.pop(field, None)
+    errors.extend(
+        error
+        for error in validate_frontmatter(
+            projected,
+            reject_blocking_artifacts=reject_blocking_artifacts,
+        )
+        if not error.startswith("revision_history")
+    )
+    return errors
+
+
+def validate_v5_runtime_bundle(root: Path, frontmatter: Mapping[str, Any]) -> list[str]:
+    """Validate v5 state/event separation and task mapping without changing bytes."""
+    try:
+        state = load_v5_state(root, frontmatter)
+    except WorkctlError as exc:
+        return [str(exc)]
+    errors: list[str] = []
+    contract_tasks = {
+        task.get("id")
+        for task in frontmatter.get("tasks", [])
+        if isinstance(task, dict) and isinstance(task.get("id"), str)
+    }
+    state_tasks = set(state.get("tasks", {}))
+    if state_tasks != contract_tasks:
+        errors.append("schema-v5 state tasks must exactly match contract tasks")
+    for event in v5_read_events(root, str(frontmatter["plan_id"])):
+        if (
+            type(event.get("event_sequence")) is not int
+            or type(event.get("state_sequence")) is not int
+            or not isinstance(event.get("event"), str)
+            or not isinstance(event.get("subject"), str)
+            or not isinstance(event.get("payload"), dict)
+            or "api_key" in json.dumps(event, sort_keys=True).lower()
+        ):
+            errors.append("schema-v5 event ledger contains invalid or secret-bearing data")
+            break
+    return errors
+
+
 def validate_frontmatter(
     frontmatter: dict[str, Any],
     *,
@@ -4229,8 +4895,13 @@ def validate_frontmatter(
 ) -> list[str]:
     errors: list[str] = []
     schema_version = frontmatter.get("schema_version")
+    if schema_version == 5:
+        return validate_v5_frontmatter(
+            frontmatter,
+            reject_blocking_artifacts=reject_blocking_artifacts,
+        )
     if schema_version not in {1, 2, 3, 4}:
-        errors.append("schema_version must be 1, 2, 3, or 4")
+        errors.append("schema_version must be 1, 2, 3, 4, or 5")
     plan_id = frontmatter.get("plan_id")
     if not isinstance(plan_id, str) or PLAN_ID_RE.fullmatch(plan_id) is None:
         errors.append("plan_id must match PLAN-YYYYMMDD-NNN")
@@ -4993,6 +5664,8 @@ def validate_plan(
         doc.frontmatter,
         reject_blocking_artifacts=reject_blocking_artifacts,
     )
+    if doc.frontmatter.get("schema_version") == 5:
+        errors.extend(validate_v5_runtime_bundle(root, doc.frontmatter))
     if index.get("schema_version") != 1:
         errors.append("index schema_version must be 1")
     if index.get("active_plan_id") != doc.frontmatter.get("plan_id"):
@@ -9639,7 +10312,11 @@ def validate_structural_rebase_transition(
 
 
 def prepare_structural_rebase(
-    root: Path, manifest_path: Path, source: PlanDocument
+    root: Path,
+    manifest_path: Path,
+    source: PlanDocument,
+    *,
+    dry_run: bool = False,
 ) -> StructuralRebasePreparation:
     """Build the exact same-Plan target before publishing a transaction journal."""
     manifest = load_structural_rebase_manifest(manifest_path)
@@ -9676,6 +10353,7 @@ def prepare_structural_rebase(
         kind="structural-rebase",
         rationale=str(manifest["rationale"]),
         confirmation_id=str(authorization["id"]),
+        timestamp=source.frontmatter.get("updated_at") if dry_run else None,
     )
     require_valid_candidate(target)
     require_strict_intervention_contract(target.frontmatter)
@@ -9818,7 +10496,10 @@ def cmd_plan_structural_rebase_apply(args: argparse.Namespace) -> None:
     if args.dry_run:
         require_governed_authority(root)
         preparation = prepare_structural_rebase(
-            root, manifest_path, load_plan(active_plan_path(root))
+            root,
+            manifest_path,
+            load_plan(active_plan_path(root)),
+            dry_run=True,
         )
         proposal = structural_rebase_proposal(preparation)
         proposal["proposal_sha256"] = sha256_bytes(
@@ -10431,6 +11112,25 @@ def cmd_plan_status(args: argparse.Namespace) -> None:
     try:
         doc = load_plan(active_plan_path(root))
     except WorkctlError:
+        if not args.full:
+            print(
+                json.dumps(
+                    {
+                        "plan_id": None,
+                        "goal": {},
+                        "current_task": None,
+                        "ready": [],
+                        "blocked": [],
+                        "confirmation_gates": [],
+                        "next_suggestion": (
+                            "Admit a Plan only when durable execution state is needed."
+                        ),
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
+            return
         summary: dict[str, Any] = {
             "authority_state": report.state,
             "contract_state": "NO_ACTIVE_PLAN",
@@ -10454,8 +11154,27 @@ def cmd_plan_status(args: argparse.Namespace) -> None:
         }
         print(json.dumps(summary, indent=2, sort_keys=True))
         return
-    readiness = closeout_readiness(doc.frontmatter, report, validate_plan(root))
+    runtime_doc = doc.frontmatter
+    v5_state: dict[str, Any] | None = None
+    if doc.frontmatter.get("schema_version") == 5:
+        v5_state = load_v5_state(root, doc.frontmatter)
+        runtime_doc = v5_runtime_frontmatter(root, doc.frontmatter, v5_state)
+    readiness = closeout_readiness(runtime_doc, report, validate_plan(root))
     legacy_ids = legacy_unknown_ids(doc.frontmatter)
+    if not args.full:
+        scheduler = (
+            v5_state
+            if v5_state is not None
+            else load_scheduler_state(root, str(doc.frontmatter["plan_id"]))
+        )
+        print(
+            json.dumps(
+                compact_plan_status(runtime_doc, scheduler=scheduler),
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+        return
     summary = {
         "authority_state": report.state,
         "authority_candidates": [candidate_to_dict(item) for item in report.candidates],
@@ -10465,6 +11184,8 @@ def cmd_plan_status(args: argparse.Namespace) -> None:
         "status": doc.frontmatter.get("status"),
         "mode": doc.frontmatter.get("mode"),
         "revision": doc.frontmatter.get("revision"),
+        "contract_revision": doc.frontmatter.get("contract_revision"),
+        "state_sequence": v5_state.get("state_sequence") if v5_state else None,
         "contract_state": contract_state(doc.frontmatter),
         "intake_state": intake_state(doc.frontmatter),
         "unknown_contract_state": ("LEGACY_REPAIR_REQUIRED" if legacy_ids else "STRICT_READY"),
@@ -10477,7 +11198,7 @@ def cmd_plan_status(args: argparse.Namespace) -> None:
         "unknowns": doc.frontmatter.get("unknowns", []),
         "revision_history": doc.frontmatter.get("revision_history", []),
         "obligations": doc.frontmatter.get("obligations", []),
-        "tasks": doc.frontmatter.get("tasks", []),
+        "tasks": runtime_doc.get("tasks", []),
         "validations": doc.frontmatter.get("validations", []),
         "confirmations": doc.frontmatter.get("confirmations", {}),
         "independent_validation": doc.frontmatter.get("independent_validation"),
@@ -10488,8 +11209,10 @@ def cmd_plan_status(args: argparse.Namespace) -> None:
         "handoff": doc.frontmatter.get("handoff", {}),
         "route": doc.frontmatter.get("route", {}),
         "closeout_readiness": readiness,
-        "completion_claims": completion_claims(doc.frontmatter, readiness),
+        "completion_claims": completion_claims(runtime_doc, readiness),
     }
+    if v5_state is not None:
+        summary["events"] = v5_read_events(root, str(doc.frontmatter["plan_id"]))
     if args.expected_intake_sha256 is not None:
         summary["current_request_match"] = current_request_matches(
             root,
@@ -10497,6 +11220,443 @@ def cmd_plan_status(args: argparse.Namespace) -> None:
             args.expected_intake_sha256,
         )
     print(json.dumps(summary, indent=2, sort_keys=True))
+
+
+def cmd_plan_queue(args: argparse.Namespace) -> None:
+    """Expose ready, blocked, and next scheduler projections as read-only commands."""
+    root = project_root()
+    doc = load_plan(active_plan_path(root))
+    if doc.frontmatter.get("schema_version") == 5:
+        state = load_v5_state(root, doc.frontmatter)
+        runtime = v5_runtime_frontmatter(root, doc.frontmatter, state)
+        compact = compact_plan_status(runtime, scheduler=state)
+    else:
+        scheduler = load_scheduler_state(root, str(doc.frontmatter["plan_id"]))
+        compact = compact_plan_status(doc.frontmatter, scheduler=scheduler)
+    if args.queue_action == "ready":
+        payload: object = compact["ready"]
+    elif args.queue_action == "blocked":
+        payload = compact["blocked"]
+    else:
+        payload = {
+            "current_task": compact["current_task"],
+            "next_suggestion": compact["next_suggestion"],
+        }
+    print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
+
+
+def cmd_task_reprioritize(args: argparse.Namespace) -> None:
+    """Change runtime task priority with a state-sequence guard."""
+    root = project_root()
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        task_for(doc.frontmatter, args.task_id)
+        if doc.frontmatter.get("schema_version") == 5:
+            v5_recover_pending_event(root, doc.frontmatter)
+            state = load_v5_state(root, doc.frontmatter)
+            if state["state_sequence"] != args.expected_state_sequence:
+                raise WorkctlError(
+                    "STATE_SEQUENCE_MISMATCH: "
+                    f"expected {args.expected_state_sequence}, found {state['state_sequence']}"
+                )
+            state["priorities"][args.task_id] = args.priority
+            v5_persist_state_transition(
+                root,
+                doc.frontmatter,
+                state,
+                event="task.reprioritized",
+                subject=f"task:{args.task_id}",
+                payload={"priority": args.priority},
+            )
+            print(
+                f"TASK_REPRIORITIZED {args.task_id} priority={args.priority} "
+                f"state_sequence={state['state_sequence']}"
+            )
+            return
+        state = load_scheduler_state(root, str(doc.frontmatter["plan_id"]))
+        expected = args.expected_state_sequence
+        if state["state_sequence"] != expected:
+            raise WorkctlError(
+                "STATE_SEQUENCE_MISMATCH: "
+                f"expected {expected}, found {state['state_sequence']}"
+            )
+        priorities = cast(dict[str, int], state["priorities"])
+        priorities[args.task_id] = args.priority
+        state["state_sequence"] += 1
+        write_atomic(
+            scheduler_state_path(root, str(doc.frontmatter["plan_id"])),
+            json.dumps(state, indent=2, sort_keys=True) + "\n",
+        )
+    print(
+        f"TASK_REPRIORITIZED {args.task_id} priority={args.priority} "
+        f"state_sequence={state['state_sequence']}"
+    )
+
+
+def cmd_workflow_help(args: argparse.Namespace) -> None:
+    """Print the stable public workflow command surface."""
+    workflows: dict[str, dict[str, object]] = {
+        "plan": {
+            "commands": [
+                "plan create",
+                "plan show [--full]",
+                "plan edit",
+                "plan reorder",
+                "plan status",
+                "plan ready",
+                "plan next",
+                "plan blocked",
+            ],
+            "note": "Contract edits require their existing confirmation and revision guards.",
+        },
+        "task": {
+            "commands": [
+                "task start",
+                "task block",
+                "task unblock",
+                "task verify [--evidence-stdin]",
+                "task reprioritize",
+            ],
+            "note": "Task transitions remain receipt-bound and dependency-checked.",
+        },
+        "evidence": {
+            "commands": ["evidence record --stdin", "plan evidence record --manifest PATH"],
+            "note": "Evidence is bounded, canonical, content-addressed, and redaction-safe.",
+        },
+        "migration": {
+            "commands": ["migrate inspect", "migrate apply"],
+            "note": "Migration is explicit, backed up, and recovery-bound.",
+        },
+    }
+    if isinstance(MODULE_WORKFLOW_HELP, dict):
+        workflows = cast(dict[str, dict[str, object]], MODULE_WORKFLOW_HELP)
+    workflow = args.workflow or "plan"
+    if workflow not in workflows:
+        raise WorkctlError(f"UNKNOWN_WORKFLOW: {workflow}")
+    print(json.dumps(workflows[workflow], indent=2, sort_keys=True))
+
+
+def cmd_migrate_inspect(_args: argparse.Namespace) -> None:
+    """Report the current migration boundary without writing any state."""
+    root = project_root()
+    report = inspect_authority(root)
+    payload: dict[str, Any] = {
+        "authority_state": report.state,
+        "plan_id": None,
+        "from_schema_version": None,
+        "to_schema_version": 5,
+        "write": False,
+    }
+    if report.state == "GOVERNED_ACTIVE":
+        doc = load_plan(active_plan_path(root))
+        payload["plan_id"] = doc.frontmatter.get("plan_id")
+        payload["from_schema_version"] = doc.frontmatter.get("schema_version")
+        if migration_projection is not None:
+            payload.update(migration_projection(doc.frontmatter))
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def v5_migration_base(root: Path) -> Path:
+    """Return the ignored parent for schema-v5 migration transactions."""
+    path = governance_root(root) / "runtime" / "migrations-v5"
+    reject_symlink_components(root, path)
+    return path
+
+
+def next_v5_migration_id(root: Path) -> str:
+    date_part = datetime.now(UTC).strftime("%Y%m%d")
+    base = v5_migration_base(root)
+    existing = {
+        path.name
+        for path in base.iterdir()
+        if base.is_dir() and path.is_dir() and MIGRATION_ID_RE.fullmatch(path.name)
+    } if base.exists() else set()
+    for number in range(1, 1000):
+        candidate = f"MIG-{date_part}-{number:03d}"
+        if candidate not in existing:
+            return candidate
+    raise WorkctlError("SCHEMA_V5_MIGRATION_ID_EXHAUSTED")
+
+
+def v5_migration_paths(root: Path, migration_id: str) -> dict[str, Path]:
+    if MIGRATION_ID_RE.fullmatch(migration_id) is None:
+        raise WorkctlError("SCHEMA_V5_MIGRATION_ID_INVALID")
+    transaction = v5_migration_base(root) / migration_id
+    return {
+        "transaction": transaction,
+        "journal": transaction / "journal.json",
+        "staging": transaction / "staging" / "plan.md",
+        "backup": transaction / "backup" / "plan.md",
+        "state_staging": transaction / "staging" / "state.json",
+        "events_staging": transaction / "staging" / "events.jsonl",
+    }
+
+
+def validate_v5_migration_confirmation(
+    frontmatter: Mapping[str, Any],
+    supplied: str | None,
+) -> dict[str, Any]:
+    """Require an accepted explicit gate for a durable schema migration."""
+    if not isinstance(supplied, str) or not supplied:
+        raise WorkctlError("SCHEMA_V5_MIGRATION_CONFIRMATION_REQUIRED")
+    decision = confirmations(frontmatter).get(supplied)
+    if (
+        not isinstance(decision, dict)
+        or decision.get("status") != "accepted"
+        or not decision.get("ref")
+    ):
+        raise WorkctlError(f"CONFIRMATION_REQUIRED: {supplied}")
+    return decision
+
+
+def prepare_v5_migration(
+    root: Path,
+    source: PlanDocument,
+    *,
+    migration_id: str,
+    confirmation_id: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], bytes]:
+    """Prepare v5 contract, state, event, and journal bytes without publishing them."""
+    if source.frontmatter.get("schema_version") not in {1, 2, 3, 4}:
+        raise WorkctlError("SCHEMA_V5_MIGRATION_SOURCE_UNSUPPORTED")
+    if build_v5_contract is None or build_v5_state is None:
+        raise WorkctlError("SCHEMA_V5_MIGRATION_MODULE_UNAVAILABLE")
+    source_bytes = source.path.read_bytes()
+    contract = cast(dict[str, Any], build_v5_contract(source.frontmatter))
+    if redacted_copy is not None:
+        contract = cast(dict[str, Any], redacted_copy(contract))
+    state = cast(
+        dict[str, Any],
+        build_v5_state(
+            source.frontmatter,
+            updated_at=str(source.frontmatter.get("updated_at", utc_now())),
+        ),
+    )
+    if redacted_copy is not None:
+        state = cast(dict[str, Any], redacted_copy(state))
+    plan_doc = PlanDocument(source.path, contract, source.body)
+    target_bytes = dump_plan(plan_doc).encode("utf-8")
+    source_sha256 = sha256_bytes(source_bytes)
+    target_sha256 = sha256_bytes(target_bytes)
+    plan_id = str(source.frontmatter["plan_id"])
+    event = {
+        "schema_version": 1,
+        "kind": "work-governance-plan-event",
+        "plan_id": plan_id,
+        "event_sequence": 1,
+        "state_sequence": 0,
+        "event": "contract.migrated",
+        "subject": f"plan:{plan_id}",
+        "payload": {
+            "from_schema_version": source.frontmatter.get("schema_version"),
+            "to_schema_version": 5,
+            "source_sha256": source_sha256,
+            "confirmation_id": confirmation_id,
+        },
+        "recorded_at": utc_now(),
+    }
+    if redacted_copy is not None:
+        event = cast(dict[str, Any], redacted_copy(event))
+    state["event_sequence"] = 1
+    event_bytes = (
+        canonical_event_bytes(event)
+        if canonical_event_bytes is not None
+        else (json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    )
+    journal = {
+        "schema_version": 1,
+        "kind": "schema-v5-migration",
+        "migration_id": migration_id,
+        "status": "prepared",
+        "plan_id": plan_id,
+        "source_path": relative_project_path(root, source.path),
+        "source_sha256": source_sha256,
+        "target_sha256": target_sha256,
+        "state_sha256": sha256_bytes(
+            json.dumps(state, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+        ),
+        "events_sha256": sha256_bytes(event_bytes),
+        "contract_revision": contract.get("contract_revision"),
+        "confirmation_id": confirmation_id,
+        "created_at": utc_now(),
+        "updated_at": utc_now(),
+    }
+    return journal, state, event, target_bytes
+
+
+def write_v5_migration_staging(
+    root: Path,
+    paths: Mapping[str, Path],
+    source_bytes: bytes,
+    target_bytes: bytes,
+    state: Mapping[str, Any],
+    event_bytes: bytes,
+) -> None:
+    """Write the complete backup and staging set before the Plan replacement."""
+    write_atomic_bytes(paths["backup"], source_bytes)
+    write_atomic_bytes(paths["staging"], target_bytes)
+    write_atomic(
+        paths["state_staging"],
+        json.dumps(state, indent=2, sort_keys=True) + "\n",
+    )
+    write_atomic_bytes(paths["events_staging"], event_bytes)
+
+
+def finish_v5_migration(root: Path, journal_path: Path) -> None:
+    """Complete one prepared v5 migration idempotently after an interruption."""
+    journal = load_yaml_file(journal_path)
+    migration_id = journal.get("migration_id")
+    if not isinstance(migration_id, str):
+        raise WorkctlError("SCHEMA_V5_MIGRATION_JOURNAL_INVALID")
+    paths = v5_migration_paths(root, migration_id)
+    if journal_path.resolve() != paths["journal"].resolve():
+        raise WorkctlError("SCHEMA_V5_MIGRATION_JOURNAL_INVALID")
+    required = {
+        "schema_version", "kind", "migration_id", "status", "plan_id", "source_path",
+        "source_sha256", "target_sha256", "state_sha256", "events_sha256",
+        "contract_revision", "confirmation_id", "created_at", "updated_at",
+    }
+    if (
+        set(journal) != required
+        or journal.get("schema_version") != 1
+        or journal.get("kind") != "schema-v5-migration"
+    ):
+        raise WorkctlError("SCHEMA_V5_MIGRATION_JOURNAL_INVALID")
+    source = checked_project_path(root, str(journal["source_path"]))
+    plan_id = str(journal["plan_id"])
+    runtime = v5_runtime_dir(root, plan_id)
+    state_target = runtime / "state.json"
+    event_target = runtime / "events.jsonl"
+    if (
+        not paths["backup"].is_file()
+        or sha256_file(paths["backup"]) != journal["source_sha256"]
+        or not paths["staging"].is_file()
+        or sha256_file(paths["staging"]) != journal["target_sha256"]
+        or not paths["state_staging"].is_file()
+        or sha256_file(paths["state_staging"]) != journal["state_sha256"]
+        or not paths["events_staging"].is_file()
+        or sha256_file(paths["events_staging"]) != journal["events_sha256"]
+    ):
+        raise WorkctlError("SCHEMA_V5_MIGRATION_STAGING_INVALID")
+    if journal["status"] == "committed":
+        if not source.is_file() or sha256_file(source) != journal["target_sha256"]:
+            raise WorkctlError("SCHEMA_V5_MIGRATION_COMMITTED_DRIFT")
+        return
+    if not source.is_file():
+        raise WorkctlError("SCHEMA_V5_MIGRATION_SOURCE_MISSING")
+    current_sha256 = sha256_file(source)
+    if current_sha256 == journal["source_sha256"]:
+        write_atomic_bytes(state_target, paths["state_staging"].read_bytes())
+        write_atomic_bytes(event_target, paths["events_staging"].read_bytes())
+        write_atomic_bytes(source, paths["staging"].read_bytes())
+    elif current_sha256 != journal["target_sha256"]:
+        raise WorkctlError("SCHEMA_V5_MIGRATION_SOURCE_DRIFT")
+    journal["status"] = "plan-replaced"
+    journal["updated_at"] = utc_now()
+    write_atomic(journal_path, json.dumps(journal, indent=2, sort_keys=True) + "\n")
+    if os.environ.get("WORKCTL_TEST_V5_MIGRATION_INTERRUPT") == "1":
+        raise WorkctlError("SCHEMA_V5_TEST_INTERRUPTED_AFTER_REPLACE")
+    errors = validate_plan(root, require_governed=False)
+    if errors:
+        raise WorkctlError("SCHEMA_V5_MIGRATION_APPLIED_BUT_INVALID: " + "; ".join(errors))
+    journal["status"] = "committed"
+    journal["updated_at"] = utc_now()
+    write_atomic(journal_path, json.dumps(journal, indent=2, sort_keys=True) + "\n")
+
+
+def cmd_migrate_apply(args: argparse.Namespace) -> None:
+    """Apply an explicit, backed-up, atomically recoverable v4-to-v5 migration."""
+    root = project_root()
+    with lock(root):
+        require_governed_authority(root)
+        source = load_plan(active_plan_path(root))
+        if source.frontmatter.get("schema_version") == 5:
+            print(
+                json.dumps(
+                    {"status": "already_v5", "plan_id": source.frontmatter.get("plan_id")},
+                    sort_keys=True,
+                )
+            )
+            return
+        decision = validate_v5_migration_confirmation(source.frontmatter, args.confirmation)
+        expected = args.expected_contract_revision
+        contract = source.frontmatter.get("contract")
+        current_revision = (
+            contract.get("revision")
+            if isinstance(contract, dict)
+            else source.frontmatter.get("revision")
+        )
+        if expected is None:
+            raise WorkctlError("EXPECTED_CONTRACT_REVISION_REQUIRED")
+        if current_revision != expected:
+            raise WorkctlError(
+                f"CONTRACT_REVISION_MISMATCH: expected {expected}, found {current_revision}"
+            )
+        if args.dry_run:
+            journal, state, _event, target_bytes = prepare_v5_migration(
+                root,
+                source,
+                migration_id="MIG-DRY-RUN-001",
+                confirmation_id=str(args.confirmation),
+            )
+            payload = migration_projection(source.frontmatter) if migration_projection else {}
+            payload.update(
+                {
+                    "status": "dry_run",
+                    "plan_id": source.frontmatter.get("plan_id"),
+                    "source_sha256": sha256_file(source.path),
+                    "target_sha256": sha256_bytes(target_bytes),
+                    "state_sequence": state.get("state_sequence"),
+                    "contract_revision": journal.get("contract_revision"),
+                    "confirmation_ref": decision.get("ref"),
+                    "writes": [],
+                }
+            )
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return
+        migration_id = next_v5_migration_id(root)
+        journal, state, event, target_bytes = prepare_v5_migration(
+            root,
+            source,
+            migration_id=migration_id,
+            confirmation_id=str(args.confirmation),
+        )
+        paths = v5_migration_paths(root, migration_id)
+        source_bytes = source.path.read_bytes()
+        event_bytes = (
+            canonical_event_bytes(event)
+            if canonical_event_bytes is not None
+            else (json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        )
+        write_v5_migration_staging(root, paths, source_bytes, target_bytes, state, event_bytes)
+        write_atomic(paths["journal"], json.dumps(journal, indent=2, sort_keys=True) + "\n")
+        finish_v5_migration(root, paths["journal"])
+    print(f"SCHEMA_V5_MIGRATION_COMMITTED {migration_id} plan={source.frontmatter['plan_id']}")
+
+
+def cmd_migrate_recover(args: argparse.Namespace) -> None:
+    """Recover one named or the only incomplete schema-v5 migration."""
+    root = project_root()
+    base = v5_migration_base(root)
+    candidates = []
+    for path in sorted(base.glob("MIG-*/journal.json")) if base.is_dir() else []:
+        try:
+            if load_yaml_file(path).get("status") != "committed":
+                candidates.append(path)
+        except WorkctlError:
+            candidates.append(path)
+    if args.migration_id:
+        candidates = [v5_migration_paths(root, args.migration_id)["journal"]]
+    if len(candidates) != 1:
+        raise WorkctlError(
+            "SCHEMA_V5_MIGRATION_RECOVERY_AMBIGUOUS"
+            if candidates
+            else "SCHEMA_V5_MIGRATION_RECOVERY_NOT_REQUIRED"
+        )
+    with lock(root):
+        finish_v5_migration(root, candidates[0])
+    print(f"SCHEMA_V5_MIGRATION_RECOVERED {candidates[0].parent.name}")
 
 
 def cmd_plan_validate(args: argparse.Namespace) -> None:
@@ -12195,6 +13355,8 @@ def require_evidence_args(evidence_ref: str, evidence_sha256: str) -> None:
 
 def canonical_evidence_bytes(payload: Mapping[str, Any]) -> bytes:
     """Return the only accepted immutable evidence record encoding."""
+    if MODULE_CANONICAL_EVIDENCE_BYTES is not None:
+        return MODULE_CANONICAL_EVIDENCE_BYTES(payload)
     return (
         json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
     ).encode()
@@ -12271,6 +13433,68 @@ def evidence_relative_path(plan_id: str, digest: str) -> str:
     return plan_relative_path(f".evidence/{plan_id}/{digest}.json")
 
 
+def parse_evidence_content(content: bytes) -> dict[str, Any]:
+    """Parse one bounded JSON or YAML evidence object from trusted input bytes."""
+    if MODULE_PARSE_EVIDENCE_BYTES is not None:
+        try:
+            return cast(
+                dict[str, Any],
+                MODULE_PARSE_EVIDENCE_BYTES(content, EVIDENCE_MANIFEST_MAX_BYTES),
+            )
+        except ValueError as exc:
+            raise WorkctlError(str(exc)) from exc
+    if len(content) > EVIDENCE_MANIFEST_MAX_BYTES:
+        raise WorkctlError("EVIDENCE_MANIFEST_TOO_LARGE")
+    try:
+        payload: object = json.loads(content)
+    except json.JSONDecodeError:
+        try:
+            payload = yaml.safe_load(content)
+        except yaml.YAMLError as exc:
+            raise WorkctlError("EVIDENCE_MANIFEST_INVALID") from exc
+    if not isinstance(payload, dict):
+        raise WorkctlError("EVIDENCE_MANIFEST_INVALID")
+    return cast(dict[str, Any], payload)
+
+
+def evidence_payload_from_args(args: argparse.Namespace) -> dict[str, Any] | None:
+    """Read an optional evidence object from a manifest path or standard input."""
+    if getattr(args, "evidence_stdin", False) or getattr(args, "stdin", False):
+        return parse_evidence_content(sys.stdin.buffer.read())
+    input_path_value = getattr(args, "manifest", None)
+    if not isinstance(input_path_value, str):
+        return None
+    input_path = Path(input_path_value)
+    if input_path.is_symlink() or not input_path.is_file():
+        raise WorkctlError("EVIDENCE_INPUT_MISSING")
+    return parse_evidence_content(input_path.read_bytes())
+
+
+def record_evidence_payload(
+    root: Path,
+    *,
+    plan_id: str,
+    payload: Mapping[str, Any],
+    expected_subject: str | None = None,
+) -> tuple[str, str]:
+    """Validate and atomically install one canonical evidence payload."""
+    validate_evidence_payload(
+        payload,
+        expected_plan_id=plan_id,
+        expected_subject=expected_subject,
+    )
+    canonical = canonical_evidence_bytes(payload)
+    digest = sha256_bytes(canonical)
+    relative = evidence_relative_path(plan_id, digest)
+    target = checked_project_path(root, relative)
+    if target.exists():
+        if target.is_symlink() or target.read_bytes() != canonical:
+            raise WorkctlError("EVIDENCE_MANIFEST_CONFLICT")
+    else:
+        write_atomic_bytes(target, canonical)
+    return f"evidence:{relative}", digest
+
+
 def verify_evidence_manifest(
     root: Path,
     raw_path: str,
@@ -12342,30 +13566,19 @@ def cmd_plan_evidence_record(args: argparse.Namespace) -> None:
     root = project_root()
     require_governed_authority(root)
     doc = load_plan(active_plan_path(root))
-    input_path = Path(args.manifest)
-    if input_path.is_symlink() or not input_path.is_file():
-        raise WorkctlError("EVIDENCE_INPUT_MISSING")
-    content = input_path.read_bytes()
-    if len(content) > EVIDENCE_MANIFEST_MAX_BYTES:
-        raise WorkctlError("EVIDENCE_MANIFEST_TOO_LARGE")
-    try:
-        payload = json.loads(content)
-    except json.JSONDecodeError:
-        payload = yaml.safe_load(content)
-    if not isinstance(payload, dict):
-        raise WorkctlError("EVIDENCE_MANIFEST_INVALID")
+    payload = evidence_payload_from_args(args)
+    if payload is None:
+        raise WorkctlError("EVIDENCE_INPUT_REQUIRED")
+    if doc.frontmatter.get("schema_version") == 5:
+        payload = v5_redact_evidence_payload(payload)
     plan_id = str(doc.frontmatter["plan_id"])
-    validate_evidence_payload(payload, expected_plan_id=plan_id)
-    canonical = canonical_evidence_bytes(payload)
-    digest = sha256_bytes(canonical)
-    relative = evidence_relative_path(plan_id, digest)
-    target = checked_project_path(root, relative)
     with lock(root):
-        if target.exists():
-            if target.is_symlink() or target.read_bytes() != canonical:
-                raise WorkctlError("EVIDENCE_MANIFEST_CONFLICT")
-        else:
-            write_atomic_bytes(target, canonical)
+        evidence_ref, digest = record_evidence_payload(
+            root,
+            plan_id=plan_id,
+            payload=payload,
+        )
+    relative = evidence_ref.removeprefix("evidence:")
     print(json.dumps({"path": relative, "sha256": digest}, sort_keys=True))
 
 
@@ -15654,6 +16867,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="domain", required=True)
 
+    help_command = sub.add_parser("help")
+    help_command.add_argument(
+        "workflow",
+        nargs="?",
+        choices=["plan", "task", "evidence", "migration"],
+    )
+    help_command.set_defaults(func=cmd_workflow_help)
+
+    evidence_command = sub.add_parser("evidence")
+    evidence_sub = evidence_command.add_subparsers(dest="evidence_action", required=True)
+    evidence_record = evidence_sub.add_parser("record")
+    evidence_source = evidence_record.add_mutually_exclusive_group(required=True)
+    evidence_source.add_argument("--manifest")
+    evidence_source.add_argument("--stdin", action="store_true")
+    evidence_record.set_defaults(func=cmd_plan_evidence_record)
+
+    migrate = sub.add_parser("migrate")
+    migrate_sub = migrate.add_subparsers(dest="migration_action", required=True)
+    migrate_inspect = migrate_sub.add_parser("inspect")
+    migrate_inspect.set_defaults(func=cmd_migrate_inspect)
+    migrate_apply = migrate_sub.add_parser("apply")
+    migrate_apply.add_argument("--confirmation")
+    migrate_apply.add_argument("--expected-contract-revision", type=int)
+    migrate_apply.add_argument("--dry-run", action="store_true")
+    migrate_apply.set_defaults(func=cmd_migrate_apply)
+    migrate_recover = migrate_sub.add_parser("recover")
+    migrate_recover.add_argument("--migration-id")
+    migrate_recover.set_defaults(func=cmd_migrate_recover)
+
     intake = sub.add_parser("intake")
     intake_sub = intake.add_subparsers(dest="intake_action", required=True)
     intake_status = intake_sub.add_parser("status")
@@ -15699,9 +16941,31 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--title", required=True)
     init.add_argument("--mode", choices=["autonomous", "strict"], default="autonomous")
     init.set_defaults(func=cmd_plan_init)
+    create = plan_sub.add_parser("create")
+    create.add_argument("--plan-id", required=True)
+    create.add_argument("--title", required=True)
+    create.add_argument("--mode", choices=["autonomous", "strict"], default="autonomous")
+    create.set_defaults(func=cmd_plan_init)
     status = plan_sub.add_parser("status")
     status.add_argument("--expected-intake-sha256")
+    status.add_argument(
+        "--full",
+        action="store_true",
+        help="Include the complete authority, history, and closeout report.",
+    )
     status.set_defaults(func=cmd_plan_status)
+    show = plan_sub.add_parser("show")
+    show.add_argument("--expected-intake-sha256")
+    show.add_argument("--full", action="store_true")
+    show.set_defaults(func=cmd_plan_status)
+    for queue_action in ("ready", "next", "blocked"):
+        queue = plan_sub.add_parser(queue_action)
+        queue.set_defaults(func=cmd_plan_queue, queue_action=queue_action)
+    reorder = plan_sub.add_parser("reorder")
+    reorder.add_argument("--task-id", required=True)
+    reorder.add_argument("--priority", type=int, required=True)
+    reorder.add_argument("--expected-state-sequence", type=int, required=True)
+    reorder.set_defaults(func=cmd_task_reprioritize)
     plan_intake = plan_sub.add_parser("intake")
     plan_intake_sub = plan_intake.add_subparsers(
         dest="plan_intake_action",
@@ -15801,7 +17065,13 @@ def build_parser() -> argparse.ArgumentParser:
     evidence = plan_sub.add_parser("evidence")
     evidence_sub = evidence.add_subparsers(dest="evidence_action", required=True)
     evidence_record = evidence_sub.add_parser("record")
-    evidence_record.add_argument("--manifest", required=True)
+    evidence_source = evidence_record.add_mutually_exclusive_group(required=True)
+    evidence_source.add_argument("--manifest")
+    evidence_source.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read the bounded evidence object from standard input.",
+    )
     evidence_record.set_defaults(func=cmd_plan_evidence_record)
     reconcile = plan_sub.add_parser("reconcile")
     reconcile_sub = reconcile.add_subparsers(dest="reconcile_action", required=True)
@@ -15861,6 +17131,16 @@ def build_parser() -> argparse.ArgumentParser:
     revise.add_argument("--patch-file")
     revise.add_argument("--body-file")
     revise.set_defaults(func=cmd_plan_revise)
+    edit = plan_sub.add_parser("edit")
+    edit.add_argument("--expected-revision", type=int, required=True)
+    edit.add_argument("--confirmation")
+    edit.add_argument("--status")
+    edit.add_argument("--mode", choices=["autonomous", "strict"])
+    edit.add_argument("--include", action="append", default=[])
+    edit.add_argument("--remove-exclude", action="append", default=[])
+    edit.add_argument("--patch-file")
+    edit.add_argument("--body-file")
+    edit.set_defaults(func=cmd_plan_revise)
     confirm = plan_sub.add_parser("confirm")
     confirm.add_argument("--confirmation-id", required=True)
     confirm.add_argument("--decision", choices=["accepted", "declined"], default="accepted")
@@ -15968,13 +17248,23 @@ def build_parser() -> argparse.ArgumentParser:
     for action, status_value in {
         "start": "in_progress",
         "block": "blocked",
+        "unblock": "in_progress",
         "verify": "verified",
         "skip": "skipped",
     }.items():
         item = task_sub.add_parser(action)
         item.add_argument("--task-id", required=True)
-        item.add_argument("--expected-revision", type=int, required=True)
+        item.add_argument("--expected-revision", type=int)
+        item.add_argument("--expected-state-sequence", type=int)
         item.add_argument("--note")
+        if action == "verify":
+            task_evidence = item.add_mutually_exclusive_group()
+            task_evidence.add_argument("--evidence-manifest")
+            task_evidence.add_argument(
+                "--evidence-stdin",
+                action="store_true",
+                help="Record bounded evidence from standard input atomically with verification.",
+            )
         if action != "block":
             add_current_intake_args(item)
         else:
@@ -15983,6 +17273,11 @@ def build_parser() -> argparse.ArgumentParser:
                 expected_intake_sha256=None,
             )
         item.set_defaults(func=lambda args, value=status_value: set_task_status(args, value))
+    reprioritize = task_sub.add_parser("reprioritize")
+    reprioritize.add_argument("--task-id", required=True)
+    reprioritize.add_argument("--priority", type=int, required=True)
+    reprioritize.add_argument("--expected-state-sequence", type=int, required=True)
+    reprioritize.set_defaults(func=cmd_task_reprioritize)
 
     log = sub.add_parser("log")
     log_sub = log.add_subparsers(dest="action", required=True)
@@ -15996,8 +17291,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def command_mutates_state(args: argparse.Namespace) -> bool:
     """Classify commands that must be bound to the newest session receipt."""
-    if args.domain == "intake":
+    if args.domain in {"intake", "help"}:
         return False
+    if args.domain == "evidence":
+        return True
+    if args.domain == "migrate":
+        return args.migration_action == "apply"
     if args.domain == "layout":
         return args.action not in {"status", "validate"}
     if args.domain in {"task", "log"}:
@@ -16006,6 +17305,10 @@ def command_mutates_state(args: argparse.Namespace) -> bool:
         return False
     if args.action in {
         "status",
+        "show",
+        "ready",
+        "next",
+        "blocked",
         "authority",
         "schema-validate",
         "validate",
@@ -16039,6 +17342,8 @@ def enforce_active_contract_gate(args: argparse.Namespace, root: Path) -> None:
             and args.contract_upgrade_action in {"apply", "recover"}
         )
     )
+    if args.domain == "migrate" and args.migration_action in {"apply", "recover"}:
+        allowed = True
     if not allowed:
         raise WorkctlError("PLAN_CONTRACT_UPGRADE_REQUIRED")
 
@@ -16047,7 +17352,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         root = project_root()
-        if args.domain not in {"layout"}:
+        if args.domain not in {"layout", "help"}:
             require_layout_ready(root)
         if command_mutates_state(args):
             validate_current_ready_receipt(
