@@ -316,7 +316,9 @@ Allowed structural changes:
   where an already-accepted live gate points at a malformed legacy Plugin
   placeholder. The command requires a newly accepted external-authority gate
   whose exact build basis and blocks match the owning route task, activation,
-  and route. It atomically freezes that build and rebinds the activation, task,
+  and route. That task must be the unique route-scope task bound to the old
+  activation gate; local tasks and ambiguous multiple route owners fail closed.
+  The command atomically freezes that build and rebinds the activation, task,
   pending exclusion, and route gates while preserving the old decision as
   history. The target must also equal the current trusted SessionStart
   controller build. Canonical `+codex.pending` targets, non-blocked tasks,
