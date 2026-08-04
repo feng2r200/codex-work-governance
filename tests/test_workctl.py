@@ -3570,11 +3570,15 @@ def test_plan_status_default_is_bounded_and_history_is_opt_in(tmp_path: Path) ->
         "current_task",
         "ready",
         "blocked",
+        "blocked_details",
+        "parallel_ready",
         "confirmation_gates",
         "next_suggestion",
     }
     assert payload["ready"] == ["task:T-001"]
+    assert payload["parallel_ready"] == ["task:T-001"]
     assert payload["blocked"] == ["task:T-002"]
+    assert payload["blocked_details"][0]["task"] == "task:T-002"
     assert payload["next_suggestion"] == "Start task:T-001"
 
     full = json.loads(run_workctl(tmp_path, "plan", "status", "--full").stdout)
@@ -3615,8 +3619,10 @@ def test_stable_help_and_scheduler_commands_keep_plan_revision_unchanged(
         "task:T-001",
     ]
     assert json.loads(run_workctl(tmp_path, "plan", "next").stdout) == {
+        "blocked_details": [],
         "current_task": "task:T-002",
         "next_suggestion": "Start task:T-002",
+        "parallel_ready": ["task:T-002", "task:T-001"],
     }
 
 

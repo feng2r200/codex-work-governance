@@ -74,7 +74,20 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
         ),
     },
     "migration": {
-        "commands": ["migrate inspect", "migrate apply", "migrate recover"],
+        "commands": [
+            "migrate inspect",
+            "migrate apply [--dry-run]",
+            "migrate recover",
+            "migrate rollback-info",
+            "doctor",
+        ],
         "note": "Migration is explicit, backed up, and recovery-bound.",
+    },
+    "doctor": {
+        "commands": ["doctor", "doctor --clean-stale-transactions"],
+        "note": (
+            "Doctor is read-only by default; cleanup only removes stale generic "
+            "runtime transaction directories with no journal."
+        ),
     },
 }
