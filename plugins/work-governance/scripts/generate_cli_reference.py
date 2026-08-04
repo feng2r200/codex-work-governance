@@ -113,8 +113,9 @@ def render_reference(parser: argparse.ArgumentParser) -> str:
         "Mutable schema-v4 Plan commands and high-impact authorization require "
         "the current turn receipt. Ordinary schema-v5 runtime commands use the "
         "expected state guard without turn intake. "
-        "`plan status`, `plan show`, queue views, `help`, and `migrate inspect` "
-        "are read-only views.",
+        "`plan status`, `plan show`, queue views, `help`, `migrate inspect`, "
+        "`migrate apply --dry-run`, `migrate rollback-info`, and default "
+        "`doctor` are read-only views.",
         "",
         workflow_section(cast(Mapping[str, Mapping[str, object]], WORKFLOW_HELP)),
         "",

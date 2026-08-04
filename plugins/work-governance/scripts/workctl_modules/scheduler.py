@@ -52,6 +52,8 @@ def next_suggestion(
 ) -> str:
     """Choose the next bounded scheduler suggestion without changing authority."""
     if current is not None:
+        if current in set(blocked):
+            return f"Resolve blockers for {current} before advancing."
         return f"Continue {current}"
     if ready:
         return f"Start {ready[0]}"

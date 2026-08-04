@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -143,26 +145,18 @@ def test_v4_inspect_and_dry_run_are_read_only_and_repeatable(tmp_path: Path) -> 
     before = read_active_plan_bytes(tmp_path)
     inspect = json.loads(run_workctl(tmp_path, "migrate", "inspect").stdout)
     first = json.loads(
-        run_workctl(
+        run_without_receipt(
             tmp_path,
             "migrate",
             "apply",
-            "--confirmation",
-            "C-MIGRATION-SCHEMA-V5",
-            "--expected-contract-revision",
-            "1",
             "--dry-run",
         ).stdout
     )
     second = json.loads(
-        run_workctl(
+        run_without_receipt(
             tmp_path,
             "migrate",
             "apply",
-            "--confirmation",
-            "C-MIGRATION-SCHEMA-V5",
-            "--expected-contract-revision",
-            "1",
             "--dry-run",
         ).stdout
     )
@@ -172,8 +166,66 @@ def test_v4_inspect_and_dry_run_are_read_only_and_repeatable(tmp_path: Path) -> 
     assert inspect["requires_migration"] is True
     assert first == second
     assert first["writes"] == []
+    assert first["confirmation_ref"] is None
+    assert first["confirmations_required"] == ["C-MIGRATION-SCHEMA-V5"]
     assert read_active_plan_bytes(tmp_path) == before
     assert not (tmp_path / ".work-governance" / "runtime" / "migrations-v5").exists()
+
+
+def test_v5_migration_requires_exact_migration_confirmation_gate(tmp_path: Path) -> None:
+    """A schema-v5 migration cannot reuse an unrelated accepted Plan confirmation."""
+    prepare_v4_plan(tmp_path)
+    before = read_active_plan_bytes(tmp_path)
+
+    unrelated = run_workctl(
+        tmp_path,
+        "migrate",
+        "apply",
+        "--confirmation",
+        "C-ADMISSION",
+        "--expected-contract-revision",
+        "1",
+        check=False,
+    )
+
+    assert unrelated.returncode == 2
+    assert "SCHEMA_V5_MIGRATION_CONFIRMATION_SCOPE_INVALID" in unrelated.stderr
+    assert read_active_plan_bytes(tmp_path) == before
+    assert not (tmp_path / ".work-governance" / "runtime" / "migrations-v5").exists()
+
+
+def test_v5_migration_accepts_strict_route_migration_confirmation(
+    tmp_path: Path,
+) -> None:
+    """The exact migration gate may carry strict route-bound intervention metadata."""
+    prepare_v4_plan(tmp_path)
+    frontmatter, body = read_plan(tmp_path)
+    migration_gate = next(
+        item
+        for item in frontmatter["confirmations"]["required"]
+        if item["id"] == "C-MIGRATION-SCHEMA-V5"
+    )
+    migration_gate["intervention"] = {
+        "kind": "plan_contract",
+        "blocks": ["route"],
+        "basis_ref": "project:schema-v5-migration",
+        "basis_sha256": "d" * 64,
+    }
+    write_plan(tmp_path, frontmatter, body)
+
+    migrated = run_workctl(
+        tmp_path,
+        "migrate",
+        "apply",
+        "--confirmation",
+        "C-MIGRATION-SCHEMA-V5",
+        "--expected-contract-revision",
+        "1",
+    )
+
+    assert "SCHEMA_V5_MIGRATION_COMMITTED" in migrated.stdout
+    frontmatter, _body = read_plan(tmp_path)
+    assert frontmatter["schema_version"] == 5
 
 
 def test_goal_gate_truth_and_review_public_views(tmp_path: Path) -> None:
@@ -208,6 +260,25 @@ def test_goal_gate_truth_and_review_public_views(tmp_path: Path) -> None:
     assert review["independent_validation"] == {}
     assert review_request["record_command"] == "review attach --manifest PATH"
     assert read_active_plan_bytes(tmp_path) == before
+
+
+def test_public_help_matches_candidate_boundaries(tmp_path: Path) -> None:
+    """Workflow and parser help expose implemented candidate commands without overclaiming."""
+    migration_help = json.loads(run_workctl(tmp_path, "help", "migration").stdout)
+    doctor_help = json.loads(run_workctl(tmp_path, "help", "doctor").stdout)
+    gate_help = subprocess.run(
+        [sys.executable, str(SCRIPT), "gate", "open", "--help"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert "migrate rollback-info" in migration_help["commands"]
+    assert "doctor" in migration_help["commands"]
+    assert doctor_help["commands"] == ["doctor", "doctor --clean-stale-transactions"]
+    assert gate_help.returncode == 0
+    assert "--status {pending,accepted}" not in gate_help.stdout
 
 
 def test_top_level_write_aliases_require_ready_receipt(tmp_path: Path) -> None:
@@ -338,6 +409,21 @@ def test_v5_apply_creates_backup_bundle_and_recovers_after_replace_interrupt(
     active = yaml.safe_load(read_active_plan_bytes(tmp_path).decode().split("---\n", 2)[1])
     assert active["schema_version"] == 5
 
+    rollback_info = json.loads(
+        run_without_receipt(
+            tmp_path,
+            "migrate",
+            "rollback-info",
+            "--migration-id",
+            journal_path.parent.name,
+        ).stdout
+    )
+    assert rollback_info["write"] is False
+    assert rollback_info["entries"][0]["backup_sha256"] == journal["source_sha256"]
+    assert rollback_info["entries"][0]["recovery_command"] == (
+        f"migrate recover --migration-id {journal_path.parent.name}"
+    )
+
     bypass = run_without_receipt(
         tmp_path,
         "migrate",
@@ -364,6 +450,102 @@ def test_v5_apply_creates_backup_bundle_and_recovers_after_replace_interrupt(
     assert (runtime_plan / "events.jsonl").is_file()
     frontmatter, _body = read_plan(tmp_path)
     assert frontmatter["evidence_store_ref"] == "evidence:.work-governance/evidence"
+
+
+def test_v5_migration_recover_rejects_drifted_staging(tmp_path: Path) -> None:
+    """Migration recovery fails closed when staged bytes no longer match the journal."""
+    prepare_v4_plan(tmp_path)
+    interrupted = run_workctl(
+        tmp_path,
+        "migrate",
+        "apply",
+        "--confirmation",
+        "C-MIGRATION-SCHEMA-V5",
+        "--expected-contract-revision",
+        "1",
+        env={"WORKCTL_TEST_V5_MIGRATION_INTERRUPT": "1"},
+        check=False,
+    )
+    assert interrupted.returncode == 2
+    journal_path = next(
+        (tmp_path / ".work-governance" / "runtime" / "migrations-v5").glob("MIG-*/journal.json")
+    )
+    journal_before = json.loads(journal_path.read_text(encoding="utf-8"))
+    (journal_path.parent / "staging" / "plan.md").write_text("drifted staging\n", encoding="utf-8")
+
+    recovered = run_workctl(
+        tmp_path,
+        "migrate",
+        "recover",
+        "--migration-id",
+        journal_path.parent.name,
+        check=False,
+    )
+
+    assert recovered.returncode == 2
+    assert "SCHEMA_V5_MIGRATION_STAGING_INVALID" in recovered.stderr
+    assert json.loads(journal_path.read_text(encoding="utf-8")) == journal_before
+
+
+def test_doctor_reports_and_cleans_only_journalless_stale_transactions(
+    tmp_path: Path,
+) -> None:
+    """Doctor is read-only by default and cleanup is limited to stale orphan directories."""
+    prepare_v4_plan(tmp_path)
+    transactions = tmp_path / ".work-governance" / "runtime" / "transactions"
+    stale = transactions / "TXN-stale"
+    journaled = transactions / "TXN-journaled"
+    stale.mkdir(parents=True)
+    journaled.mkdir()
+    (journaled / "journal.json").write_text("{}", encoding="utf-8")
+    migration = tmp_path / ".work-governance" / "runtime" / "migrations-v5" / "MIG-20260805-001"
+    migration.mkdir(parents=True)
+    migration_journal = migration / "journal.json"
+    migration_journal.write_text("{}", encoding="utf-8")
+    old_timestamp = time.time() - 48 * 3600
+    os.utime(stale, (old_timestamp, old_timestamp))
+    os.utime(journaled, (old_timestamp, old_timestamp))
+
+    report = json.loads(
+        run_without_receipt(
+            tmp_path,
+            "doctor",
+            "--older-than-hours",
+            "1",
+        ).stdout
+    )
+    assert report["write"] is False
+    assert report["schema_v5_migrations"][0]["status"] == "invalid"
+    assert migration_journal.is_file()
+    stale_entry = next(
+        item
+        for item in report["runtime_transactions"]
+        if item["path"].endswith("TXN-stale")
+    )
+    journaled_entry = next(
+        item
+        for item in report["runtime_transactions"]
+        if item["path"].endswith("TXN-journaled")
+    )
+    assert stale_entry["cleanable"] is True
+    assert journaled_entry["cleanable"] is False
+    assert stale.is_dir()
+
+    cleaned = json.loads(
+        run_workctl(
+            tmp_path,
+            "doctor",
+            "--older-than-hours",
+            "1",
+            "--clean-stale-transactions",
+        ).stdout
+    )
+    assert cleaned["write"] is True
+    assert cleaned["cleaned"] == [".work-governance/runtime/transactions/TXN-stale"]
+    assert cleaned["schema_v5_migrations"][0]["status"] == "invalid"
+    assert not stale.exists()
+    assert journaled.is_dir()
+    assert migration_journal.is_file()
 
 
 def test_v5_runtime_transitions_keep_contract_bytes_and_redact_secrets(
@@ -493,6 +675,12 @@ def test_v5_task_advancement_preserves_independent_review_blockers(
     assert "INDEPENDENT_REVIEW_REQUIRED" in blocked_start.stderr
     assert "INDEPENDENT_REVIEW_REQUIRED" in blocked_skip.stderr
     assert "TASK_UPDATED T-002 in_progress state_sequence=1" in sibling.stdout
+    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    assert status["ready"] == []
+    assert status["parallel_ready"] == []
+    review_detail = next(item for item in status["blocked_details"] if item["task"] == "task:T-001")
+    assert review_detail["reasons"][0]["kind"] == "independent-review"
+    assert review_detail["reasons"][0]["modes"] == ["artifact_review"]
 
 
 def test_v5_task_advancement_preserves_artifact_blockers(tmp_path: Path) -> None:
@@ -546,6 +734,81 @@ def test_v5_task_advancement_preserves_artifact_blockers(tmp_path: Path) -> None
 
     assert "BLOCKED_BY_ARTIFACT: A-001 is suspect" in blocked.stderr
     assert "TASK_UPDATED T-002 in_progress state_sequence=1" in recovery.stdout
+    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    assert "task:T-001" in status["blocked"]
+    artifact_detail = next(
+        item for item in status["blocked_details"] if item["task"] == "task:T-001"
+    )
+    assert artifact_detail["reasons"][0] == {
+        "artifact": "A-001",
+        "kind": "artifact",
+        "state": "suspect",
+    }
+
+
+def test_v5_scheduler_exposes_in_progress_terminal_blockers(tmp_path: Path) -> None:
+    """A current task blocked after start is visible before terminal advancement fails."""
+    prepare_v4_plan(tmp_path)
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["artifacts"] = [{"id": "A-001", "path": "out.txt", "status": "pending"}]
+    write_plan(tmp_path, frontmatter, body)
+    run_workctl(
+        tmp_path,
+        "migrate",
+        "apply",
+        "--confirmation",
+        "C-MIGRATION-SCHEMA-V5",
+        "--expected-contract-revision",
+        "1",
+    )
+    run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-state-sequence",
+        "0",
+    )
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["artifacts"][0]["status"] = "suspect"
+    write_plan(tmp_path, frontmatter, body)
+
+    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    next_view = json.loads(run_workctl(tmp_path, "plan", "next").stdout)
+    verify = run_workctl(
+        tmp_path,
+        "task",
+        "verify",
+        "--task-id",
+        "T-001",
+        "--expected-state-sequence",
+        "1",
+        "--evidence-stdin",
+        input_text=json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "work-governance-evidence",
+                "plan_id": "PLAN-20260723-001",
+                "subject": "task:T-001",
+                "created_at": "2026-08-04T00:00:00Z",
+                "producer_ref": "runtime:test-in-progress-blocker",
+                "items": [{"ref": "runtime:test-result", "sha256": "a" * 64}],
+            }
+        ),
+        check=False,
+    )
+
+    assert status["current_task"] == "task:T-001"
+    assert status["blocked"] == ["task:T-001"]
+    assert status["blocked_details"][0]["status"] == "in_progress"
+    assert status["blocked_details"][0]["reasons"][0] == {
+        "artifact": "A-001",
+        "kind": "artifact",
+        "state": "suspect",
+    }
+    assert next_view["next_suggestion"] == "Resolve blockers for task:T-001 before advancing."
+    assert "BLOCKED_BY_ARTIFACT: A-001 is suspect" in verify.stderr
 
 
 def test_v5_task_verify_reads_evidence_manifest_path(tmp_path: Path) -> None:
@@ -780,10 +1043,87 @@ def test_direct_capture_stale_state_writes_no_durable_evidence(
     assert read_active_plan_bytes(tmp_path) == contract_before
 
 
+def test_direct_capture_handles_binary_large_and_corrupt_ledger_boundaries(
+    tmp_path: Path,
+) -> None:
+    """Direct evidence capture never persists raw binary bytes and fails closed on bad state."""
+    prepare_v4_plan(tmp_path)
+    run_workctl(
+        tmp_path,
+        "migrate",
+        "apply",
+        "--confirmation",
+        "C-MIGRATION-SCHEMA-V5",
+        "--expected-contract-revision",
+        "1",
+    )
+    binary = tmp_path / "binary-output.bin"
+    binary.write_bytes(b"\xff\x00secret-binary-payload")
+
+    captured = json.loads(
+        run_workctl(
+            tmp_path,
+            "evidence",
+            "capture",
+            "--task",
+            "T-001",
+            "--kind",
+            "artifact",
+            "--summary",
+            "binary artifact",
+            "--from-file",
+            "binary-output.bin",
+            "--expected-state-sequence",
+            "0",
+        ).stdout
+    )
+    blob = tmp_path / captured["blob_ref"].removeprefix("evidence:")
+    blob_payload = json.loads(blob.read_text(encoding="utf-8"))
+    assert blob_payload["kind"] == "work-governance-binary-evidence-placeholder"
+    assert blob_payload["source_sha256"] == hashlib.sha256(binary.read_bytes()).hexdigest()
+    assert b"secret-binary-payload" not in blob.read_bytes()
+
+    too_large = run_workctl(
+        tmp_path,
+        "evidence",
+        "capture",
+        "--task",
+        "T-001",
+        "--kind",
+        "command-output",
+        "--summary",
+        "oversized output",
+        input_text="x" * (1024 * 1024 + 1),
+        check=False,
+    )
+    assert too_large.returncode == 2
+    assert "EVIDENCE_CAPTURE_TOO_LARGE" in too_large.stderr
+
+    ledger = tmp_path / ".work-governance" / "evidence" / "ledger.ndjson"
+    ledger.write_text("{not-json\n", encoding="utf-8")
+    corrupt = run_workctl(
+        tmp_path,
+        "evidence",
+        "capture",
+        "--task",
+        "T-001",
+        "--kind",
+        "command-output",
+        "--summary",
+        "idempotent corrupt ledger check",
+        "--idempotency-key",
+        "pytest:corrupt-ledger",
+        input_text="ok\n",
+        check=False,
+    )
+    assert corrupt.returncode == 2
+    assert "EVIDENCE_CAPTURE_LEDGER_INVALID" in corrupt.stderr
+
+
 def test_v5_status_and_scheduler_keep_blocked_work_visible_and_bounded(
     tmp_path: Path,
 ) -> None:
-    """A blocked task does not hide another ready task or expand compact status."""
+    """Blocked tasks expose reasons and propagation without hiding ready siblings."""
     prepare_v4_plan(tmp_path)
     frontmatter, body = read_plan(tmp_path)
     frontmatter["tasks"].append(
@@ -793,6 +1133,16 @@ def test_v5_status_and_scheduler_keep_blocked_work_visible_and_bounded(
             "status": "blocked",
             "unknowns": [],
             "expected_evidence_delta": "The blocked state remains visible.",
+        }
+    )
+    frontmatter["tasks"].append(
+        {
+            "id": "T-003",
+            "description": "A dependent task blocked by T-002.",
+            "status": "pending",
+            "depends_on": ["T-002"],
+            "unknowns": [],
+            "expected_evidence_delta": "The dependency wait is visible.",
         }
     )
     write_plan(tmp_path, frontmatter, body)
@@ -809,11 +1159,23 @@ def test_v5_status_and_scheduler_keep_blocked_work_visible_and_bounded(
     status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
     assert len(json.dumps(status, ensure_ascii=False).encode("utf-8")) < 8 * 1024
     assert status["ready"] == ["task:T-001"]
-    assert status["blocked"] == ["task:T-002"]
+    assert status["parallel_ready"] == ["task:T-001"]
+    assert status["blocked"] == ["task:T-002", "task:T-003"]
     assert "revision_history" not in status
+    explicit = next(item for item in status["blocked_details"] if item["task"] == "task:T-002")
+    assert explicit["blocks_downstream"] == ["task:T-003"]
+    assert explicit["reasons"][0]["kind"] == "explicit-block"
+    dependent = next(item for item in status["blocked_details"] if item["task"] == "task:T-003")
+    assert dependent["reasons"][0] == {
+        "dependency": "T-002",
+        "kind": "dependency-not-verified",
+        "state": "blocked",
+    }
 
     next_view = json.loads(run_workctl(tmp_path, "plan", "next").stdout)
     assert next_view["current_task"] == "task:T-001"
+    assert next_view["parallel_ready"] == ["task:T-001"]
+    assert next_view["blocked_details"] == status["blocked_details"]
 
 
 def test_v5_state_sequence_rejects_stale_transition_without_contract_change(

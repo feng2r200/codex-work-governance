@@ -12,6 +12,10 @@ plugin source is `plugins/work-governance`.
 This repository can prepare a local 1.1.0 candidate, but candidate preparation
 does not install, enable, or switch the user's live Codex plugin. Live
 activation remains blocked on `CONFIRM_ACTIVATE_WORK_GOVERNANCE_1_1_0`.
+The candidate implements the documented core control plane; it does not claim
+that every command named in the architecture draft is already present. Treat
+`workctl help <workflow>` and [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) as
+the current executable surface.
 
 ## Skills
 
@@ -222,9 +226,14 @@ Schema v5 separates the durable Plan contract (`goal`, scope, success criteria,
 truth references, task definitions, hard dependencies, and confirmation
 gates) from ignored runtime state (task status, dynamic priority, current task,
 state sequence, event ledger, and redacted evidence snapshots). Reads accept
-v1-v4 and v5; new writes use v5, while `migrate inspect` is read-only and
+v1-v4 and v5; new writes use v5. `migrate inspect`, `migrate apply --dry-run`,
+`migrate rollback-info`, and default `doctor` are read-only. Durable
 `migrate apply` requires an explicit confirmation, expected contract revision,
-backup, atomic replacement, and recoverable staging.
+backup, atomic replacement, and recoverable staging; `migrate recover` is also
+receipt-bound because it can finish an interrupted replacement. Schema-v5
+durable migration accepts only the exact `C-MIGRATION-SCHEMA-V5` gate, either
+as a legacy accepted migration gate or as a strict route-bound
+`plan_contract` intervention.
 
 Run only the exact `intake_command` emitted by the current SessionStart. It uses
 `controller_ref`, `controller_sha256`, and `receipt_sha256` from the READY
@@ -293,6 +302,17 @@ some_command | <receipt-bound-workctl> evidence capture \
   --from-file reports/validation.json \
   --expected-state-sequence 3
 ```
+
+Oversized capture input fails closed. Non-UTF-8 binary input is represented by
+a digest placeholder instead of being persisted verbatim. Corrupt direct
+evidence ledgers fail closed for idempotency checks instead of silently
+minting ambiguous records.
+
+Scheduler views are read-only and explain both progress and blockers. Compact
+`plan status` includes `ready`, `parallel_ready`, `blocked`, and
+`blocked_details`, where blocker details cover dependencies, explicit blocked
+state, artifact quarantine/suspect rules, independent-review blocks, and
+pending task confirmations.
 
 Protocol-v2 Plans keep one bounded `intake.current` anchor and a history head
 plus count. Complete canonical records are stored as ignored,

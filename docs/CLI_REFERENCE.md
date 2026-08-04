@@ -10,7 +10,7 @@ Use the exact receipt-bound controller emitted by SessionStart. The placeholder 
 <receipt-bound-workctl> <domain> <command> [options]
 ```
 
-Mutable schema-v4 Plan commands and high-impact authorization require the current turn receipt. Ordinary schema-v5 runtime commands use the expected state guard without turn intake. `plan status`, `plan show`, queue views, `help`, and `migrate inspect` are read-only views.
+Mutable schema-v4 Plan commands and high-impact authorization require the current turn receipt. Ordinary schema-v5 runtime commands use the expected state guard without turn intake. `plan status`, `plan show`, queue views, `help`, `migrate inspect`, `migrate apply --dry-run`, `migrate rollback-info`, and default `doctor` are read-only views.
 
 ## Stable workflow aliases
 
@@ -21,6 +21,13 @@ Mutable schema-v4 Plan commands and high-impact authorization require the curren
 - `action status`
 
 High-impact authority is current-turn, target, digest, expiry, and single-consumption bound.
+
+### `doctor`
+
+- `doctor`
+- `doctor --clean-stale-transactions`
+
+Doctor is read-only by default; cleanup only removes stale generic runtime transaction directories with no journal.
 
 ### `evidence`
 
@@ -43,8 +50,10 @@ Gate writes are aliases over strict Plan confirmation transactions.
 ### `migration`
 
 - `migrate inspect`
-- `migrate apply`
+- `migrate apply [--dry-run]`
 - `migrate recover`
+- `migrate rollback-info`
+- `doctor`
 
 Migration is explicit, backed up, and recovery-bound.
 
@@ -143,6 +152,18 @@ options:
   --authorization-id AUTHORIZATION_ID
 ```
 
+### `doctor`
+
+```text
+usage: workctl doctor [-h] [--older-than-hours OLDER_THAN_HOURS]
+                      [--clean-stale-transactions]
+
+options:
+  -h, --help            show this help message and exit
+  --older-than-hours OLDER_THAN_HOURS
+  --clean-stale-transactions
+```
+
 ### `evidence capture`
 
 ```text
@@ -200,8 +221,8 @@ options:
 
 ```text
 usage: workctl gate open [-h] --confirmation-id CONFIRMATION_ID
-                         --description DESCRIPTION
-                         [--status {pending,accepted}] [--ref REF]
+                         --description DESCRIPTION [--status STATUS]
+                         [--ref REF]
                          --intervention-kind {deviation_recovery,external_authority,plan_contract}
                          --blocks BLOCKS --basis-ref BASIS_REF
                          [--basis-sha256 BASIS_SHA256]
@@ -212,7 +233,7 @@ options:
   -h, --help            show this help message and exit
   --confirmation-id CONFIRMATION_ID
   --description DESCRIPTION
-  --status {pending,accepted}
+  --status STATUS
   --ref REF
   --intervention-kind {deviation_recovery,external_authority,plan_contract}
   --blocks BLOCKS
@@ -315,10 +336,10 @@ options:
 
 ```text
 usage: workctl help [-h]
-                    [{plan,task,evidence,action,migration,goal,gate,truth,review}]
+                    [{plan,task,evidence,action,migration,goal,gate,truth,review,doctor}]
 
 positional arguments:
-  {plan,task,evidence,action,migration,goal,gate,truth,review}
+  {plan,task,evidence,action,migration,goal,gate,truth,review,doctor}
 
 options:
   -h, --help            show this help message and exit
@@ -445,6 +466,16 @@ options:
 
 ```text
 usage: workctl migrate recover [-h] [--migration-id MIGRATION_ID]
+
+options:
+  -h, --help            show this help message and exit
+  --migration-id MIGRATION_ID
+```
+
+### `migrate rollback-info`
+
+```text
+usage: workctl migrate rollback-info [-h] [--migration-id MIGRATION_ID]
 
 options:
   -h, --help            show this help message and exit
@@ -640,7 +671,7 @@ options:
 ```text
 usage: workctl plan confirmation add [-h] --confirmation-id CONFIRMATION_ID
                                      --description DESCRIPTION
-                                     [--status {pending,accepted}] [--ref REF]
+                                     [--status STATUS] [--ref REF]
                                      --intervention-kind {deviation_recovery,external_authority,plan_contract}
                                      --blocks BLOCKS --basis-ref BASIS_REF
                                      [--basis-sha256 BASIS_SHA256]
@@ -651,7 +682,7 @@ options:
   -h, --help            show this help message and exit
   --confirmation-id CONFIRMATION_ID
   --description DESCRIPTION
-  --status {pending,accepted}
+  --status STATUS
   --ref REF
   --intervention-kind {deviation_recovery,external_authority,plan_contract}
   --blocks BLOCKS

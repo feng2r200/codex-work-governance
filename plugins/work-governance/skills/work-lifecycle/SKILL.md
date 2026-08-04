@@ -200,9 +200,11 @@ unexpected or drifted partial staging fails closed. Any incomplete parent or
 contract-upgrade journal makes authority recovery-only and blocks ordinary
 Plan or task writes plus fresh structural Plan transactions; only the bound
 workflow may resume. Use `plan adapt`, `plan contract revise`, and `plan unknown
-add|resolve` for their separate responsibilities. Terminal
-evidence must be recorded under `.work-governance/_Plan/.evidence/` and passed
-by `--evidence-manifest`; `.work-governance/logs/` is local process detail only.
+add|resolve` for their separate responsibilities. For schema-v5 runtime work,
+prefer direct `evidence capture` for command output and project-local artifacts;
+small structured compatibility evidence can still be recorded under
+`.work-governance/_Plan/.evidence/` and passed by `--evidence-manifest`.
+`.work-governance/logs/` is local process detail only.
 All mutations still use the stable `.work-governance/workctl.lock`, expected
 revision checks, candidate validation, bounded lock acquisition with holder
 diagnostics, and atomic writes.
