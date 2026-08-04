@@ -61,6 +61,10 @@ component, and the recovery condition.
   evidence-proven material direction change in L5, or authority outside the
   Agent's local boundary. Investigate agent-owned facts and diagnose ordinary
   execution failures without asking the user.
+- Treat local exploration, continuation requests, network recovery, and
+  credential-ready notices as runtime signals by default. Do not create a
+  speculative Plan unknown or revise the contract until evidence shows that
+  the goal, scope, acceptance, safety, or required authority must change.
 - Never ask a decision-free continuation question such as "should I continue"
   or "confirm the next phase." `下一步` is information unless it names a real
   user-owned decision and its blocked targets.
@@ -142,6 +146,14 @@ through `plan admit recover`. Do not create an empty Plan or index first. Use
 `plan confirmation add` for a new explicit gate. Schema v4 uses IDs
 `PLAN-YYYYMMDD-NNN`, `O-`, `T-`, `V-`, `A-`, and `U-`; tasks name linked
 unknowns and their expected evidence delta.
+
+Explore first when the missing fact is discoverable within the Agent's safe
+boundary. Promote the result to a Plan unknown only when it blocks a named
+target or proves a material contract decision is needed. Use the bounded
+`plan status` view for routine progress; pass `--full` only when history or
+closeout detail is needed. Use `plan evidence record --stdin` and
+`task verify --evidence-stdin` for small structured evidence objects so a
+temporary manifest is not required.
 
 Never infer a second execution authority from a filename, Git history, a phase
 design, or text such as "next step" alone. A likely second authority requires

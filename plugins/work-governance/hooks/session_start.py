@@ -1499,9 +1499,10 @@ def runtime_bundle_payload(
     manifest_digest: str,
     controller_sha256: str,
     lifecycle_sha256: str,
+    module_files: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     """Build the exact hash-bound runtime bundle manifest."""
-    return {
+    payload: Dict[str, Any] = {
         "schema_version": 1,
         "kind": "work-governance-runtime-bundle",
         "plugin_build": build,
@@ -1511,6 +1512,9 @@ def runtime_bundle_payload(
         "lifecycle_ref": (bundle / "work-lifecycle.SKILL.md").relative_to(project_root).as_posix(),
         "lifecycle_sha256": lifecycle_sha256,
     }
+    if module_files:
+        payload["module_files"] = module_files
+    return payload
 
 
 def validate_runtime_bundle(
@@ -1536,6 +1540,26 @@ def validate_runtime_bundle(
         or sha256_file(lifecycle) != expected["lifecycle_sha256"]
     ):
         raise BootstrapError("RUNTIME_BUNDLE_INVALID")
+    module_files = expected.get("module_files")
+    if module_files is not None:
+        if not isinstance(module_files, list):
+            raise BootstrapError("RUNTIME_BUNDLE_INVALID")
+        for entry in module_files:
+            if (
+                not isinstance(entry, dict)
+                or set(entry) != {"path", "sha256"}
+                or not isinstance(entry.get("path"), str)
+                or not isinstance(entry.get("sha256"), str)
+                or not SHA256_RE.fullmatch(entry["sha256"])
+            ):
+                raise BootstrapError("RUNTIME_BUNDLE_INVALID")
+            candidate = bundle / entry["path"]
+            if (
+                candidate.is_symlink()
+                or not candidate.is_file()
+                or sha256_file(candidate) != entry["sha256"]
+            ):
+                raise BootstrapError("RUNTIME_BUNDLE_INVALID")
     try:
         actual = json.loads(manifest.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
@@ -1569,6 +1593,18 @@ def install_runtime_bundle(
         or not source_lifecycle.is_file()
     ):
         raise BootstrapError("RUNTIME_BUNDLE_SOURCE_INVALID")
+    module_source = installed_plugin / "scripts" / "workctl_modules"
+    module_files: List[Dict[str, str]] = []
+    if module_source.is_dir() and not module_source.is_symlink():
+        for source in sorted(module_source.rglob("*.py")):
+            if source.is_symlink() or not source.is_file():
+                raise BootstrapError("RUNTIME_BUNDLE_SOURCE_INVALID")
+            module_files.append(
+                {
+                    "path": f"workctl_modules/{source.relative_to(module_source).as_posix()}",
+                    "sha256": sha256_file(source),
+                }
+            )
     bundles = project_root / GOVERNANCE_DIR / "runtime" / "plugin-builds"
     reject_symlink_components(project_root, bundles)
     bundles.mkdir(parents=True, exist_ok=True)
@@ -1580,6 +1616,7 @@ def install_runtime_bundle(
         manifest_digest=manifest_digest,
         controller_sha256=sha256_file(source_controller),
         lifecycle_sha256=sha256_file(source_lifecycle),
+        module_files=module_files or None,
     )
     if bundle.exists() or bundle.is_symlink():
         return validate_runtime_bundle(project_root, bundle, expected)
@@ -1600,6 +1637,14 @@ def install_runtime_bundle(
             path = staging / name
             with path.open("xb") as handle:
                 handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+        for entry in module_files:
+            source = module_source / Path(entry["path"]).relative_to("workctl_modules")
+            target = staging / entry["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("xb") as handle:
+                handle.write(source.read_bytes())
                 handle.flush()
                 os.fsync(handle.fileno())
         directory_descriptor = os.open(str(staging), os.O_RDONLY)

@@ -265,8 +265,10 @@ Allowed structural changes:
   after controller-authorized basis drift with identical request, targets,
   rationale, and unknown binding. The Plan retains one current anchor; full
   canonical records remain in project-local immutable runtime history.
-- `plan evidence record --manifest ...`: canonicalize bounded typed evidence
-  metadata under the active Plan and return its exact path and SHA256.
+- `plan evidence record --manifest ...|--stdin`: canonicalize bounded typed
+  evidence metadata under the active Plan and return its exact path and SHA256.
+  `task verify --evidence-stdin` performs the same bounded record and task
+  transition as one controller command.
 - `plan confirm`: resolve a pending gate as `accepted` or `declined` with a
   typed authority reference and the exact basis digest. Generic Plan patches
   cannot edit confirmations, unclassified gates cannot decide, and a pending
