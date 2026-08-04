@@ -14462,6 +14462,21 @@ def cmd_plan_activation_repair(args: argparse.Namespace) -> None:
             raise WorkctlError("ACTIVATION_REPAIR_BLOCKED_TASK_REQUIRED")
         if task.get("requires_confirmation") != old_confirmation_id:
             raise WorkctlError("ACTIVATION_REPAIR_TASK_GATE_MISMATCH")
+        if task.get("completion_scope", "local") != "route":
+            raise WorkctlError("ACTIVATION_REPAIR_ROUTE_TASK_REQUIRED")
+        raw_tasks = doc.frontmatter.get("tasks")
+        route_gate_tasks = [
+            candidate
+            for candidate in raw_tasks
+            if isinstance(candidate, dict)
+            and candidate.get("completion_scope", "local") == "route"
+            and candidate.get("requires_confirmation") == old_confirmation_id
+        ] if isinstance(raw_tasks, list) else []
+        if (
+            len(route_gate_tasks) != 1
+            or route_gate_tasks[0].get("id") != args.task_id
+        ):
+            raise WorkctlError("ACTIVATION_REPAIR_ROUTE_TASK_AMBIGUOUS")
         route = doc.frontmatter.get("route")
         if (
             not isinstance(route, dict)

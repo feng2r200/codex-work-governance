@@ -2746,6 +2746,9 @@ def prepare_activation_repair_project(
     *,
     current_target: str = "plugin:work-governance@goal-driven.pending",
     new_basis_ref: str | None = None,
+    selected_task_id: str = "T-001",
+    primary_scope: str = "route",
+    secondary_scope: str | None = None,
 ) -> tuple[Path, str, str, str]:
     """Prepare the exact accepted-gate bootstrap defect for repair tests."""
     project, session_id = prepare_admitted_project(tmp_path)
@@ -2783,7 +2786,7 @@ def prepare_activation_repair_project(
                 "evidence_sha256": "b" * 64,
                 "intervention": {
                     "kind": "external_authority",
-                    "blocks": ["task:T-001", "activation", "route"],
+                    "blocks": [f"task:{selected_task_id}", "activation", "route"],
                     "basis_ref": gate_basis_ref,
                     "basis_sha256": "b" * 64,
                 },
@@ -2792,8 +2795,13 @@ def prepare_activation_repair_project(
     )
     task = cast(list[dict[str, object]], frontmatter["tasks"])[0]
     task["status"] = "blocked"
-    task["completion_scope"] = "route"
+    task["completion_scope"] = primary_scope
     task["requires_confirmation"] = "C-LIVE-OLD"
+    if secondary_scope is not None:
+        second_task = cast(list[dict[str, object]], frontmatter["tasks"])[1]
+        second_task["status"] = "blocked"
+        second_task["completion_scope"] = secondary_scope
+        second_task["requires_confirmation"] = "C-LIVE-OLD"
     frontmatter["scope"] = {
         "include": ["Test intake."],
         "exclude": [
@@ -2823,7 +2831,7 @@ def prepare_activation_repair_project(
         session_id=session_id,
         turn_id="turn-activation-repair",
         decision="proceed",
-        targets=["task:T-001", "activation", "route"],
+        targets=[f"task:{selected_task_id}", "activation", "route"],
         expected_revision=1,
     )
     recorded = read_plan_frontmatter(project, plan_id)
@@ -2975,6 +2983,108 @@ def test_activation_repair_rejects_canonical_target_without_plan_write(
 
     assert rejected.returncode == 2
     assert "ACTIVATION_REPAIR_LEGACY_TARGET_REQUIRED" in rejected.stderr
+    assert plan.read_bytes() == before
+
+
+def test_activation_repair_rejects_local_task_without_plan_write(tmp_path: Path) -> None:
+    """A local task cannot own or migrate the live route confirmation."""
+    project, turn_sha256, intake_sha256, exact_target = prepare_activation_repair_project(
+        tmp_path,
+        primary_scope="local",
+    )
+    plan = project / ".work-governance" / "_Plan" / "PLAN-20260729-001.md"
+    before = plan.read_bytes()
+
+    rejected = run_controller(
+        project,
+        "plan",
+        "activation-repair",
+        "--task-id",
+        "T-001",
+        "--target-ref",
+        exact_target,
+        "--confirmation",
+        "C-LIVE-REPAIRED",
+        "--expected-revision",
+        "2",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+        check=False,
+    )
+
+    assert rejected.returncode == 2
+    assert "ACTIVATION_REPAIR_ROUTE_TASK_REQUIRED" in rejected.stderr
+    assert plan.read_bytes() == before
+
+
+def test_activation_repair_rejects_wrong_task_without_plan_write(tmp_path: Path) -> None:
+    """A blocked local peer cannot be substituted for the unique route owner."""
+    project, turn_sha256, intake_sha256, exact_target = prepare_activation_repair_project(
+        tmp_path,
+        selected_task_id="T-002",
+        secondary_scope="local",
+    )
+    plan = project / ".work-governance" / "_Plan" / "PLAN-20260729-001.md"
+    before = plan.read_bytes()
+
+    rejected = run_controller(
+        project,
+        "plan",
+        "activation-repair",
+        "--task-id",
+        "T-002",
+        "--target-ref",
+        exact_target,
+        "--confirmation",
+        "C-LIVE-REPAIRED",
+        "--expected-revision",
+        "2",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+        check=False,
+    )
+
+    assert rejected.returncode == 2
+    assert "ACTIVATION_REPAIR_ROUTE_TASK_REQUIRED" in rejected.stderr
+    assert plan.read_bytes() == before
+
+
+def test_activation_repair_rejects_multiple_route_owners_without_plan_write(
+    tmp_path: Path,
+) -> None:
+    """Multiple route tasks sharing the old gate require an explicit future contract."""
+    project, turn_sha256, intake_sha256, exact_target = prepare_activation_repair_project(
+        tmp_path,
+        secondary_scope="route",
+    )
+    plan = project / ".work-governance" / "_Plan" / "PLAN-20260729-001.md"
+    before = plan.read_bytes()
+
+    rejected = run_controller(
+        project,
+        "plan",
+        "activation-repair",
+        "--task-id",
+        "T-001",
+        "--target-ref",
+        exact_target,
+        "--confirmation",
+        "C-LIVE-REPAIRED",
+        "--expected-revision",
+        "2",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+        check=False,
+    )
+
+    assert rejected.returncode == 2
+    assert "ACTIVATION_REPAIR_ROUTE_TASK_AMBIGUOUS" in rejected.stderr
     assert plan.read_bytes() == before
 
 
