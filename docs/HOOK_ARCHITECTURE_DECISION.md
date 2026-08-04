@@ -44,8 +44,8 @@ Two compatibility/security constraints prevent immediate deletion:
   authorization was incomplete. T-010 binds v5 Plan decisions to the exact trusted turn
   and adds a short-lived `action authorize/consume` envelope for remote, production,
   destructive, secret, and rollback actions. It binds kind, typed target, action digest,
-  a same-turn accepted Plan gate, session/turn, expiry, and one-time consumption without
-  storing raw commands or secrets.
+  the unchanged Plan contract SHA256, a same-turn accepted Plan gate, session/turn,
+  expiry, and one-time consumption without storing raw commands or secrets.
 
 ## Options
 

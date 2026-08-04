@@ -309,11 +309,12 @@ gate. Completion uses the dedicated closeout command.
 
 External high-impact work uses `action authorize` immediately before execution and
 `action consume` for the exact action. The authorization records only action kind,
-typed target, action SHA256, trusted session/turn identity, expiry, and consumption
-state. Issuance requires a same-turn accepted `external_authority` Plan gate whose
-basis reference and digest exactly match the target and action; substantive rollback
-uses a matching `deviation_recovery` gate. It is short-lived, cannot be reminted from
-the same turn after consumption,
+typed target, action SHA256, Plan contract SHA256, trusted session/turn identity,
+expiry, and consumption state. Issuance requires a same-turn accepted
+`external_authority` Plan gate whose basis action kind, reference, and digest exactly
+match the action kind, target, and action; substantive rollback uses a matching
+`deviation_recovery` gate. It is short-lived, cannot be reminted from the same turn
+after consumption,
 and rejects missing, superseded, target-mismatched, expired, or replayed authority.
 The supported kinds are remote write, production change, destructive operation,
 secret handling, and substantive rollback. This envelope authorizes an action; it

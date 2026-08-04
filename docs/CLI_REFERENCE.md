@@ -437,6 +437,7 @@ usage: workctl plan confirmation add [-h] --confirmation-id CONFIRMATION_ID
                                      --intervention-kind {deviation_recovery,external_authority,plan_contract}
                                      --blocks BLOCKS --basis-ref BASIS_REF
                                      [--basis-sha256 BASIS_SHA256]
+                                     [--action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}]
                                      --expected-revision EXPECTED_REVISION
 
 options:
@@ -449,6 +450,7 @@ options:
   --blocks BLOCKS
   --basis-ref BASIS_REF
   --basis-sha256 BASIS_SHA256
+  --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
   --expected-revision EXPECTED_REVISION
 ```
 

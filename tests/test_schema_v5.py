@@ -94,6 +94,7 @@ def add_pending_action_confirmation(
             "status": "pending",
             "intervention": {
                 "kind": "external_authority",
+                "action_kind": "production_change",
                 "blocks": ["task:T-001"],
                 "basis_ref": target_ref,
                 "basis_sha256": action_sha256,
@@ -546,6 +547,28 @@ def test_high_impact_action_authorization_is_target_bound_and_single_use(
         turn_sha256,
         env=STRICT_CONTROLLER_ENV,
     )
+    wrong_kind = run_workctl(
+        tmp_path,
+        "action",
+        "authorize",
+        "--action-kind",
+        "remote_write",
+        "--target-ref",
+        target_ref,
+        "--action-sha256",
+        action_sha256,
+        "--confirmation-id",
+        "C-EXACT-PRODUCTION-ACTION",
+        "--ref",
+        request_ref,
+        "--turn-receipt-sha256",
+        turn_sha256,
+        env=STRICT_CONTROLLER_ENV,
+        check=False,
+    )
+    assert wrong_kind.returncode == 2
+    assert "ACTION_CONFIRMATION_BINDING_MISMATCH" in wrong_kind.stderr
+
     authorized = json.loads(
         run_workctl(
             tmp_path,
@@ -568,7 +591,38 @@ def test_high_impact_action_authorization_is_target_bound_and_single_use(
     )
     authorization_id = authorized["authorization_id"]
     assert authorized["state"] == "authorized"
+    assert authorized["contract_sha256"] == sha256_path(
+        tmp_path / ".work-governance" / "_Plan" / "PLAN-20260723-001.md"
+    )
     assert "production action" not in json.dumps(authorized)
+
+    plan_path = (
+        tmp_path / ".work-governance" / "_Plan" / "PLAN-20260723-001.md"
+    )
+    unchanged_contract = plan_path.read_bytes()
+    plan_path.write_bytes(unchanged_contract + b"\nOut-of-band contract drift.\n")
+    contract_drift = run_workctl(
+        tmp_path,
+        "action",
+        "consume",
+        "--authorization-id",
+        authorization_id,
+        "--action-kind",
+        "production_change",
+        "--target-ref",
+        target_ref,
+        "--action-sha256",
+        action_sha256,
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--consumer-ref",
+        "runtime:executor",
+        env=STRICT_CONTROLLER_ENV,
+        check=False,
+    )
+    assert contract_drift.returncode == 2
+    assert "ACTION_AUTHORIZATION_CONTRACT_DRIFT" in contract_drift.stderr
+    plan_path.write_bytes(unchanged_contract)
 
     mismatch = run_workctl(
         tmp_path,

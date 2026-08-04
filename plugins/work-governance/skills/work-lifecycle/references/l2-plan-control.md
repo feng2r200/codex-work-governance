@@ -167,7 +167,8 @@ Allowed structural changes:
   forward. `plan init` is not a normal public admission path.
 - `plan confirmation add`: create a gate with `--intervention-kind`,
   repeatable exact `--blocks`, `--basis-ref`, and the digest required for
-  Plan-contract or deviation decisions. Schema v4 creates it only as pending;
+  Plan-contract or deviation decisions. A gate intended for `action authorize`
+  also carries the exact `--action-kind`. Schema v4 creates it only as pending;
   accepted legacy records remain compatible.
 - `plan confirmation classify --manifest ...`: repair one legacy pending gate
   into the strict intervention contract. During the live-controller bootstrap

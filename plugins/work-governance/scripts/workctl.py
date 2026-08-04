@@ -3817,6 +3817,22 @@ def intervention_errors(
     kind = intervention.get("kind")
     if kind not in INTERVENTION_KINDS:
         errors.append(f"{confirmation_id}.intervention.kind must be supported")
+    action_kind = intervention.get("action_kind")
+    if action_kind is not None:
+        if action_kind not in HIGH_IMPACT_ACTION_KINDS:
+            errors.append(
+                f"{confirmation_id}.intervention.action_kind must be supported"
+            )
+        elif (
+            action_kind == "substantive_rollback"
+            and kind != "deviation_recovery"
+        ) or (
+            action_kind != "substantive_rollback"
+            and kind != "external_authority"
+        ):
+            errors.append(
+                f"{confirmation_id}.intervention.action_kind does not match kind"
+            )
     blocks = intervention.get("blocks")
     if (
         not isinstance(blocks, list)
@@ -11233,6 +11249,7 @@ def load_action_authorization(root: Path, authorization_id: str) -> dict[str, ob
         "authorization_id",
         "plan_id",
         "contract_revision",
+        "contract_sha256",
         "confirmation_id",
         "action_kind",
         "target_ref",
@@ -11260,6 +11277,8 @@ def load_action_authorization(root: Path, authorization_id: str) -> dict[str, ob
         or PLAN_ID_RE.fullmatch(str(record["plan_id"])) is None
         or type(record.get("contract_revision")) is not int
         or int(cast(int, record["contract_revision"])) < 1
+        or not isinstance(record.get("contract_sha256"), str)
+        or SHA256_RE.fullmatch(str(record["contract_sha256"])) is None
         or not isinstance(record.get("confirmation_id"), str)
         or not str(record["confirmation_id"]).startswith("C-")
         or record.get("action_kind") not in HIGH_IMPACT_ACTION_KINDS
@@ -11342,7 +11361,7 @@ def require_action_confirmation(
     target_ref: str,
     action_sha256: str,
     turn: Mapping[str, object],
-) -> tuple[str, int]:
+) -> tuple[str, int, str]:
     """Require one same-turn Plan gate bound to the exact external action."""
     require_governed_authority(root)
     doc = load_plan(active_plan_path(root))
@@ -11361,6 +11380,7 @@ def require_action_confirmation(
         or decision.get("evidence_sha256") != action_sha256
         or not isinstance(intervention, dict)
         or intervention.get("kind") != expected_intervention
+        or intervention.get("action_kind") != action_kind
         or intervention.get("basis_ref") != target_ref
         or intervention.get("basis_sha256") != action_sha256
     ):
@@ -11369,7 +11389,7 @@ def require_action_confirmation(
     plan_id = doc.frontmatter.get("plan_id")
     if not isinstance(plan_id, str) or type(revision) is not int:
         raise WorkctlError("ACTION_CONFIRMATION_BINDING_MISMATCH")
-    return plan_id, revision
+    return plan_id, revision, sha256_file(doc.path)
 
 
 def cmd_action_authorize(args: argparse.Namespace) -> None:
@@ -11384,7 +11404,7 @@ def cmd_action_authorize(args: argparse.Namespace) -> None:
             ref=args.ref,
             turn_receipt_sha256=args.turn_receipt_sha256,
         )
-        plan_id, contract_revision = require_action_confirmation(
+        plan_id, contract_revision, contract_sha256 = require_action_confirmation(
             root,
             confirmation_id=args.confirmation_id,
             action_kind=args.action_kind,
@@ -11407,6 +11427,12 @@ def cmd_action_authorize(args: argparse.Namespace) -> None:
         path = action_authorization_path(root, authorization_id)
         if path.exists() or path.is_symlink():
             existing = load_action_authorization(root, authorization_id)
+            if (
+                existing.get("plan_id") != plan_id
+                or existing.get("contract_revision") != contract_revision
+                or existing.get("contract_sha256") != contract_sha256
+            ):
+                raise WorkctlError("ACTION_AUTHORIZATION_CONTRACT_DRIFT")
             if existing.get("state") == "consumed":
                 raise WorkctlError("ACTION_AUTHORIZATION_REPLAYED")
             if datetime.now(UTC) >= parse_authorization_time(existing.get("expires_at")):
@@ -11423,6 +11449,7 @@ def cmd_action_authorize(args: argparse.Namespace) -> None:
             "authorization_id": authorization_id,
             "plan_id": plan_id,
             "contract_revision": contract_revision,
+            "contract_sha256": contract_sha256,
             "confirmation_id": args.confirmation_id,
             "action_kind": args.action_kind,
             "target_ref": args.target_ref,
@@ -11471,7 +11498,7 @@ def cmd_action_consume(args: argparse.Namespace) -> None:
         )
         if any(record.get(key) != value for key, value in expected.items()):
             raise WorkctlError("ACTION_AUTHORIZATION_TARGET_MISMATCH")
-        plan_id, contract_revision = require_action_confirmation(
+        plan_id, contract_revision, contract_sha256 = require_action_confirmation(
             root,
             confirmation_id=str(record["confirmation_id"]),
             action_kind=args.action_kind,
@@ -11482,6 +11509,7 @@ def cmd_action_consume(args: argparse.Namespace) -> None:
         if (
             record.get("plan_id") != plan_id
             or record.get("contract_revision") != contract_revision
+            or record.get("contract_sha256") != contract_sha256
         ):
             raise WorkctlError("ACTION_AUTHORIZATION_CONTRACT_DRIFT")
         if (
@@ -12484,6 +12512,8 @@ def cmd_plan_confirmation_add(args: argparse.Namespace) -> None:
         }
         if args.basis_sha256 is not None:
             item["intervention"]["basis_sha256"] = args.basis_sha256
+        if args.action_kind is not None:
+            item["intervention"]["action_kind"] = args.action_kind
         errors = intervention_errors(doc.frontmatter, item)
         if errors:
             raise WorkctlError(f"INVALID_INTERVENTION_CONTRACT: {'; '.join(errors)}")
@@ -12533,7 +12563,8 @@ def load_confirmation_classification_manifest(path: Path) -> dict[str, Any]:
         or not isinstance(manifest.get("confirmation_id"), str)
         or not str(manifest["confirmation_id"]).startswith("C-")
         or not isinstance(intervention, dict)
-        or set(intervention) - {"kind", "blocks", "basis_ref", "basis_sha256"}
+        or set(intervention)
+        - {"kind", "blocks", "basis_ref", "basis_sha256", "action_kind"}
         or (
             "supersedes_basis_sha256" in manifest
             and (
@@ -12576,6 +12607,7 @@ def cmd_plan_confirmation_classify(args: argparse.Namespace) -> None:
                 if (
                     existing.get("kind") != "external_authority"
                     or replacement.get("kind") != existing.get("kind")
+                    or replacement.get("action_kind") != existing.get("action_kind")
                     or replacement.get("blocks") != existing.get("blocks")
                     or not isinstance(supersedes_basis_sha256, str)
                     or supersedes_basis_sha256 != existing.get("basis_sha256")
@@ -17641,6 +17673,10 @@ def build_parser() -> argparse.ArgumentParser:
     confirmation_add.add_argument("--blocks", action="append", required=True)
     confirmation_add.add_argument("--basis-ref", required=True)
     confirmation_add.add_argument("--basis-sha256")
+    confirmation_add.add_argument(
+        "--action-kind",
+        choices=sorted(HIGH_IMPACT_ACTION_KINDS),
+    )
     confirmation_add.add_argument("--expected-revision", type=int, required=True)
     confirmation_add.set_defaults(func=cmd_plan_confirmation_add)
     confirmation_classify = confirmation_sub.add_parser("classify")
