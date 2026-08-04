@@ -24,10 +24,21 @@ High-impact authority is current-turn, target, digest, expiry, and single-consum
 
 ### `evidence`
 
+- `evidence capture --task T-001 --kind command-output --summary TEXT`
 - `evidence record --stdin`
 - `plan evidence record --manifest PATH|--stdin`
 
-Evidence is bounded, canonical, content-addressed, and redaction-safe.
+Direct capture writes redacted blobs and an append-only ledger; Plan evidence records remain the bounded canonical compatibility path.
+
+### `gate`
+
+- `gate list`
+- `gate check --gate-id C-001`
+- `gate open`
+- `gate satisfy`
+- `gate waive`
+
+Gate writes are aliases over strict Plan confirmation transactions.
 
 ### `migration`
 
@@ -39,6 +50,7 @@ Migration is explicit, backed up, and recovery-bound.
 
 ### `plan`
 
+- `goal show`
 - `plan create`
 - `plan show [--full]`
 - `plan edit`
@@ -51,6 +63,14 @@ Migration is explicit, backed up, and recovery-bound.
 
 Contract edits require their existing confirmation and revision guards.
 
+### `review`
+
+- `review status`
+- `review request`
+- `review attach --manifest PATH`
+
+Review attachment uses the independent-review recorder and its trust rules.
+
 ### `task`
 
 - `task start`
@@ -60,6 +80,14 @@ Contract edits require their existing confirmation and revision guards.
 - `task reprioritize`
 
 Schema-v5 runtime transitions use state_sequence and task gates without current-turn intake; mutable v4 transitions retain their turn binding.
+
+### `truth`
+
+- `truth list`
+- `truth conflicts`
+- `truth add --manifest PATH`
+
+Truth writes are aliases over the confirmed contract revision path.
 
 ## Parser command reference
 
@@ -115,6 +143,29 @@ options:
   --authorization-id AUTHORIZATION_ID
 ```
 
+### `evidence capture`
+
+```text
+usage: workctl evidence capture [-h] [--task TASK] --kind KIND
+                                --summary SUMMARY [--from-file FROM_FILE]
+                                [--stdin]
+                                [--redaction-policy REDACTION_POLICY]
+                                [--idempotency-key IDEMPOTENCY_KEY]
+                                [--expected-state-sequence EXPECTED_STATE_SEQUENCE]
+
+options:
+  -h, --help            show this help message and exit
+  --task TASK
+  --kind KIND
+  --summary SUMMARY
+  --from-file FROM_FILE
+  --stdin               Read evidence bytes from standard input; stdin is also
+                        the default source.
+  --redaction-policy REDACTION_POLICY
+  --idempotency-key IDEMPOTENCY_KEY
+  --expected-state-sequence EXPECTED_STATE_SEQUENCE
+```
+
 ### `evidence record`
 
 ```text
@@ -126,13 +177,148 @@ options:
   --stdin
 ```
 
+### `gate check`
+
+```text
+usage: workctl gate check [-h] --gate-id GATE_ID
+
+options:
+  -h, --help         show this help message and exit
+  --gate-id GATE_ID
+```
+
+### `gate list`
+
+```text
+usage: workctl gate list [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
+### `gate open`
+
+```text
+usage: workctl gate open [-h] --confirmation-id CONFIRMATION_ID
+                         --description DESCRIPTION
+                         [--status {pending,accepted}] [--ref REF]
+                         --intervention-kind {deviation_recovery,external_authority,plan_contract}
+                         --blocks BLOCKS --basis-ref BASIS_REF
+                         [--basis-sha256 BASIS_SHA256]
+                         [--action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}]
+                         --expected-revision EXPECTED_REVISION
+
+options:
+  -h, --help            show this help message and exit
+  --confirmation-id CONFIRMATION_ID
+  --description DESCRIPTION
+  --status {pending,accepted}
+  --ref REF
+  --intervention-kind {deviation_recovery,external_authority,plan_contract}
+  --blocks BLOCKS
+  --basis-ref BASIS_REF
+  --basis-sha256 BASIS_SHA256
+  --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+  --expected-revision EXPECTED_REVISION
+```
+
+### `gate satisfy`
+
+```text
+usage: workctl gate satisfy [-h] --confirmation-id CONFIRMATION_ID --ref REF
+                            [--evidence-sha256 EVIDENCE_SHA256]
+                            --expected-revision EXPECTED_REVISION
+                            [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
+                            [--expected-intake-sha256 EXPECTED_INTAKE_SHA256]
+
+options:
+  -h, --help            show this help message and exit
+  --confirmation-id CONFIRMATION_ID
+  --ref REF
+  --evidence-sha256 EVIDENCE_SHA256
+  --expected-revision EXPECTED_REVISION
+  --turn-receipt-sha256 TURN_RECEIPT_SHA256
+  --expected-intake-sha256 EXPECTED_INTAKE_SHA256
+```
+
+### `gate waive`
+
+```text
+usage: workctl gate waive [-h] --confirmation-id CONFIRMATION_ID --ref REF
+                          [--evidence-sha256 EVIDENCE_SHA256]
+                          --expected-revision EXPECTED_REVISION
+                          [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
+                          [--expected-intake-sha256 EXPECTED_INTAKE_SHA256]
+
+options:
+  -h, --help            show this help message and exit
+  --confirmation-id CONFIRMATION_ID
+  --ref REF
+  --evidence-sha256 EVIDENCE_SHA256
+  --expected-revision EXPECTED_REVISION
+  --turn-receipt-sha256 TURN_RECEIPT_SHA256
+  --expected-intake-sha256 EXPECTED_INTAKE_SHA256
+```
+
+### `goal close`
+
+```text
+usage: workctl goal close [-h] --expected-revision EXPECTED_REVISION
+                          [--evidence-manifest EVIDENCE_MANIFEST]
+                          [--finalize-route] [--confirmation CONFIRMATION]
+                          [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
+                          [--expected-intake-sha256 EXPECTED_INTAKE_SHA256]
+
+options:
+  -h, --help            show this help message and exit
+  --expected-revision EXPECTED_REVISION
+  --evidence-manifest EVIDENCE_MANIFEST
+  --finalize-route
+  --confirmation CONFIRMATION
+  --turn-receipt-sha256 TURN_RECEIPT_SHA256
+  --expected-intake-sha256 EXPECTED_INTAKE_SHA256
+```
+
+### `goal init`
+
+```text
+usage: workctl goal init [-h] --plan-id PLAN_ID --title TITLE
+                         [--mode {autonomous,strict}]
+
+options:
+  -h, --help            show this help message and exit
+  --plan-id PLAN_ID
+  --title TITLE
+  --mode {autonomous,strict}
+```
+
+### `goal revise`
+
+```text
+usage: workctl goal revise [-h] --manifest MANIFEST
+
+options:
+  -h, --help           show this help message and exit
+  --manifest MANIFEST
+```
+
+### `goal show`
+
+```text
+usage: workctl goal show [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
 ### `help`
 
 ```text
-usage: workctl help [-h] [{plan,task,evidence,action,migration}]
+usage: workctl help [-h]
+                    [{plan,task,evidence,action,migration,goal,gate,truth,review}]
 
 positional arguments:
-  {plan,task,evidence,action,migration}
+  {plan,task,evidence,action,migration,goal,gate,truth,review}
 
 options:
   -h, --help            show this help message and exit
@@ -941,6 +1127,40 @@ options:
   --expected-intake-sha256 EXPECTED_INTAKE_SHA256
 ```
 
+### `review attach`
+
+```text
+usage: workctl review attach [-h] --manifest MANIFEST
+                             --expected-revision EXPECTED_REVISION
+                             [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
+                             [--expected-intake-sha256 EXPECTED_INTAKE_SHA256]
+
+options:
+  -h, --help            show this help message and exit
+  --manifest MANIFEST
+  --expected-revision EXPECTED_REVISION
+  --turn-receipt-sha256 TURN_RECEIPT_SHA256
+  --expected-intake-sha256 EXPECTED_INTAKE_SHA256
+```
+
+### `review request`
+
+```text
+usage: workctl review request [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
+### `review status`
+
+```text
+usage: workctl review status [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
 ### `task block`
 
 ```text
@@ -1053,4 +1273,42 @@ options:
                         with verification.
   --turn-receipt-sha256 TURN_RECEIPT_SHA256
   --expected-intake-sha256 EXPECTED_INTAKE_SHA256
+```
+
+### `truth add`
+
+```text
+usage: workctl truth add [-h] --manifest MANIFEST
+
+options:
+  -h, --help           show this help message and exit
+  --manifest MANIFEST
+```
+
+### `truth conflicts`
+
+```text
+usage: workctl truth conflicts [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
+### `truth list`
+
+```text
+usage: workctl truth list [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
+### `truth resolve`
+
+```text
+usage: workctl truth resolve [-h] --manifest MANIFEST
+
+options:
+  -h, --help           show this help message and exit
+  --manifest MANIFEST
 ```

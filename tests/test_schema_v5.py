@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 from test_workctl import (
+    SCRIPT,
     init_plan,
     read_plan,
     run_workctl,
@@ -17,6 +20,17 @@ from test_workctl import (
 )
 
 STRICT_CONTROLLER_ENV = {"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"}
+
+
+def run_without_receipt(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Run the real controller without the required SessionStart receipt argument."""
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), *args],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
 
 
 def issue_test_turn(
@@ -30,9 +44,7 @@ def issue_test_turn(
     session_path = tmp_path / ".work-governance" / "bootstrap-state.json"
     session = json.loads(session_path.read_text(encoding="utf-8"))
     prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-    request_ref = (
-        f"user:session/{session['session_id']}/turn/{turn_id}/sha256/{prompt_sha256}"
-    )
+    request_ref = f"user:session/{session['session_id']}/turn/{turn_id}/sha256/{prompt_sha256}"
     turn: dict[str, object] = {
         "schema_version": 1,
         "kind": "work-governance-current-turn-receipt",
@@ -163,6 +175,139 @@ def test_v4_inspect_and_dry_run_are_read_only_and_repeatable(tmp_path: Path) -> 
     assert not (tmp_path / ".work-governance" / "runtime" / "migrations-v5").exists()
 
 
+def test_goal_gate_truth_and_review_public_views(tmp_path: Path) -> None:
+    """Top-level public views expose current governance state without mutation."""
+    prepare_v4_plan(tmp_path)
+    before = read_active_plan_bytes(tmp_path)
+
+    goal = json.loads(run_workctl(tmp_path, "goal", "show").stdout)
+    gates = json.loads(run_workctl(tmp_path, "gate", "list").stdout)
+    gate = json.loads(
+        run_workctl(
+            tmp_path,
+            "gate",
+            "check",
+            "--gate-id",
+            "C-MIGRATION-SCHEMA-V5",
+        ).stdout
+    )
+    truth = json.loads(run_workctl(tmp_path, "truth", "list").stdout)
+    truth_conflicts = json.loads(run_workctl(tmp_path, "truth", "conflicts").stdout)
+    review = json.loads(run_workctl(tmp_path, "review", "status").stdout)
+    review_request = json.loads(run_workctl(tmp_path, "review", "request").stdout)
+
+    assert goal["plan_id"] == "PLAN-20260723-001"
+    assert {item["id"] for item in gates["gates"]} >= {
+        "C-ADMISSION",
+        "C-MIGRATION-SCHEMA-V5",
+    }
+    assert gate["id"] == "C-MIGRATION-SCHEMA-V5"
+    assert truth["truth_refs"] == []
+    assert truth_conflicts["conflicts"] == []
+    assert review["independent_validation"] == {}
+    assert review_request["record_command"] == "review attach --manifest PATH"
+    assert read_active_plan_bytes(tmp_path) == before
+
+
+def test_top_level_write_aliases_require_ready_receipt(tmp_path: Path) -> None:
+    """Public write aliases must not bypass the SessionStart READY receipt gate."""
+    prepare_v4_plan(tmp_path)
+    patch = tmp_path / "truth.yaml"
+    patch.write_text("truth_refs:\n- project:truth-source\n", encoding="utf-8")
+    review_manifest = tmp_path / "review.json"
+    review_manifest.write_text("{}", encoding="utf-8")
+    commands = [
+        (
+            "goal",
+            "revise",
+            "--manifest",
+            str(patch),
+        ),
+        (
+            "gate",
+            "open",
+            "--confirmation-id",
+            "C-ALIAS",
+            "--description",
+            "Alias gate",
+            "--intervention-kind",
+            "plan_contract",
+            "--blocks",
+            "route",
+            "--basis-ref",
+            "project:alias-basis",
+            "--basis-sha256",
+            "a" * 64,
+            "--expected-revision",
+            "1",
+        ),
+        (
+            "truth",
+            "add",
+            "--manifest",
+            str(patch),
+        ),
+        (
+            "review",
+            "attach",
+            "--manifest",
+            str(review_manifest),
+            "--expected-revision",
+            "1",
+        ),
+    ]
+
+    for command in commands:
+        result = run_without_receipt(tmp_path, *command)
+        assert result.returncode == 2, command
+        assert "BOOTSTRAP_RECEIPT_REQUIRED" in result.stderr
+
+
+def test_gate_aliases_are_directional_and_upgrade_gate_compatible(
+    tmp_path: Path,
+) -> None:
+    """Gate aliases hard-code their decision and remain legal under upgrade gating."""
+    init_plan(tmp_path)
+    result = run_workctl(
+        tmp_path,
+        "gate",
+        "open",
+        "--confirmation-id",
+        "C-SCHEMA-UPGRADE-ALIAS",
+        "--description",
+        "Authorize upgrade gate alias.",
+        "--intervention-kind",
+        "plan_contract",
+        "--blocks",
+        "route",
+        "--basis-ref",
+        "project:schema-upgrade-alias",
+        "--basis-sha256",
+        "b" * 64,
+        "--expected-revision",
+        "1",
+        env=STRICT_CONTROLLER_ENV,
+    )
+    assert "CONFIRMATION_ADDED C-SCHEMA-UPGRADE-ALIAS pending" in result.stdout
+
+    reversed_decision = run_workctl(
+        tmp_path,
+        "gate",
+        "satisfy",
+        "--confirmation-id",
+        "C-SCHEMA-UPGRADE-ALIAS",
+        "--decision",
+        "declined",
+        "--ref",
+        "user:invalid-alias-decision",
+        "--expected-revision",
+        "2",
+        check=False,
+    )
+    assert reversed_decision.returncode == 2
+    assert "unrecognized arguments: --decision declined" in reversed_decision.stderr
+
+
 def test_v5_apply_creates_backup_bundle_and_recovers_after_replace_interrupt(
     tmp_path: Path,
 ) -> None:
@@ -188,9 +333,7 @@ def test_v5_apply_creates_backup_bundle_and_recovers_after_replace_interrupt(
     journal_path = transactions[0]
     journal = json.loads(journal_path.read_text(encoding="utf-8"))
     assert journal["status"] == "plan-replaced"
-    assert journal["source_sha256"] == sha256_path(
-        next(journal_path.parent.glob("backup/plan.md"))
-    )
+    assert journal["source_sha256"] == sha256_path(next(journal_path.parent.glob("backup/plan.md")))
     active = yaml.safe_load(read_active_plan_bytes(tmp_path).decode().split("---\n", 2)[1])
     assert active["schema_version"] == 5
 
@@ -204,15 +347,11 @@ def test_v5_apply_creates_backup_bundle_and_recovers_after_replace_interrupt(
     assert "SCHEMA_V5_MIGRATION_RECOVERED" in recovered.stdout
     assert json.loads(journal_path.read_text(encoding="utf-8"))["status"] == "committed"
     assert (journal_path.parent / "backup" / "plan.md").read_bytes() == source_before
-    runtime_plan = (
-        tmp_path
-        / ".work-governance"
-        / "runtime"
-        / "plans"
-        / "PLAN-20260723-001"
-    )
+    runtime_plan = tmp_path / ".work-governance" / "runtime" / "plans" / "PLAN-20260723-001"
     assert (runtime_plan / "state.json").is_file()
     assert (runtime_plan / "events.jsonl").is_file()
+    frontmatter, _body = read_plan(tmp_path)
+    assert frontmatter["evidence_store_ref"] == "evidence:.work-governance/evidence"
 
 
 def test_v5_runtime_transitions_keep_contract_bytes_and_redact_secrets(
@@ -230,9 +369,7 @@ def test_v5_runtime_transitions_keep_contract_bytes_and_redact_secrets(
         "1",
     )
     contract_before = read_active_plan_bytes(tmp_path)
-    assert not (
-        tmp_path / ".work-governance" / "runtime" / "current-turn-receipt.json"
-    ).exists()
+    assert not (tmp_path / ".work-governance" / "runtime" / "current-turn-receipt.json").exists()
 
     started = run_workctl(
         tmp_path,
@@ -268,28 +405,178 @@ def test_v5_runtime_transitions_keep_contract_bytes_and_redact_secrets(
     assert "state_sequence=2" in verified.stdout
     assert read_active_plan_bytes(tmp_path) == contract_before
     state_path = (
-        tmp_path
-        / ".work-governance"
-        / "runtime"
-        / "plans"
-        / "PLAN-20260723-001"
-        / "state.json"
+        tmp_path / ".work-governance" / "runtime" / "plans" / "PLAN-20260723-001" / "state.json"
     )
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["state_sequence"] == 2
     assert state["tasks"]["T-001"]["status"] == "verified"
-    event_text = (
-        state_path.parent / "events.jsonl"
-    ).read_text(encoding="utf-8")
+    event_text = (state_path.parent / "events.jsonl").read_text(encoding="utf-8")
     assert "sk-live-secret-fixture" not in event_text
     evidence_files = list(
         (tmp_path / ".work-governance" / "_Plan" / ".evidence" / "PLAN-20260723-001").glob("*.json")
     )
     assert evidence_files
     assert all(
-        "sk-live-secret-fixture" not in path.read_text(encoding="utf-8")
-        for path in evidence_files
+        "sk-live-secret-fixture" not in path.read_text(encoding="utf-8") for path in evidence_files
     )
+
+
+def test_direct_evidence_capture_writes_ledger_blob_and_keeps_contract_stable(
+    tmp_path: Path,
+) -> None:
+    """Direct capture persists redacted evidence and only advances v5 runtime state."""
+    prepare_v4_plan(tmp_path)
+    run_workctl(
+        tmp_path,
+        "migrate",
+        "apply",
+        "--confirmation",
+        "C-MIGRATION-SCHEMA-V5",
+        "--expected-contract-revision",
+        "1",
+    )
+    contract_before = read_active_plan_bytes(tmp_path)
+
+    captured = json.loads(
+        run_workctl(
+            tmp_path,
+            "evidence",
+            "capture",
+            "--task",
+            "T-001",
+            "--kind",
+            "command-output",
+            "--summary",
+            "pytest token=summary-secret",
+            "--idempotency-key",
+            "pytest:capture:stdin",
+            "--expected-state-sequence",
+            "0",
+            input_text="ok\nAuthorization: Bearer output-secret\n",
+        ).stdout
+    )
+    replayed = json.loads(
+        run_workctl(
+            tmp_path,
+            "evidence",
+            "capture",
+            "--task",
+            "T-001",
+            "--kind",
+            "command-output",
+            "--summary",
+            "pytest token=summary-secret",
+            "--idempotency-key",
+            "pytest:capture:stdin",
+            input_text="ok\nAuthorization: Bearer output-secret\n",
+        ).stdout
+    )
+
+    assert captured["idempotent"] is False
+    assert captured["state_sequence"] == 1
+    assert replayed["idempotent"] is True
+    assert replayed["id"] == captured["id"]
+    assert replayed["state_sequence"] == 1
+    assert read_active_plan_bytes(tmp_path) == contract_before
+
+    ledger_path = tmp_path / ".work-governance" / "evidence" / "ledger.ndjson"
+    ledger_records = [
+        json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(ledger_records) == 1
+    assert ledger_records[0]["summary"] == "pytest token=[REDACTED]"
+    assert ledger_records[0]["task_ref"] == "task:T-001"
+    assert "summary-secret" not in ledger_path.read_text(encoding="utf-8")
+
+    blob_path = tmp_path / captured["blob_ref"].removeprefix("evidence:")
+    blob_text = blob_path.read_text(encoding="utf-8")
+    assert "output-secret" not in blob_text
+    assert "Bearer [REDACTED]" in blob_text or "Authorization=[REDACTED]" in blob_text
+
+    state_path = (
+        tmp_path / ".work-governance" / "runtime" / "plans" / "PLAN-20260723-001" / "state.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["state_sequence"] == 1
+    assert state["tasks"]["T-001"]["evidence_refs"] == [captured["evidence_ref"]]
+    assert state["tasks"]["T-001"]["evidence_sha256s"] == [captured["evidence_sha256"]]
+    record_path = tmp_path / captured["evidence_ref"].removeprefix("evidence:")
+    assert sha256_path(record_path) == captured["evidence_sha256"]
+
+    artifact = tmp_path / "artifact.txt"
+    artifact.write_text("file token=file-secret\n", encoding="utf-8")
+    file_capture = json.loads(
+        run_workctl(
+            tmp_path,
+            "evidence",
+            "capture",
+            "--task",
+            "T-001",
+            "--kind",
+            "artifact",
+            "--summary",
+            "artifact capture",
+            "--from-file",
+            "artifact.txt",
+            "--expected-state-sequence",
+            "1",
+        ).stdout
+    )
+    assert file_capture["state_sequence"] == 2
+    file_blob = tmp_path / file_capture["blob_ref"].removeprefix("evidence:")
+    assert "file-secret" not in file_blob.read_text(encoding="utf-8")
+    file_record = tmp_path / file_capture["evidence_ref"].removeprefix("evidence:")
+    assert sha256_path(file_record) == file_capture["evidence_sha256"]
+    assert read_active_plan_bytes(tmp_path) == contract_before
+
+
+def test_direct_capture_stale_state_writes_no_durable_evidence(
+    tmp_path: Path,
+) -> None:
+    """A failed state guard leaves no direct evidence ledger, record, or blob."""
+    prepare_v4_plan(tmp_path)
+    run_workctl(
+        tmp_path,
+        "migrate",
+        "apply",
+        "--confirmation",
+        "C-MIGRATION-SCHEMA-V5",
+        "--expected-contract-revision",
+        "1",
+    )
+    run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-state-sequence",
+        "0",
+    )
+    contract_before = read_active_plan_bytes(tmp_path)
+    failed = run_workctl(
+        tmp_path,
+        "evidence",
+        "capture",
+        "--task",
+        "T-001",
+        "--kind",
+        "command-output",
+        "--summary",
+        "stale capture",
+        "--expected-state-sequence",
+        "0",
+        input_text="this output must not persist\n",
+        check=False,
+    )
+
+    assert failed.returncode == 2
+    assert "STATE_SEQUENCE_MISMATCH" in failed.stderr
+    evidence_root = tmp_path / ".work-governance" / "evidence"
+    assert not (evidence_root / "ledger.ndjson").exists()
+    assert not (evidence_root / "records").exists()
+    assert not (evidence_root / "blobs").exists()
+    assert read_active_plan_bytes(tmp_path) == contract_before
 
 
 def test_v5_status_and_scheduler_keep_blocked_work_visible_and_bounded(
@@ -451,12 +738,7 @@ def test_v5_confirmation_requires_exact_current_turn_without_plan_intake(
     assert frontmatter["contract_revision"] == 2
     assert "intake" not in frontmatter
     event_lines = (
-        tmp_path
-        / ".work-governance"
-        / "runtime"
-        / "plans"
-        / "PLAN-20260723-001"
-        / "events.jsonl"
+        tmp_path / ".work-governance" / "runtime" / "plans" / "PLAN-20260723-001" / "events.jsonl"
     ).read_text(encoding="utf-8")
     assert "confirmation.decided" in event_lines
     assert "C-V5-HIGH-IMPACT" in event_lines
@@ -596,9 +878,7 @@ def test_high_impact_action_authorization_is_target_bound_and_single_use(
     )
     assert "production action" not in json.dumps(authorized)
 
-    plan_path = (
-        tmp_path / ".work-governance" / "_Plan" / "PLAN-20260723-001.md"
-    )
+    plan_path = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260723-001.md"
     unchanged_contract = plan_path.read_bytes()
     plan_path.write_bytes(unchanged_contract + b"\nOut-of-band contract drift.\n")
     contract_drift = run_workctl(
@@ -758,18 +1038,10 @@ def test_v5_confirmation_recovers_event_after_contract_replace_interrupt(
     assert interrupted.returncode == 2
     assert "SCHEMA_V5_TEST_INTERRUPTED_AFTER_CONTRACT" in interrupted.stderr
 
-    runtime = (
-        tmp_path
-        / ".work-governance"
-        / "runtime"
-        / "plans"
-        / "PLAN-20260723-001"
-    )
+    runtime = tmp_path / ".work-governance" / "runtime" / "plans" / "PLAN-20260723-001"
     state_before = json.loads((runtime / "state.json").read_text(encoding="utf-8"))
     assert state_before["pending_event"]["event"] == "confirmation.decided"
-    assert "confirmation.decided" not in (runtime / "events.jsonl").read_text(
-        encoding="utf-8"
-    )
+    assert "confirmation.decided" not in (runtime / "events.jsonl").read_text(encoding="utf-8")
 
     recovered_replay = run_workctl(
         tmp_path,
@@ -792,6 +1064,4 @@ def test_v5_confirmation_recovers_event_after_contract_replace_interrupt(
     assert "INVALID_CONFIRMATION_TRANSITION" in recovered_replay.stderr
     state_after = json.loads((runtime / "state.json").read_text(encoding="utf-8"))
     assert "pending_event" not in state_after
-    assert "confirmation.decided" in (runtime / "events.jsonl").read_text(
-        encoding="utf-8"
-    )
+    assert "confirmation.decided" in (runtime / "events.jsonl").read_text(encoding="utf-8")

@@ -270,6 +270,10 @@ Allowed structural changes:
   evidence metadata under the active Plan and return its exact path and SHA256.
   `task verify --evidence-stdin` performs the same bounded record and task
   transition as one controller command.
+- `evidence capture --task T-001 --kind ... --summary ...`: capture stdin or a
+  project-local file directly into the evidence store, with redaction, blob
+  hashing, ledger append, optional idempotency key, and schema-v5 runtime task
+  binding without a Plan contract revision.
 - `plan confirm`: resolve a pending gate as `accepted` or `declined` with a
   typed authority reference and the exact basis digest. Generic Plan patches
   cannot edit confirmations, unclassified gates cannot decide, and a pending

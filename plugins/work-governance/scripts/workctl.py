@@ -212,6 +212,10 @@ RETIREMENT_DISPOSITIONS = {
 }
 EVIDENCE_MANIFEST_MAX_BYTES = 64 * 1024
 EVIDENCE_MANIFEST_MAX_ITEMS = 64
+EVIDENCE_CAPTURE_MAX_BYTES = 1024 * 1024
+EVIDENCE_CAPTURE_KIND_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+EVIDENCE_CAPTURE_IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+EVIDENCE_CAPTURE_ID_RE = re.compile(r"^E-\d{8}T\d{6}Z-[0-9a-f]{12}$")
 TASK_TRANSITIONS = {
     "pending": {"in_progress", "blocked", "skipped"},
     "in_progress": {"blocked", "verified", "skipped"},
@@ -913,9 +917,7 @@ def validate_current_ready_receipt(
         "lifecycle_sha256": receipt["lifecycle_sha256"],
     }
     module_files = (
-        runtime_manifest.get("module_files")
-        if isinstance(runtime_manifest, dict)
-        else None
+        runtime_manifest.get("module_files") if isinstance(runtime_manifest, dict) else None
     )
     if module_files is not None:
         if not isinstance(module_files, list):
@@ -3828,19 +3830,11 @@ def intervention_errors(
     action_kind = intervention.get("action_kind")
     if action_kind is not None:
         if action_kind not in HIGH_IMPACT_ACTION_KINDS:
-            errors.append(
-                f"{confirmation_id}.intervention.action_kind must be supported"
-            )
-        elif (
-            action_kind == "substantive_rollback"
-            and kind != "deviation_recovery"
-        ) or (
-            action_kind != "substantive_rollback"
-            and kind != "external_authority"
+            errors.append(f"{confirmation_id}.intervention.action_kind must be supported")
+        elif (action_kind == "substantive_rollback" and kind != "deviation_recovery") or (
+            action_kind != "substantive_rollback" and kind != "external_authority"
         ):
-            errors.append(
-                f"{confirmation_id}.intervention.action_kind does not match kind"
-            )
+            errors.append(f"{confirmation_id}.intervention.action_kind does not match kind")
     blocks = intervention.get("blocks")
     if (
         not isinstance(blocks, list)
@@ -3972,8 +3966,7 @@ def load_scheduler_state(root: Path, plan_id: str) -> dict[str, Any]:
         or payload["state_sequence"] < 0
         or not isinstance(priorities, dict)
         or any(
-            not isinstance(key, str) or type(value) is not int
-            for key, value in priorities.items()
+            not isinstance(key, str) or type(value) is not int for key, value in priorities.items()
         )
     ):
         raise WorkctlError("SCHEDULER_STATE_INVALID")
@@ -4209,11 +4202,7 @@ def v5_persist_contract_transition(
         "event": event,
         "subject": subject,
         "payload": {
-            **(
-                redacted_copy(dict(payload))
-                if redacted_copy is not None
-                else dict(payload)
-            ),
+            **(redacted_copy(dict(payload)) if redacted_copy is not None else dict(payload)),
             "contract_revision": doc.frontmatter["contract_revision"],
             "contract_sha256": contract_sha256,
         },
@@ -4287,8 +4276,7 @@ def ready_task_targets(
         ):
             continue
         if all(
-            dependency in task_map
-            and task_map[dependency].get("status") in VERIFIED_TASK_STATES
+            dependency in task_map and task_map[dependency].get("status") in VERIFIED_TASK_STATES
             for dependency in dependencies
         ):
             ready.append(f"task:{task['id']}")
@@ -4541,8 +4529,7 @@ def set_v5_task_status(args: argparse.Namespace, status: str, doc: PlanDocument)
     state = load_v5_state(root, doc.frontmatter)
     if state["state_sequence"] != expected:
         raise WorkctlError(
-            "STATE_SEQUENCE_MISMATCH: "
-            f"expected {expected}, found {state['state_sequence']}"
+            f"STATE_SEQUENCE_MISMATCH: expected {expected}, found {state['state_sequence']}"
         )
     task = task_for(doc.frontmatter, args.task_id)
     state_task = state["tasks"].get(args.task_id)
@@ -4572,16 +4559,12 @@ def set_v5_task_status(args: argparse.Namespace, status: str, doc: PlanDocument)
         )
     state_task["status"] = status
     if args.note:
-        state_task["note"] = (
-            redacted_copy(args.note) if redacted_copy is not None else args.note
-        )
+        state_task["note"] = redacted_copy(args.note) if redacted_copy is not None else args.note
     if evidence_ref is not None and evidence_sha256 is not None:
         state_task["evidence_ref"] = evidence_ref
         state_task["evidence_sha256"] = evidence_sha256
         state_task["verified_at"] = utc_now()
-    state["current_task"] = (
-        f"task:{args.task_id}" if status == "in_progress" else None
-    )
+    state["current_task"] = f"task:{args.task_id}" if status == "in_progress" else None
     v5_persist_state_transition(
         root,
         doc.frontmatter,
@@ -11338,10 +11321,7 @@ def load_action_authorization(root: Path, authorization_id: str) -> dict[str, ob
     if record["state"] == "authorized":
         if consumed_at is not None or consumer_ref is not None:
             raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
-    elif (
-        parse_authorization_time(consumed_at) < issued_at
-        or not valid_reference(consumer_ref)
-    ):
+    elif parse_authorization_time(consumed_at) < issued_at or not valid_reference(consumer_ref):
         raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
     return record
 
@@ -11400,9 +11380,7 @@ def require_action_confirmation(
         raise WorkctlError("ACTION_CONFIRMATION_NOT_ACCEPTED")
     intervention = decision.get("intervention")
     expected_intervention = (
-        "deviation_recovery"
-        if action_kind == "substantive_rollback"
-        else "external_authority"
+        "deviation_recovery" if action_kind == "substantive_rollback" else "external_authority"
     )
     if (
         decision.get("ref") != turn.get("request_ref")
@@ -11746,8 +11724,7 @@ def cmd_task_reprioritize(args: argparse.Namespace) -> None:
         expected = args.expected_state_sequence
         if state["state_sequence"] != expected:
             raise WorkctlError(
-                "STATE_SEQUENCE_MISMATCH: "
-                f"expected {expected}, found {state['state_sequence']}"
+                f"STATE_SEQUENCE_MISMATCH: expected {expected}, found {state['state_sequence']}"
             )
         priorities = cast(dict[str, int], state["priorities"])
         priorities[args.task_id] = args.priority
@@ -11767,6 +11744,7 @@ def cmd_workflow_help(args: argparse.Namespace) -> None:
     workflows: dict[str, dict[str, object]] = {
         "plan": {
             "commands": [
+                "goal show",
                 "plan create",
                 "plan show [--full]",
                 "plan edit",
@@ -11789,12 +11767,38 @@ def cmd_workflow_help(args: argparse.Namespace) -> None:
             ],
             "note": "Task transitions remain receipt-bound and dependency-checked.",
         },
+        "gate": {
+            "commands": [
+                "gate list",
+                "gate check --gate-id C-001",
+                "gate open",
+                "gate satisfy",
+                "gate waive",
+            ],
+            "note": "Gate writes are aliases over strict Plan confirmation transactions.",
+        },
+        "truth": {
+            "commands": ["truth list", "truth conflicts", "truth add --manifest PATH"],
+            "note": "Truth writes are aliases over the confirmed contract revision path.",
+        },
+        "review": {
+            "commands": [
+                "review status",
+                "review request",
+                "review attach --manifest PATH",
+            ],
+            "note": "Review attachment uses the independent-review recorder and its trust rules.",
+        },
         "evidence": {
             "commands": [
+                "evidence capture --task T-001 --kind command-output --summary TEXT",
                 "evidence record --stdin",
                 "plan evidence record --manifest PATH|--stdin",
             ],
-            "note": "Evidence is bounded, canonical, content-addressed, and redaction-safe.",
+            "note": (
+                "Direct capture writes redacted blobs and an append-only ledger; "
+                "Plan evidence records remain the bounded canonical compatibility path."
+            ),
         },
         "migration": {
             "commands": ["migrate inspect", "migrate apply", "migrate recover"],
@@ -11807,6 +11811,147 @@ def cmd_workflow_help(args: argparse.Namespace) -> None:
     if workflow not in workflows:
         raise WorkctlError(f"UNKNOWN_WORKFLOW: {workflow}")
     print(json.dumps(workflows[workflow], indent=2, sort_keys=True))
+
+
+def cmd_goal_show(_args: argparse.Namespace) -> None:
+    """Show the active Goal Contract projection."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    contract = doc.frontmatter.get("contract", {})
+    goal = doc.frontmatter.get("goal")
+    payload = {
+        "plan_id": doc.frontmatter.get("plan_id"),
+        "schema_version": doc.frontmatter.get("schema_version"),
+        "goal": goal,
+        "success_criteria": doc.frontmatter.get(
+            "success_criteria",
+            goal.get("success_conditions", []) if isinstance(goal, dict) else [],
+        ),
+        "contract_revision": doc.frontmatter.get(
+            "contract_revision",
+            contract.get("revision") if isinstance(contract, dict) else None,
+        ),
+        "truth_refs": doc.frontmatter.get("truth_refs", []),
+        "confirmation_gates": [
+            item.get("id")
+            for item in confirmations(doc.frontmatter).values()
+            if item.get("status") == "pending"
+        ],
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_gate_list(_args: argparse.Namespace) -> None:
+    """List the active Plan's confirmation gates."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    payload = {
+        "plan_id": doc.frontmatter.get("plan_id"),
+        "gates": list(confirmations(doc.frontmatter).values()),
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_gate_check(args: argparse.Namespace) -> None:
+    """Show one confirmation gate by ID."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    gate = confirmations(doc.frontmatter).get(args.gate_id)
+    if gate is None:
+        raise WorkctlError(f"UNKNOWN_GATE: {args.gate_id}")
+    print(json.dumps(gate, indent=2, sort_keys=True))
+
+
+def cmd_gate_satisfy(args: argparse.Namespace) -> None:
+    """Resolve one gate as accepted through the existing confirmation command."""
+    args.decision = "accepted"
+    cmd_plan_confirm(args)
+
+
+def cmd_gate_waive(args: argparse.Namespace) -> None:
+    """Resolve one gate as declined through the existing confirmation command."""
+    args.decision = "declined"
+    cmd_plan_confirm(args)
+
+
+def cmd_truth_list(_args: argparse.Namespace) -> None:
+    """List durable truth references recorded in the active contract."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    truth_refs = doc.frontmatter.get("truth_refs", [])
+    print(
+        json.dumps(
+            {
+                "plan_id": doc.frontmatter.get("plan_id"),
+                "truth_refs": truth_refs if isinstance(truth_refs, list) else [],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def cmd_truth_conflicts(_args: argparse.Namespace) -> None:
+    """Report duplicate truth references for the active contract."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    truth_refs = doc.frontmatter.get("truth_refs", [])
+    values = (
+        [item for item in truth_refs if isinstance(item, str)]
+        if isinstance(truth_refs, list)
+        else []
+    )
+    counts = {item: values.count(item) for item in values}
+    print(
+        json.dumps(
+            {
+                "plan_id": doc.frontmatter.get("plan_id"),
+                "conflicts": sorted(item for item, count in counts.items() if count > 1),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def cmd_review_status(_args: argparse.Namespace) -> None:
+    """Show active independent-validation records."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    print(
+        json.dumps(
+            {
+                "plan_id": doc.frontmatter.get("plan_id"),
+                "independent_validation": doc.frontmatter.get("independent_validation", {}),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def cmd_review_request(_args: argparse.Namespace) -> None:
+    """Print the review modes expected by Work Governance."""
+    print(
+        json.dumps(
+            {
+                "review_modes": [
+                    "plan_challenge",
+                    "artifact_review",
+                    "evidence_audit",
+                ],
+                "record_command": "review attach --manifest PATH",
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 def cmd_migrate_inspect(_args: argparse.Namespace) -> None:
@@ -11839,11 +11984,15 @@ def v5_migration_base(root: Path) -> Path:
 def next_v5_migration_id(root: Path) -> str:
     date_part = datetime.now(UTC).strftime("%Y%m%d")
     base = v5_migration_base(root)
-    existing = {
-        path.name
-        for path in base.iterdir()
-        if base.is_dir() and path.is_dir() and MIGRATION_ID_RE.fullmatch(path.name)
-    } if base.exists() else set()
+    existing = (
+        {
+            path.name
+            for path in base.iterdir()
+            if base.is_dir() and path.is_dir() and MIGRATION_ID_RE.fullmatch(path.name)
+        }
+        if base.exists()
+        else set()
+    )
     for number in range(1, 1000):
         candidate = f"MIG-{date_part}-{number:03d}"
         if candidate not in existing:
@@ -11982,9 +12131,20 @@ def finish_v5_migration(root: Path, journal_path: Path) -> None:
     if journal_path.resolve() != paths["journal"].resolve():
         raise WorkctlError("SCHEMA_V5_MIGRATION_JOURNAL_INVALID")
     required = {
-        "schema_version", "kind", "migration_id", "status", "plan_id", "source_path",
-        "source_sha256", "target_sha256", "state_sha256", "events_sha256",
-        "contract_revision", "confirmation_id", "created_at", "updated_at",
+        "schema_version",
+        "kind",
+        "migration_id",
+        "status",
+        "plan_id",
+        "source_path",
+        "source_sha256",
+        "target_sha256",
+        "state_sha256",
+        "events_sha256",
+        "contract_revision",
+        "confirmation_id",
+        "created_at",
+        "updated_at",
     }
     if (
         set(journal) != required
@@ -12070,9 +12230,7 @@ def cmd_migrate_apply(args: argparse.Namespace) -> None:
                 confirmation_id=str(args.confirmation),
             )
             payload = (
-                migration_projection(source.frontmatter)
-                if callable(migration_projection)
-                else {}
+                migration_projection(source.frontmatter) if callable(migration_projection) else {}
             )
             payload.update(
                 {
@@ -12593,8 +12751,7 @@ def load_confirmation_classification_manifest(path: Path) -> dict[str, Any]:
         or not isinstance(manifest.get("confirmation_id"), str)
         or not str(manifest["confirmation_id"]).startswith("C-")
         or not isinstance(intervention, dict)
-        or set(intervention)
-        - {"kind", "blocks", "basis_ref", "basis_sha256", "action_kind"}
+        or set(intervention) - {"kind", "blocks", "basis_ref", "basis_sha256", "action_kind"}
         or (
             "supersedes_basis_sha256" in manifest
             and (
@@ -13968,6 +14125,424 @@ def evidence_payload_from_args(args: argparse.Namespace) -> dict[str, Any] | Non
     return parse_evidence_content(input_path.read_bytes())
 
 
+def evidence_capture_root(root: Path) -> Path:
+    """Return the project-local direct evidence store root."""
+    path = governance_root(root) / "evidence"
+    reject_symlink_components(root, path)
+    return path
+
+
+def evidence_capture_blob_path(root: Path, digest: str) -> Path:
+    """Return the content-addressed blob path for direct evidence capture."""
+    if SHA256_RE.fullmatch(digest) is None:
+        raise WorkctlError("EVIDENCE_CAPTURE_BLOB_DIGEST_INVALID")
+    return evidence_capture_root(root) / "blobs" / digest
+
+
+def evidence_capture_record_path(root: Path, digest: str) -> Path:
+    """Return the content-addressed metadata record path for direct evidence capture."""
+    if SHA256_RE.fullmatch(digest) is None:
+        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_DIGEST_INVALID")
+    return evidence_capture_root(root) / "records" / f"{digest}.json"
+
+
+def evidence_capture_ledger_path(root: Path) -> Path:
+    """Return the append-only direct evidence ledger path."""
+    return evidence_capture_root(root) / "ledger.ndjson"
+
+
+def normalize_capture_task(task_value: str | None) -> str | None:
+    """Normalize an optional task reference to a task ID."""
+    if task_value is None:
+        return None
+    normalized = task_value.removeprefix("task:")
+    if ENTRY_ID_PATTERNS["tasks"].fullmatch(normalized) is None:
+        raise WorkctlError("EVIDENCE_CAPTURE_TASK_INVALID")
+    return normalized
+
+
+def redact_capture_text(value: str) -> str:
+    """Apply conservative text redaction before evidence bytes are persisted."""
+    redacted = value
+    redacted = re.sub(
+        r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+",
+        "Bearer [REDACTED]",
+        redacted,
+    )
+    redacted = re.sub(r"\bsk-[A-Za-z0-9._-]+", "sk-[REDACTED]", redacted)
+    redacted = re.sub(r"\bAKIA[0-9A-Z]{16}\b", "AKIA[REDACTED]", redacted)
+    redacted = re.sub(
+        r"(?i)\b(api[_-]?key|authorization|password|secret|token)\s*[:=]\s*[^\s,;]+",
+        lambda match: f"{match.group(1)}=[REDACTED]",
+        redacted,
+    )
+    return redacted
+
+
+def redact_capture_bytes(content: bytes) -> tuple[bytes, bool]:
+    """Return persistable evidence bytes and whether the source was textual."""
+    if len(content) > EVIDENCE_CAPTURE_MAX_BYTES:
+        raise WorkctlError("EVIDENCE_CAPTURE_TOO_LARGE")
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        placeholder = {
+            "schema_version": 1,
+            "kind": "work-governance-binary-evidence-placeholder",
+            "source_sha256": sha256_bytes(content),
+            "source_size": len(content),
+            "redaction_note": "binary source was not persisted verbatim",
+        }
+        return (
+            json.dumps(placeholder, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n",
+            False,
+        )
+    return redact_capture_text(text).encode("utf-8"), True
+
+
+def read_capture_source(root: Path, args: argparse.Namespace) -> tuple[bytes, str, str | None]:
+    """Read direct evidence bytes from stdin or a project-local explicit file."""
+    raw_from_file = getattr(args, "from_file", None)
+    if isinstance(raw_from_file, str):
+        input_path = Path(raw_from_file)
+        candidate = input_path if input_path.is_absolute() else root / input_path
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise WorkctlError(f"PATH_OUTSIDE_PROJECT: {raw_from_file}") from exc
+        reject_symlink_components(root, candidate)
+        if candidate.is_symlink() or not candidate.is_file():
+            raise WorkctlError("EVIDENCE_CAPTURE_SOURCE_MISSING")
+        return candidate.read_bytes(), "file", relative_project_path(root, candidate)
+    return sys.stdin.buffer.read(), "stdin", None
+
+
+def capture_record_id(created_at: str) -> str:
+    """Create a collision-resistant evidence ID from time and a random suffix."""
+    compact_time = (
+        datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        .astimezone(UTC)
+        .strftime("%Y%m%dT%H%M%SZ")
+    )
+    return f"E-{compact_time}-{secrets.token_hex(6)}"
+
+
+def load_capture_records(root: Path) -> list[dict[str, Any]]:
+    """Load the direct evidence ledger for idempotency checks."""
+    path = evidence_capture_ledger_path(root)
+    if not path.exists():
+        return []
+    if path.is_symlink() or not path.is_file():
+        raise WorkctlError("EVIDENCE_CAPTURE_LEDGER_INVALID")
+    records: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            value: object = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise WorkctlError("EVIDENCE_CAPTURE_LEDGER_INVALID") from exc
+        if not isinstance(value, dict):
+            raise WorkctlError("EVIDENCE_CAPTURE_LEDGER_INVALID")
+        records.append(cast(dict[str, Any], value))
+    return records
+
+
+def append_capture_record(root: Path, record: Mapping[str, Any]) -> None:
+    """Append one canonical direct evidence record to the ledger."""
+    ledger = evidence_capture_ledger_path(root)
+    ensure_directory_durable(ledger.parent)
+    encoded = (
+        json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
+    ).encode("utf-8")
+    with ledger.open("ab") as handle:
+        handle.write(encoded)
+        handle.flush()
+        os.fsync(handle.fileno())
+    fsync_directory(ledger.parent)
+
+
+def verify_capture_record_file(root: Path, record: Mapping[str, Any]) -> tuple[str, str]:
+    """Verify the content-addressed metadata file named by a ledger record."""
+    ref = record.get("evidence_ref")
+    digest = record.get("evidence_sha256")
+    if not isinstance(ref, str) or not ref.startswith("evidence:"):
+        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_INVALID")
+    if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
+        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_INVALID")
+    expected_ref = f"evidence:{GOVERNANCE_DIR_NAME}/evidence/records/{digest}.json"
+    if ref != expected_ref:
+        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_INVALID")
+    record_path = evidence_capture_record_path(root, digest)
+    if record_path.is_symlink() or not record_path.is_file():
+        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_MISSING")
+    if sha256_file(record_path) != digest:
+        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_HASH_MISMATCH")
+    return ref, digest
+
+
+def find_capture_record_by_idempotency_key(
+    root: Path,
+    *,
+    plan_id: str,
+    key: str,
+) -> dict[str, Any] | None:
+    """Return the existing record for one idempotency key, if any."""
+    for record in load_capture_records(root):
+        if record.get("plan_id") == plan_id and record.get("idempotency_key") == key:
+            return record
+    return None
+
+
+def validate_capture_args(args: argparse.Namespace) -> str | None:
+    """Validate direct evidence capture arguments and return the normalized task."""
+    if getattr(args, "stdin", False) and getattr(args, "from_file", None) is not None:
+        raise WorkctlError("EVIDENCE_CAPTURE_SOURCE_CONFLICT")
+    if EVIDENCE_CAPTURE_KIND_RE.fullmatch(args.kind) is None:
+        raise WorkctlError("EVIDENCE_CAPTURE_KIND_INVALID")
+    if not isinstance(args.summary, str) or not args.summary.strip():
+        raise WorkctlError("EVIDENCE_CAPTURE_SUMMARY_REQUIRED")
+    if len(args.summary) > 512:
+        raise WorkctlError("EVIDENCE_CAPTURE_SUMMARY_TOO_LONG")
+    idempotency_key = getattr(args, "idempotency_key", None)
+    if (
+        idempotency_key is not None
+        and EVIDENCE_CAPTURE_IDEMPOTENCY_RE.fullmatch(idempotency_key) is None
+    ):
+        raise WorkctlError("EVIDENCE_CAPTURE_IDEMPOTENCY_KEY_INVALID")
+    return normalize_capture_task(args.task)
+
+
+def persist_capture_blob(root: Path, content: bytes) -> tuple[str, str, int]:
+    """Persist redacted direct evidence bytes as a content-addressed blob."""
+    digest = sha256_bytes(content)
+    blob = evidence_capture_blob_path(root, digest)
+    if blob.exists():
+        if blob.is_symlink() or blob.read_bytes() != content:
+            raise WorkctlError("EVIDENCE_CAPTURE_BLOB_CONFLICT")
+    else:
+        write_atomic_bytes(blob, content)
+    return f"evidence:{GOVERNANCE_DIR_NAME}/evidence/blobs/{digest}", digest, len(content)
+
+
+def persist_capture_metadata(root: Path, record: Mapping[str, Any]) -> tuple[str, str]:
+    """Persist direct evidence metadata as a content-addressed record."""
+    canonical = canonical_evidence_bytes(record)
+    digest = sha256_bytes(canonical)
+    target = evidence_capture_record_path(root, digest)
+    if target.exists():
+        if target.is_symlink() or target.read_bytes() != canonical:
+            raise WorkctlError("EVIDENCE_CAPTURE_RECORD_CONFLICT")
+    else:
+        write_atomic_bytes(target, canonical)
+    return f"evidence:{GOVERNANCE_DIR_NAME}/evidence/records/{digest}.json", digest
+
+
+def preflight_v5_capture_binding(
+    root: Path,
+    doc: PlanDocument,
+    *,
+    task_id: str,
+    expected_state_sequence: int | None,
+) -> None:
+    """Validate v5 task binding guards before durable evidence is written."""
+    v5_recover_pending_event(root, doc.frontmatter)
+    state = load_v5_state(root, doc.frontmatter)
+    if expected_state_sequence is not None and state["state_sequence"] != expected_state_sequence:
+        raise WorkctlError(
+            "STATE_SEQUENCE_MISMATCH: "
+            f"expected {expected_state_sequence}, found {state['state_sequence']}"
+        )
+    task_for(v5_runtime_frontmatter(root, doc.frontmatter, state), task_id)
+    state_tasks = state.get("tasks")
+    if not isinstance(state_tasks, dict):
+        raise WorkctlError("SCHEMA_V5_STATE_INVALID")
+    if not isinstance(state_tasks.get(task_id), dict):
+        raise WorkctlError("SCHEMA_V5_STATE_TASK_MISSING")
+
+
+def bind_v5_capture_record(
+    root: Path,
+    doc: PlanDocument,
+    *,
+    task_id: str,
+    record_ref: str,
+    record_id: str,
+    record_sha256: str,
+    blob_ref: str,
+    expected_state_sequence: int | None,
+) -> int:
+    """Bind direct evidence to a v5 task runtime state without touching the contract."""
+    v5_recover_pending_event(root, doc.frontmatter)
+    state = load_v5_state(root, doc.frontmatter)
+    if expected_state_sequence is not None and state["state_sequence"] != expected_state_sequence:
+        raise WorkctlError(
+            "STATE_SEQUENCE_MISMATCH: "
+            f"expected {expected_state_sequence}, found {state['state_sequence']}"
+        )
+    task_for(v5_runtime_frontmatter(root, doc.frontmatter, state), task_id)
+    state_tasks = state.get("tasks")
+    if not isinstance(state_tasks, dict):
+        raise WorkctlError("SCHEMA_V5_STATE_INVALID")
+    state_task = state_tasks.get(task_id)
+    if not isinstance(state_task, dict):
+        raise WorkctlError("SCHEMA_V5_STATE_TASK_MISSING")
+    evidence_refs = state_task.get("evidence_refs")
+    if not isinstance(evidence_refs, list) or not all(
+        isinstance(item, str) for item in evidence_refs
+    ):
+        evidence_refs = []
+        state_task["evidence_refs"] = evidence_refs
+    if record_ref in evidence_refs:
+        return int(state["state_sequence"])
+    evidence_sha256s = state_task.get("evidence_sha256s")
+    if not isinstance(evidence_sha256s, list) or not all(
+        isinstance(item, str) and SHA256_RE.fullmatch(item) is not None for item in evidence_sha256s
+    ):
+        evidence_sha256s = []
+        state_task["evidence_sha256s"] = evidence_sha256s
+    evidence_refs.append(record_ref)
+    evidence_sha256s.append(record_sha256)
+    v5_persist_state_transition(
+        root,
+        doc.frontmatter,
+        state,
+        event="evidence.captured",
+        subject=f"task:{task_id}",
+        payload={
+            "evidence_record_id": record_id,
+            "evidence_ref": record_ref,
+            "evidence_sha256": record_sha256,
+            "blob_ref": blob_ref,
+        },
+    )
+    return int(state["state_sequence"])
+
+
+def cmd_evidence_capture(args: argparse.Namespace) -> None:
+    """Directly capture command output or a project file into the evidence store."""
+    root = project_root()
+    task_id = validate_capture_args(args)
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        plan_id = str(doc.frontmatter["plan_id"])
+        if task_id is not None:
+            if doc.frontmatter.get("schema_version") == 5:
+                preflight_v5_capture_binding(
+                    root,
+                    doc,
+                    task_id=task_id,
+                    expected_state_sequence=args.expected_state_sequence,
+                )
+            else:
+                task_for(doc.frontmatter, task_id)
+        raw_content, source_type, source_ref = read_capture_source(root, args)
+        redacted_content, text_source = redact_capture_bytes(raw_content)
+        source_digest = sha256_bytes(redacted_content)
+        idempotency_key = getattr(args, "idempotency_key", None)
+        existing = (
+            find_capture_record_by_idempotency_key(
+                root,
+                plan_id=plan_id,
+                key=idempotency_key,
+            )
+            if isinstance(idempotency_key, str)
+            else None
+        )
+        state_sequence: int | None = None
+        if existing is not None:
+            if (
+                existing.get("source_digest") != source_digest
+                or existing.get("evidence_kind") != args.kind
+                or existing.get("summary") != redact_capture_text(args.summary.strip())
+                or existing.get("redaction_policy") != args.redaction_policy
+                or existing.get("task_ref") != (f"task:{task_id}" if task_id is not None else None)
+            ):
+                raise WorkctlError("EVIDENCE_CAPTURE_IDEMPOTENCY_CONFLICT")
+            existing_record = existing
+            record_ref, record_sha256 = verify_capture_record_file(root, existing_record)
+            if doc.frontmatter.get("schema_version") == 5 and task_id is not None:
+                state_sequence = bind_v5_capture_record(
+                    root,
+                    doc,
+                    task_id=task_id,
+                    record_ref=record_ref,
+                    record_id=str(existing_record["id"]),
+                    record_sha256=record_sha256,
+                    blob_ref=str(existing_record["blob_ref"]),
+                    expected_state_sequence=args.expected_state_sequence,
+                )
+            output = {
+                "id": existing_record["id"],
+                "evidence_ref": record_ref,
+                "evidence_sha256": record_sha256,
+                "blob_ref": existing_record["blob_ref"],
+                "source_digest": existing_record["source_digest"],
+                "plan_id": plan_id,
+                "idempotent": True,
+            }
+            if state_sequence is not None:
+                output["state_sequence"] = state_sequence
+            print(json.dumps(output, sort_keys=True))
+            return
+        blob_ref, blob_sha256, blob_size = persist_capture_blob(root, redacted_content)
+        created_at = utc_now()
+        record_id = capture_record_id(created_at)
+        if EVIDENCE_CAPTURE_ID_RE.fullmatch(record_id) is None:
+            raise WorkctlError("EVIDENCE_CAPTURE_ID_INVALID")
+        task_ref = f"task:{task_id}" if task_id is not None else None
+        new_record: dict[str, Any] = {
+            "schema_version": 1,
+            "kind": "work-governance-evidence-record",
+            "id": record_id,
+            "plan_id": plan_id,
+            "goal_ref": f"plan:{plan_id}",
+            "task_ref": task_ref,
+            "evidence_kind": args.kind,
+            "summary": redact_capture_text(args.summary.strip()),
+            "source_type": source_type,
+            "source_ref": source_ref,
+            "source_digest": source_digest,
+            "source_size": len(redacted_content),
+            "text_source": text_source,
+            "redaction_policy": args.redaction_policy,
+            "blob_ref": blob_ref,
+            "blob_sha256": blob_sha256,
+            "blob_size": blob_size,
+            "validator": "workctl:evidence.capture",
+            "result": "captured",
+            "created_at": created_at,
+        }
+        if isinstance(idempotency_key, str):
+            new_record["idempotency_key"] = idempotency_key
+        record_ref, record_sha256 = persist_capture_metadata(root, new_record)
+        ledger_record = {**new_record, "evidence_ref": record_ref, "evidence_sha256": record_sha256}
+        append_capture_record(root, ledger_record)
+        if doc.frontmatter.get("schema_version") == 5 and task_id is not None:
+            state_sequence = bind_v5_capture_record(
+                root,
+                doc,
+                task_id=task_id,
+                record_ref=record_ref,
+                record_id=record_id,
+                record_sha256=record_sha256,
+                blob_ref=blob_ref,
+                expected_state_sequence=args.expected_state_sequence,
+            )
+        output = {
+            "id": record_id,
+            "evidence_ref": record_ref,
+            "evidence_sha256": record_sha256,
+            "blob_ref": blob_ref,
+            "source_digest": source_digest,
+            "plan_id": plan_id,
+            "idempotent": False,
+        }
+        if state_sequence is not None:
+            output["state_sequence"] = state_sequence
+        print(json.dumps(output, sort_keys=True))
+
+
 def record_evidence_payload(
     root: Path,
     *,
@@ -14465,17 +15040,18 @@ def cmd_plan_activation_repair(args: argparse.Namespace) -> None:
         if task.get("completion_scope", "local") != "route":
             raise WorkctlError("ACTIVATION_REPAIR_ROUTE_TASK_REQUIRED")
         raw_tasks = doc.frontmatter.get("tasks")
-        route_gate_tasks = [
-            candidate
-            for candidate in raw_tasks
-            if isinstance(candidate, dict)
-            and candidate.get("completion_scope", "local") == "route"
-            and candidate.get("requires_confirmation") == old_confirmation_id
-        ] if isinstance(raw_tasks, list) else []
-        if (
-            len(route_gate_tasks) != 1
-            or route_gate_tasks[0].get("id") != args.task_id
-        ):
+        route_gate_tasks = (
+            [
+                candidate
+                for candidate in raw_tasks
+                if isinstance(candidate, dict)
+                and candidate.get("completion_scope", "local") == "route"
+                and candidate.get("requires_confirmation") == old_confirmation_id
+            ]
+            if isinstance(raw_tasks, list)
+            else []
+        )
+        if len(route_gate_tasks) != 1 or route_gate_tasks[0].get("id") != args.task_id:
             raise WorkctlError("ACTIVATION_REPAIR_ROUTE_TASK_AMBIGUOUS")
         route = doc.frontmatter.get("route")
         if (
@@ -17514,12 +18090,112 @@ def build_parser() -> argparse.ArgumentParser:
     help_command.add_argument(
         "workflow",
         nargs="?",
-        choices=["plan", "task", "evidence", "action", "migration"],
+        choices=[
+            "plan",
+            "task",
+            "evidence",
+            "action",
+            "migration",
+            "goal",
+            "gate",
+            "truth",
+            "review",
+        ],
     )
     help_command.set_defaults(func=cmd_workflow_help)
 
+    goal_command = sub.add_parser("goal")
+    goal_sub = goal_command.add_subparsers(dest="goal_action", required=True)
+    goal_init = goal_sub.add_parser("init")
+    goal_init.add_argument("--plan-id", required=True)
+    goal_init.add_argument("--title", required=True)
+    goal_init.add_argument("--mode", choices=["autonomous", "strict"], default="autonomous")
+    goal_init.set_defaults(func=cmd_plan_init)
+    goal_show = goal_sub.add_parser("show")
+    goal_show.set_defaults(func=cmd_goal_show)
+    goal_revise = goal_sub.add_parser("revise")
+    goal_revise.add_argument("--manifest", required=True)
+    goal_revise.set_defaults(func=cmd_plan_contract_revise)
+    goal_close = goal_sub.add_parser("close")
+    goal_close.add_argument("--expected-revision", type=int, required=True)
+    goal_close.add_argument("--evidence-manifest")
+    goal_close.add_argument("--finalize-route", action="store_true")
+    goal_close.add_argument("--confirmation")
+    add_current_intake_args(goal_close)
+    goal_close.set_defaults(func=cmd_plan_complete)
+
+    gate_command = sub.add_parser("gate")
+    gate_sub = gate_command.add_subparsers(dest="gate_action", required=True)
+    gate_list = gate_sub.add_parser("list")
+    gate_list.set_defaults(func=cmd_gate_list)
+    gate_check = gate_sub.add_parser("check")
+    gate_check.add_argument("--gate-id", required=True)
+    gate_check.set_defaults(func=cmd_gate_check)
+    gate_open = gate_sub.add_parser("open")
+    gate_open.add_argument("--confirmation-id", required=True)
+    gate_open.add_argument("--description", required=True)
+    gate_open.add_argument("--status", choices=["pending", "accepted"], default="pending")
+    gate_open.add_argument("--ref")
+    gate_open.add_argument("--intervention-kind", choices=sorted(INTERVENTION_KINDS), required=True)
+    gate_open.add_argument("--blocks", action="append", required=True)
+    gate_open.add_argument("--basis-ref", required=True)
+    gate_open.add_argument("--basis-sha256")
+    gate_open.add_argument("--action-kind", choices=sorted(HIGH_IMPACT_ACTION_KINDS))
+    gate_open.add_argument("--expected-revision", type=int, required=True)
+    gate_open.set_defaults(func=cmd_plan_confirmation_add)
+    for gate_action, decision in (("satisfy", "accepted"), ("waive", "declined")):
+        gate_decide = gate_sub.add_parser(gate_action)
+        gate_decide.add_argument("--confirmation-id", required=True)
+        gate_decide.add_argument("--ref", required=True)
+        gate_decide.add_argument("--evidence-sha256")
+        gate_decide.add_argument("--expected-revision", type=int, required=True)
+        add_current_intake_args(gate_decide)
+        gate_decide.set_defaults(
+            func=cmd_gate_satisfy if decision == "accepted" else cmd_gate_waive
+        )
+
+    truth_command = sub.add_parser("truth")
+    truth_sub = truth_command.add_subparsers(dest="truth_action", required=True)
+    truth_list = truth_sub.add_parser("list")
+    truth_list.set_defaults(func=cmd_truth_list)
+    truth_conflicts = truth_sub.add_parser("conflicts")
+    truth_conflicts.set_defaults(func=cmd_truth_conflicts)
+    for truth_action in ("add", "resolve"):
+        truth_edit = truth_sub.add_parser(truth_action)
+        truth_edit.add_argument("--manifest", required=True)
+        truth_edit.set_defaults(func=cmd_plan_contract_revise)
+
+    review_command = sub.add_parser("review")
+    review_sub = review_command.add_subparsers(dest="review_action", required=True)
+    review_request = review_sub.add_parser("request")
+    review_request.set_defaults(func=cmd_review_request)
+    review_status = review_sub.add_parser("status")
+    review_status.set_defaults(func=cmd_review_status)
+    review_attach = review_sub.add_parser("attach")
+    review_attach.add_argument("--manifest", required=True)
+    review_attach.add_argument("--expected-revision", type=int, required=True)
+    add_current_intake_args(review_attach)
+    review_attach.set_defaults(func=cmd_plan_independent_review_record)
+
     evidence_command = sub.add_parser("evidence")
     evidence_sub = evidence_command.add_subparsers(dest="evidence_action", required=True)
+    evidence_capture = evidence_sub.add_parser("capture")
+    evidence_capture.add_argument("--task")
+    evidence_capture.add_argument("--kind", required=True)
+    evidence_capture.add_argument("--summary", required=True)
+    evidence_capture.add_argument("--from-file")
+    evidence_capture.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read evidence bytes from standard input; stdin is also the default source.",
+    )
+    evidence_capture.add_argument(
+        "--redaction-policy",
+        default="default-secret-patterns-v1",
+    )
+    evidence_capture.add_argument("--idempotency-key")
+    evidence_capture.add_argument("--expected-state-sequence", type=int)
+    evidence_capture.set_defaults(func=cmd_evidence_capture)
     evidence_record = evidence_sub.add_parser("record")
     evidence_source = evidence_record.add_mutually_exclusive_group(required=True)
     evidence_source.add_argument("--manifest")
@@ -17991,6 +18667,14 @@ def command_mutates_state(args: argparse.Namespace) -> bool:
         return args.action not in {"status", "validate"}
     if args.domain in {"task", "log"}:
         return True
+    if args.domain == "goal":
+        return cast(str, args.goal_action) != "show"
+    if args.domain == "gate":
+        return cast(str, args.gate_action) not in {"list", "check"}
+    if args.domain == "truth":
+        return cast(str, args.truth_action) not in {"list", "conflicts"}
+    if args.domain == "review":
+        return cast(str, args.review_action) not in {"status", "request"}
     if args.domain != "plan":
         return False
     if args.action in {
@@ -18032,6 +18716,8 @@ def enforce_active_contract_gate(args: argparse.Namespace, root: Path) -> None:
             and args.contract_upgrade_action in {"apply", "recover"}
         )
     )
+    if args.domain == "gate" and args.gate_action in {"open", "satisfy", "waive"}:
+        allowed = True
     if args.domain == "migrate" and args.migration_action in {"apply", "recover"}:
         allowed = True
     if not allowed:
