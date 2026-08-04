@@ -7,6 +7,7 @@ from typing import Any
 import yaml
 from test_workctl import (
     init_plan,
+    read_plan,
     run_workctl,
     schema_v4_admission_plan,
     sha256_path,
@@ -197,3 +198,79 @@ def test_v5_runtime_transitions_keep_contract_bytes_and_redact_secrets(
         "sk-live-secret-fixture" not in path.read_text(encoding="utf-8")
         for path in evidence_files
     )
+
+
+def test_v5_status_and_scheduler_keep_blocked_work_visible_and_bounded(
+    tmp_path: Path,
+) -> None:
+    """A blocked task does not hide another ready task or expand compact status."""
+    prepare_v4_plan(tmp_path)
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["tasks"].append(
+        {
+            "id": "T-002",
+            "description": "A task intentionally blocked for the scheduler probe.",
+            "status": "blocked",
+            "unknowns": [],
+            "expected_evidence_delta": "The blocked state remains visible.",
+        }
+    )
+    write_plan(tmp_path, frontmatter, body)
+    run_workctl(
+        tmp_path,
+        "migrate",
+        "apply",
+        "--confirmation",
+        "C-MIGRATION-SCHEMA-V5",
+        "--expected-contract-revision",
+        "1",
+    )
+
+    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    assert len(json.dumps(status, ensure_ascii=False).encode("utf-8")) < 8 * 1024
+    assert status["ready"] == ["task:T-001"]
+    assert status["blocked"] == ["task:T-002"]
+    assert "revision_history" not in status
+
+    next_view = json.loads(run_workctl(tmp_path, "plan", "next").stdout)
+    assert next_view["current_task"] == "task:T-001"
+
+
+def test_v5_state_sequence_rejects_stale_transition_without_contract_change(
+    tmp_path: Path,
+) -> None:
+    """A stale runtime sequence fails closed while preserving the v5 contract bytes."""
+    prepare_v4_plan(tmp_path)
+    run_workctl(
+        tmp_path,
+        "migrate",
+        "apply",
+        "--confirmation",
+        "C-MIGRATION-SCHEMA-V5",
+        "--expected-contract-revision",
+        "1",
+    )
+    contract_path = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260723-001.md"
+    contract_before = contract_path.read_bytes()
+    run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-state-sequence",
+        "0",
+    )
+    stale = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-state-sequence",
+        "0",
+        check=False,
+    )
+    assert stale.returncode == 2
+    assert "STATE_SEQUENCE_MISMATCH" in stale.stderr
+    assert contract_path.read_bytes() == contract_before
