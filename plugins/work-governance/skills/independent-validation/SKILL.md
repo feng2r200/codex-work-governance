@@ -101,7 +101,7 @@ the exact `risk_acceptance_confirmation_id`; that ID must not exist when the
 review is recorded. Create the pending confirmation after the review and decide
 that exact ID through
 `plan confirm`. The controller never scans for or adopts another accepted
-confirmation. Schema-v4 `plan confirmation add` cannot pre-accept the decision.
+confirmation. Schema-v4/v5 `plan confirmation add` cannot pre-accept the decision.
 
 For a bootstrap Plan created by a controller that predates the review command,
 only exact canonical V/T evidence whose subject equals every declared mapped

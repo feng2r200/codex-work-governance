@@ -11,6 +11,7 @@ from typing import Any
 import yaml
 from test_workctl import (
     SCRIPT,
+    independent_validation_fixture,
     init_plan,
     read_plan,
     run_workctl,
@@ -337,6 +338,17 @@ def test_v5_apply_creates_backup_bundle_and_recovers_after_replace_interrupt(
     active = yaml.safe_load(read_active_plan_bytes(tmp_path).decode().split("---\n", 2)[1])
     assert active["schema_version"] == 5
 
+    bypass = run_without_receipt(
+        tmp_path,
+        "migrate",
+        "recover",
+        "--migration-id",
+        journal_path.parent.name,
+    )
+    assert bypass.returncode == 2
+    assert "BOOTSTRAP_RECEIPT_REQUIRED" in bypass.stderr
+    assert json.loads(journal_path.read_text(encoding="utf-8"))["status"] == "plan-replaced"
+
     recovered = run_workctl(
         tmp_path,
         "migrate",
@@ -418,6 +430,195 @@ def test_v5_runtime_transitions_keep_contract_bytes_and_redact_secrets(
     assert evidence_files
     assert all(
         "sk-live-secret-fixture" not in path.read_text(encoding="utf-8") for path in evidence_files
+    )
+
+
+def test_v5_task_advancement_preserves_independent_review_blockers(
+    tmp_path: Path,
+) -> None:
+    """A v5 blocked task cannot bypass review while unrelated ready work can proceed."""
+    prepare_v4_plan(tmp_path)
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["tasks"].append(
+        {
+            "id": "T-002",
+            "description": "Unblocked sibling task.",
+            "status": "pending",
+            "unknowns": [],
+            "expected_evidence_delta": "The sibling task can still progress.",
+        }
+    )
+    frontmatter["independent_validation"] = independent_validation_fixture()
+    write_plan(tmp_path, frontmatter, body)
+    run_workctl(
+        tmp_path,
+        "migrate",
+        "apply",
+        "--confirmation",
+        "C-MIGRATION-SCHEMA-V5",
+        "--expected-contract-revision",
+        "1",
+    )
+
+    blocked_start = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-state-sequence",
+        "0",
+        check=False,
+    )
+    blocked_skip = run_workctl(
+        tmp_path,
+        "task",
+        "skip",
+        "--task-id",
+        "T-001",
+        "--expected-state-sequence",
+        "0",
+        check=False,
+    )
+    sibling = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-002",
+        "--expected-state-sequence",
+        "0",
+    )
+
+    assert "INDEPENDENT_REVIEW_REQUIRED" in blocked_start.stderr
+    assert "INDEPENDENT_REVIEW_REQUIRED" in blocked_skip.stderr
+    assert "TASK_UPDATED T-002 in_progress state_sequence=1" in sibling.stdout
+
+
+def test_v5_task_advancement_preserves_artifact_blockers(tmp_path: Path) -> None:
+    """A v5 task cannot progress through suspect artifacts unless it owns recovery."""
+    prepare_v4_plan(tmp_path)
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["tasks"].append(
+        {
+            "id": "T-002",
+            "description": "Repair the suspect artifact.",
+            "status": "pending",
+            "unknowns": [],
+            "resolves_artifacts": ["A-001"],
+            "expected_evidence_delta": "The suspect artifact is repaired.",
+        }
+    )
+    frontmatter["artifacts"] = [{"id": "A-001", "path": "out.txt", "status": "pending"}]
+    write_plan(tmp_path, frontmatter, body)
+    run_workctl(
+        tmp_path,
+        "migrate",
+        "apply",
+        "--confirmation",
+        "C-MIGRATION-SCHEMA-V5",
+        "--expected-contract-revision",
+        "1",
+    )
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["artifacts"][0]["status"] = "suspect"
+    write_plan(tmp_path, frontmatter, body)
+
+    blocked = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-state-sequence",
+        "0",
+        check=False,
+    )
+    recovery = run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-002",
+        "--expected-state-sequence",
+        "0",
+    )
+
+    assert "BLOCKED_BY_ARTIFACT: A-001 is suspect" in blocked.stderr
+    assert "TASK_UPDATED T-002 in_progress state_sequence=1" in recovery.stdout
+
+
+def test_v5_task_verify_reads_evidence_manifest_path(tmp_path: Path) -> None:
+    """The documented --evidence-manifest path works for v5 task verification."""
+    prepare_v4_plan(tmp_path)
+    run_workctl(
+        tmp_path,
+        "migrate",
+        "apply",
+        "--confirmation",
+        "C-MIGRATION-SCHEMA-V5",
+        "--expected-contract-revision",
+        "1",
+    )
+    run_workctl(
+        tmp_path,
+        "task",
+        "start",
+        "--task-id",
+        "T-001",
+        "--expected-state-sequence",
+        "0",
+    )
+    evidence = {
+        "schema_version": 1,
+        "kind": "work-governance-evidence",
+        "plan_id": "PLAN-20260723-001",
+        "subject": "task:T-001",
+        "created_at": "2026-08-04T00:00:00Z",
+        "producer_ref": "runtime:test-schema-v5-manifest",
+        "items": [{"ref": "runtime:test-result", "sha256": "a" * 64}],
+    }
+    evidence_path = tmp_path / "task-evidence.json"
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+    wrong_subject = {**evidence, "subject": "validation:V-001"}
+    wrong_subject_path = tmp_path / "wrong-subject-evidence.json"
+    wrong_subject_path.write_text(json.dumps(wrong_subject), encoding="utf-8")
+
+    subject_blocked = run_workctl(
+        tmp_path,
+        "task",
+        "verify",
+        "--task-id",
+        "T-001",
+        "--expected-state-sequence",
+        "1",
+        "--evidence-manifest",
+        str(wrong_subject_path),
+        check=False,
+    )
+
+    assert "EVIDENCE_MANIFEST_SUBJECT_MISMATCH" in subject_blocked.stderr
+
+    verified = run_workctl(
+        tmp_path,
+        "task",
+        "verify",
+        "--task-id",
+        "T-001",
+        "--expected-state-sequence",
+        "1",
+        "--evidence-manifest",
+        str(evidence_path),
+    )
+
+    assert "TASK_UPDATED T-001 verified state_sequence=2" in verified.stdout
+    state_path = (
+        tmp_path / ".work-governance" / "runtime" / "plans" / "PLAN-20260723-001" / "state.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["tasks"]["T-001"]["status"] == "verified"
+    assert state["tasks"]["T-001"]["evidence_ref"].startswith(
+        "evidence:.work-governance/_Plan/.evidence/PLAN-20260723-001/"
     )
 
 
@@ -762,6 +963,51 @@ def test_v5_confirmation_requires_exact_current_turn_without_plan_intake(
     )
     assert replay.returncode == 2
     assert "INVALID_CONFIRMATION_TRANSITION" in replay.stderr
+
+
+def test_v5_confirmation_add_cannot_pre_accept_gate(tmp_path: Path) -> None:
+    """Schema-v5 accepted gates must be decided by plan confirm with the current turn."""
+    prepare_v4_plan(tmp_path)
+    run_workctl(
+        tmp_path,
+        "migrate",
+        "apply",
+        "--confirmation",
+        "C-MIGRATION-SCHEMA-V5",
+        "--expected-contract-revision",
+        "1",
+    )
+
+    fabricated = run_workctl(
+        tmp_path,
+        "plan",
+        "confirmation",
+        "add",
+        "--confirmation-id",
+        "C-V5-FABRICATED",
+        "--description",
+        "Fabricate an accepted v5 gate.",
+        "--intervention-kind",
+        "external_authority",
+        "--action-kind",
+        "production_change",
+        "--blocks",
+        "task:T-001",
+        "--basis-ref",
+        "project:fabricated-action",
+        "--basis-sha256",
+        "f" * 64,
+        "--status",
+        "accepted",
+        "--ref",
+        "user:not-current-turn",
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+
+    assert fabricated.returncode == 2
+    assert "CONFIRMATION_ACCEPTED_REQUIRES_PLAN_CONFIRM" in fabricated.stderr
 
 
 def test_high_impact_action_authorization_is_target_bound_and_single_use(

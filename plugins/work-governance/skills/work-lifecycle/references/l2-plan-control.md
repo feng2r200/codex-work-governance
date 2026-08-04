@@ -165,11 +165,11 @@ Allowed structural changes:
   install the strict Plan, and activate the index last.
 - `plan admit recover`: deterministically roll an interrupted admission
   forward. `plan init` is not a normal public admission path.
-- `plan confirmation add`: create a gate with `--intervention-kind`,
+- `plan confirmation add`: create a pending gate with `--intervention-kind`,
   repeatable exact `--blocks`, `--basis-ref`, and the digest required for
   Plan-contract or deviation decisions. A gate intended for `action authorize`
-  also carries the exact `--action-kind`. Schema v4 creates it only as pending;
-  accepted legacy records remain compatible.
+  also carries the exact `--action-kind`. Schema v4 and schema v5 create it
+  only as pending; accepted legacy records remain compatible.
 - `plan confirmation classify --manifest ...`: repair one legacy pending gate
   into the strict intervention contract. During the live-controller bootstrap
   only, it may also replace an accepted external-authority placeholder when
