@@ -110,8 +110,9 @@ def render_reference(parser: argparse.ArgumentParser) -> str:
         "<receipt-bound-workctl> <domain> <command> [options]",
         "```",
         "",
-        "Plan-controlled mutations also require the current turn receipt and "
-        "the expected contract/state guard appropriate to the command. "
+        "Mutable schema-v4 Plan commands and high-impact authorization require "
+        "the current turn receipt. Ordinary schema-v5 runtime commands use the "
+        "expected state guard without turn intake. "
         "`plan status`, `plan show`, queue views, `help`, and `migrate inspect` "
         "are read-only views.",
         "",

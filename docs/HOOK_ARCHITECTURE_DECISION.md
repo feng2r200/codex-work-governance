@@ -1,6 +1,7 @@
 # Hook architecture decision package
 
-Status: proposed; user confirmation required before implementation.
+Status: accepted for staged implementation. T-010 keeps both Hook registrations;
+the final deletion decision is deferred until all optimizations and validations finish.
 
 ## Decision question
 
@@ -39,11 +40,12 @@ Two compatibility/security constraints prevent immediate deletion:
 - Mutable schema-v4 Plan paths still call the current-turn intake gate. Removing the
   Hook would make those supported writes fail closed rather than provide a smooth
   dual-read transition.
-- Schema-v5 task state already avoids per-turn intake, but the candidate does not yet
-  expose a separate trusted action-authorization envelope for contract decisions and
-  remote, production, destructive, secret, or rollback actions. Expected revisions and
-  confirmation IDs prevent concurrency mistakes; by themselves they do not prove current
-  user intent.
+- Before T-010, schema-v5 task state already avoided per-turn intake but high-impact
+  authorization was incomplete. T-010 binds v5 Plan decisions to the exact trusted turn
+  and adds a short-lived `action authorize/consume` envelope for remote, production,
+  destructive, secret, and rollback actions. It binds kind, typed target, action digest,
+  a same-turn accepted Plan gate, session/turn, expiry, and one-time consumption without
+  storing raw commands or secrets.
 
 ## Options
 
@@ -67,9 +69,10 @@ Two compatibility/security constraints prevent immediate deletion:
    v4 Plans can be explicitly migrated or the v4 write surface is intentionally retired.
 4. Retain trusted current-turn provenance for structural contract decisions and
    immediate remote, production, destructive, secret, or substantive rollback
-   authorization. T-010 must add a target-bound action-authorization contract or keep
-   the existing receipt requirement on those exact commands; expected revisions alone
-   are insufficient.
+   authorization. Schema-v5 `plan confirm` now keeps the existing exact-turn requirement
+   without requiring schema-v4 intake; external actions use the one-shot envelope only
+   after an exact same-turn Plan confirmation is accepted.
+   Expected revisions alone remain insufficient.
 5. Delete `UserPromptSubmit` completely only when mutable v4 compatibility no longer
    depends on it and Codex exposes an equivalent trusted action-authorization input that
    binds user intent, session/turn identity, action target, expiry, and replay semantics.

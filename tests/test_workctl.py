@@ -88,8 +88,8 @@ def ensure_test_ready_receipt(
             "    *,\n"
             "    ref: str,\n"
             "    turn_receipt_sha256: str | None,\n"
-            ") -> None:\n"
-            '    """Bind a schema-v4 confirmation decision to the trusted current user turn."""\n'
+            ") -> dict[str, object]:\n"
+            '    """Bind a high-impact decision to the trusted current user turn."""\n'
         )
         if confirmation_ref_marker not in controller_source:
             raise AssertionError("test confirmation-turn patch marker drifted")
