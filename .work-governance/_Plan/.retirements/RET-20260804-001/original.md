@@ -2,11 +2,11 @@
 schema_version: 4
 plan_id: PLAN-20260801-002
 title: Work Governance flow alignment, reviewer availability, and atomic closeout
-status: retired
+status: active
 mode: autonomous
-revision: 22
+revision: 21
 created_at: '2026-08-01T08:46:41Z'
-updated_at: '2026-08-04T08:20:24+00:00'
+updated_at: '2026-08-04T08:16:02+00:00'
 goal:
   statement: Remove the confirmed work-flow friction around inserted user requirements,
     reviewer unavailability, controller-caused intake drift, and live-gate closeout;
@@ -149,18 +149,6 @@ confirmations:
     ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
     accepted_at: '2026-08-04T08:16:02+00:00'
     evidence_sha256: dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-  - id: C-PLAN-RETIREMENT
-    description: Approve retirement of the exact obsolete Plan without claiming completion.
-    status: accepted
-    ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    accepted_at: '2026-08-04T08:20:08Z'
-    evidence_sha256: ae3e8b956bee54d7479d60e300b02d7f1f8405f730cd2a13d875d810a6001f3e
-    intervention:
-      kind: external_authority
-      blocks:
-      - route
-      basis_ref: project:confirmation-basis/ae3e8b956bee54d7479d60e300b02d7f1f8405f730cd2a13d875d810a6001f3e
-      basis_sha256: ae3e8b956bee54d7479d60e300b02d7f1f8405f730cd2a13d875d810a6001f3e
 unknowns: []
 obligations:
 - id: O-001
@@ -475,13 +463,6 @@ revision_history:
   rationale: Record the explicit decision for C-GOAL-DRIVEN-LIGHT-2026.
   confirmation_id: C-GOAL-DRIVEN-LIGHT-2026
   decision_basis_sha256: 2b924ba2c57ae2af8eac49b2b5c2f2904b6db003a263e20b282c0a1bfa56fb99
-- revision: 22
-  kind: retirement
-  changed_at: '2026-08-04T08:20:24+00:00'
-  rationale: Supersede the stale flow-repair Plan after the current user authorized
-    the goal-driven light-governance implementation.
-  confirmation_id: C-PLAN-RETIREMENT
-  decision_basis_sha256: 2b924ba2c57ae2af8eac49b2b5c2f2904b6db003a263e20b282c0a1bfa56fb99
 intake:
   protocol_version: 2
   current:
@@ -502,134 +483,6 @@ intake:
     storage: project-local-immutable
     head_sha256: 899ec6e3a75060bf4ad1caf453a23c7063a5ecff86c655e50740277acc553424
     record_count: 3
-retirement:
-  retirement_id: RET-20260804-001
-  reason: Supersede the stale flow-repair Plan after the current user authorized the
-    goal-driven light-governance implementation.
-  retired_at: '2026-08-04T08:20:08Z'
-  proposal_sha256: ae3e8b956bee54d7479d60e300b02d7f1f8405f730cd2a13d875d810a6001f3e
-  original_path: .work-governance/_Plan/.retirements/RET-20260804-001/original.md
-  original_sha256: f970b6f2012f1f019aa6020c179be0b8ec30fc889a269e05ab7a1fe0bf1718d2
-  confirmation:
-    id: C-PLAN-RETIREMENT
-    ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    evidence_sha256: ae3e8b956bee54d7479d60e300b02d7f1f8405f730cd2a13d875d810a6001f3e
-  dispositions:
-    exclusions:
-    - description: Install, reinstall, enable, disable, or switch the live Work Governance
-        Plugin, marketplace registration, Codex configuration, or shared Plugin cache
-        before C-LIVE-1-0-7 is accepted for the exact immutable candidate.
-      disposition: superseded
-      reason: The old live-install exclusion remains preserved in the retired Plan
-        and is not acted upon
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    obligations:
-    - id: O-001
-      disposition: superseded
-      reason: Replaced by the new goal-driven contract
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    - id: O-002
-      disposition: superseded
-      reason: Replaced by the new goal-driven contract
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    - id: O-003
-      disposition: superseded
-      reason: Replaced by the new goal-driven contract
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    - id: O-004
-      disposition: superseded
-      reason: Replaced by the new goal-driven contract
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    - id: O-005
-      disposition: superseded
-      reason: Replaced by the new goal-driven contract
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    tasks:
-    - id: T-008
-      disposition: superseded
-      reason: The old live-install route is explicitly deferred and replaced by the
-        new local implementation route
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    validations:
-    - id: V-001
-      disposition: superseded
-      reason: Replaced by the new acceptance matrix
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    - id: V-002
-      disposition: superseded
-      reason: Replaced by the new acceptance matrix
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    - id: V-003
-      disposition: superseded
-      reason: Replaced by the new acceptance matrix
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    - id: V-004
-      disposition: superseded
-      reason: Replaced by the new acceptance matrix
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    - id: V-005
-      disposition: superseded
-      reason: Replaced by the new acceptance matrix
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    - id: V-006
-      disposition: superseded
-      reason: Replaced by the new acceptance matrix
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    - id: V-007
-      disposition: superseded
-      reason: Replaced by the new acceptance matrix
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    artifacts:
-    - id: A-001
-      disposition: superseded
-      reason: New implementation will establish fresh artifact evidence
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    - id: A-002
-      disposition: superseded
-      reason: New implementation will establish fresh artifact evidence
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    - id: A-003
-      disposition: superseded
-      reason: New implementation will establish fresh artifact evidence
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    - id: A-004
-      disposition: superseded
-      reason: New implementation will establish fresh artifact evidence
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    - id: A-005
-      disposition: superseded
-      reason: New implementation will establish fresh artifact evidence
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    - id: A-006
-      disposition: superseded
-      reason: New implementation will establish fresh artifact evidence
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    - id: A-007
-      disposition: superseded
-      reason: New implementation will establish fresh artifact evidence
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    confirmations:
-    - id: C-LIVE-1-0-7
-      disposition: superseded
-      reason: The old live gate is not reused for this implementation
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    delivery:
-      disposition: superseded
-      reason: The old delivery boundary is replaced by the new phased local delivery
-        boundary
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    activation:
-      disposition: superseded
-      reason: Live activation is not part of this implementation turn
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    route:
-      disposition: superseded
-      reason: The stale route is replaced by the goal-driven light-governance route
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
-    handoff:
-      disposition: superseded
-      reason: The successor Plan will carry the new implementation handoff
-      resolution_ref: user:session/019fcbd2-7d1e-7613-a612-10fc66b019ea/turn/019fcbd2-7e6a-7ed1-8cdc-5356721b1fda/sha256/dc01e20283aa73d62fdda74f579e58b3ef8a14c102aeefe20eaf55b66012759b
 ---
 # Work Governance flow alignment, reviewer availability, and atomic closeout
 

@@ -1,7 +1,7 @@
 schema_version: 1
-active_plan_id: PLAN-20260801-002
+active_plan_id: PLAN-20260804-001
 plans:
-- id: PLAN-20260801-002
-  path: PLAN-20260801-002.md
-  title: Work Governance flow alignment, reviewer availability, and atomic closeout
-  created_at: '2026-08-01T08:46:41Z'
+- id: PLAN-20260804-001
+  path: PLAN-20260804-001.md
+  title: Goal-driven light governance upgrade
+  created_at: '2026-08-04T08:22:00Z'
