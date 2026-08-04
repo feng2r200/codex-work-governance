@@ -77,6 +77,13 @@ TARGET_REF_RE = re.compile(
 ACTIVATION_TARGET_PLACEHOLDER_RE = re.compile(
     r"^(plugin:[A-Za-z0-9][A-Za-z0-9._-]*@[^@\s+]+\+codex\.)pending$"
 )
+LEGACY_ACTIVATION_TARGET_PLACEHOLDER_RE = re.compile(
+    r"^plugin:(?P<plugin>[A-Za-z0-9][A-Za-z0-9._-]*)@[^@\s+]+\.pending$"
+)
+EXACT_ACTIVATION_TARGET_RE = re.compile(
+    r"^plugin:(?P<plugin>[A-Za-z0-9][A-Za-z0-9._-]*)@"
+    r"[^@\s+]+\+codex\.(?P<cachebuster>[A-Za-z0-9][A-Za-z0-9._-]*)$"
+)
 ACTIVATION_CACHEBUSTER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 REFERENCE_RE = re.compile(
     r"^(user|project|git|runtime|evidence|handoff|codex-plugin-list|context|plugin):\S+$"
@@ -193,6 +200,7 @@ REVISION_KINDS = {
     "unknown-resolved",
     "intake-recorded",
     "controlled-transition",
+    "activation-contract-repaired",
     "independent-review-recorded",
     "retirement",
 }
@@ -6193,6 +6201,27 @@ def exact_activation_target_from_placeholder(
     return requested_target
 
 
+def exact_activation_repair_target(
+    current_target: object,
+    requested_target: object,
+) -> str:
+    """Validate one exact replacement for the bounded legacy target defect."""
+    if not isinstance(current_target, str):
+        raise WorkctlError("ACTIVATION_REPAIR_LEGACY_TARGET_REQUIRED")
+    legacy = LEGACY_ACTIVATION_TARGET_PLACEHOLDER_RE.fullmatch(current_target)
+    if legacy is None:
+        raise WorkctlError("ACTIVATION_REPAIR_LEGACY_TARGET_REQUIRED")
+    if not isinstance(requested_target, str):
+        raise WorkctlError("ACTIVATION_REPAIR_EXACT_TARGET_REQUIRED")
+    exact = EXACT_ACTIVATION_TARGET_RE.fullmatch(requested_target)
+    if exact is None or exact.group("plugin") != legacy.group("plugin"):
+        raise WorkctlError("ACTIVATION_REPAIR_EXACT_TARGET_REQUIRED")
+    cachebuster = exact.group("cachebuster")
+    if cachebuster == "pending" or ACTIVATION_CACHEBUSTER_RE.fullmatch(cachebuster) is None:
+        raise WorkctlError("ACTIVATION_REPAIR_EXACT_TARGET_REQUIRED")
+    return requested_target
+
+
 def decision_basis_projection(frontmatter: Mapping[str, Any]) -> dict[str, object]:
     """Project only contract and execution-structure fields that invalidate intake."""
 
@@ -11746,6 +11775,7 @@ def cmd_workflow_help(args: argparse.Namespace) -> None:
                 "plan ready",
                 "plan next",
                 "plan blocked",
+                "plan activation-repair",
             ],
             "note": "Contract edits require their existing confirmation and revision guards.",
         },
@@ -14340,6 +14370,136 @@ def activation_exclusions_to_resolve(
             raise WorkctlError(f"ACTIVATION_EXCLUSION_BINDING_MISMATCH: {description}")
         result.append(exclusion)
     return result
+
+
+def require_activation_repair_confirmation(
+    frontmatter: dict[str, Any],
+    *,
+    confirmation_id: str,
+    task_id: str,
+    target_ref: str,
+) -> dict[str, Any]:
+    """Require one exact accepted gate for the repaired live target contract."""
+    decision = require_matching_decision(
+        frontmatter,
+        confirmation_id,
+        confirmation_id,
+        {"accepted"},
+    )
+    intervention = decision.get("intervention")
+    expected_blocks = {f"task:{task_id}", "activation", "route"}
+    blocks = intervention.get("blocks") if isinstance(intervention, dict) else None
+    if (
+        not isinstance(intervention, dict)
+        or intervention.get("kind") != "external_authority"
+        or not isinstance(blocks, list)
+        or set(blocks) != expected_blocks
+        or len(blocks) != len(expected_blocks)
+        or intervention.get("basis_ref") != target_ref
+        or intervention.get("basis_sha256") != decision.get("evidence_sha256")
+        or not isinstance(decision.get("evidence_sha256"), str)
+        or SHA256_RE.fullmatch(str(decision["evidence_sha256"])) is None
+    ):
+        raise WorkctlError("ACTIVATION_REPAIR_CONFIRMATION_MISMATCH")
+    return decision
+
+
+def cmd_plan_activation_repair(args: argparse.Namespace) -> None:
+    """Atomically repair one accepted schema-v4 legacy activation contract."""
+    root = project_root()
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        require_expected_revision(doc.frontmatter, args.expected_revision)
+        if doc.frontmatter.get("schema_version") != 4:
+            raise WorkctlError("ACTIVATION_REPAIR_REQUIRES_SCHEMA_V4")
+        require_current_intake(
+            root,
+            doc.frontmatter,
+            turn_receipt_sha256=args.turn_receipt_sha256,
+            expected_intake_sha256=args.expected_intake_sha256,
+            targets=[f"task:{args.task_id}", "activation", "route"],
+        )
+        activation = doc.frontmatter.get("activation")
+        if not isinstance(activation, dict) or activation.get("status") != "pending_confirmation":
+            raise WorkctlError("ACTIVATION_REPAIR_PENDING_STATE_REQUIRED")
+        old_confirmation_id = activation.get("confirmation_id")
+        if not isinstance(old_confirmation_id, str):
+            raise WorkctlError("ACTIVATION_REPAIR_OLD_CONFIRMATION_REQUIRED")
+        if args.confirmation == old_confirmation_id:
+            raise WorkctlError("ACTIVATION_REPAIR_NEW_CONFIRMATION_REQUIRED")
+        require_matching_decision(
+            doc.frontmatter,
+            old_confirmation_id,
+            old_confirmation_id,
+            {"accepted"},
+        )
+        exact_target = exact_activation_repair_target(
+            activation.get("target_ref"),
+            args.target_ref,
+        )
+        session_receipt = session_receipt_for_turn(
+            root,
+            args.turn_receipt_sha256,
+            require_current_controller=True,
+        )
+        exact_match = EXACT_ACTIVATION_TARGET_RE.fullmatch(exact_target)
+        expected_target = (
+            f"plugin:{exact_match.group('plugin')}@{session_receipt.get('plugin_build')}"
+            if exact_match is not None
+            else None
+        )
+        if exact_target != expected_target:
+            raise WorkctlError("ACTIVATION_REPAIR_CONTROLLER_BUILD_MISMATCH")
+        decision = require_activation_repair_confirmation(
+            doc.frontmatter,
+            confirmation_id=args.confirmation,
+            task_id=args.task_id,
+            target_ref=exact_target,
+        )
+        task = task_for(doc.frontmatter, args.task_id)
+        if task.get("status") != "blocked":
+            raise WorkctlError("ACTIVATION_REPAIR_BLOCKED_TASK_REQUIRED")
+        if task.get("requires_confirmation") != old_confirmation_id:
+            raise WorkctlError("ACTIVATION_REPAIR_TASK_GATE_MISMATCH")
+        route = doc.frontmatter.get("route")
+        if (
+            not isinstance(route, dict)
+            or route.get("route_status") != "active"
+            or route.get("confirmation_gate") != old_confirmation_id
+        ):
+            raise WorkctlError("ACTIVATION_REPAIR_ROUTE_GATE_MISMATCH")
+        exclusions = activation_exclusions_to_resolve(doc.frontmatter, activation)
+        for exclusion in exclusions:
+            exclusion["confirmation_id"] = args.confirmation
+        activation["target_ref"] = exact_target
+        activation["confirmation_id"] = args.confirmation
+        task["requires_confirmation"] = args.confirmation
+        route["confirmation_gate"] = args.confirmation
+        contract = doc.frontmatter.get("contract")
+        if not isinstance(contract, dict) or type(contract.get("revision")) is not int:
+            raise WorkctlError("INVALID_PLAN_CONTRACT")
+        contract["revision"] = int(contract["revision"]) + 1
+        contract["confirmation_id"] = args.confirmation
+        contract["confirmed_ref"] = decision["ref"]
+        bump_revision(
+            doc.frontmatter,
+            kind="activation-contract-repaired",
+            rationale=(
+                f"Repair the legacy activation contract for {args.task_id} "
+                f"and freeze {exact_target}."
+            ),
+            confirmation_id=args.confirmation,
+        )
+        require_valid_candidate(doc)
+        require_strict_intervention_contract(doc.frontmatter)
+        if os.environ.get("WORKCTL_TEST_ACTIVATION_REPAIR_INTERRUPT") == "before-plan-write":
+            raise WorkctlError("ACTIVATION_REPAIR_TEST_INTERRUPTED_BEFORE_PLAN_WRITE")
+        write_atomic(doc.path, dump_plan(doc))
+        print(
+            f"ACTIVATION_CONTRACT_REPAIRED task={args.task_id} "
+            f"target={exact_target} revision={doc.frontmatter['revision']}"
+        )
 
 
 def cmd_plan_activation_promote(args: argparse.Namespace) -> None:
@@ -17734,6 +17894,13 @@ def build_parser() -> argparse.ArgumentParser:
     delivery_complete.add_argument("--expected-revision", type=int, required=True)
     add_current_intake_args(delivery_complete)
     delivery_complete.set_defaults(func=cmd_plan_delivery_complete)
+    activation_repair = plan_sub.add_parser("activation-repair")
+    activation_repair.add_argument("--task-id", required=True)
+    activation_repair.add_argument("--target-ref", required=True)
+    activation_repair.add_argument("--confirmation", required=True)
+    activation_repair.add_argument("--expected-revision", type=int, required=True)
+    add_current_intake_args(activation_repair)
+    activation_repair.set_defaults(func=cmd_plan_activation_repair)
     activation_promote = plan_sub.add_parser("activation-promote")
     activation_promote.add_argument(
         "--state",
