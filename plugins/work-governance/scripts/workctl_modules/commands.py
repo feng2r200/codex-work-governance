@@ -15,6 +15,7 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
             "plan ready",
             "plan next",
             "plan blocked",
+            "plan activation-repair",
         ],
         "note": "Contract edits require their existing confirmation and revision guards.",
     },

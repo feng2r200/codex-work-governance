@@ -2741,6 +2741,243 @@ def test_non_task_advancement_commands_enforce_their_exact_targets(tmp_path: Pat
         assert "INTAKE_TARGET_MISMATCH" in result.stderr, label
 
 
+def prepare_activation_repair_project(
+    tmp_path: Path,
+    *,
+    current_target: str = "plugin:work-governance@goal-driven.pending",
+    new_basis_ref: str | None = None,
+) -> tuple[Path, str, str, str]:
+    """Prepare the exact accepted-gate bootstrap defect for repair tests."""
+    project, session_id = prepare_admitted_project(tmp_path)
+    receipt = read_json_object(project / ".work-governance" / "bootstrap-state.json")
+    exact_target = f"plugin:work-governance@{receipt['plugin_build']}"
+    gate_basis_ref = new_basis_ref or exact_target
+    plan_id = "PLAN-20260729-001"
+    frontmatter = read_plan_frontmatter(project, plan_id)
+    required = cast(
+        list[dict[str, object]],
+        cast(dict[str, object], frontmatter["confirmations"])["required"],
+    )
+    required.extend(
+        [
+            {
+                "id": "C-LIVE-OLD",
+                "description": "Previously accepted malformed live target.",
+                "status": "accepted",
+                "ref": "user:test-old-live",
+                "accepted_at": "2026-08-04T10:00:00Z",
+                "evidence_sha256": "a" * 64,
+                "intervention": {
+                    "kind": "external_authority",
+                    "blocks": ["task:T-001", "activation", "route"],
+                    "basis_ref": "plugin:work-governance@1.0.7+codex.old",
+                    "basis_sha256": "a" * 64,
+                },
+            },
+            {
+                "id": "C-LIVE-REPAIRED",
+                "description": "Accept the exact repaired Plugin candidate.",
+                "status": "accepted",
+                "ref": "user:test-repaired-live",
+                "accepted_at": "2026-08-04T11:00:00Z",
+                "evidence_sha256": "b" * 64,
+                "intervention": {
+                    "kind": "external_authority",
+                    "blocks": ["task:T-001", "activation", "route"],
+                    "basis_ref": gate_basis_ref,
+                    "basis_sha256": "b" * 64,
+                },
+            },
+        ]
+    )
+    task = cast(list[dict[str, object]], frontmatter["tasks"])[0]
+    task["status"] = "blocked"
+    task["completion_scope"] = "route"
+    task["requires_confirmation"] = "C-LIVE-OLD"
+    frontmatter["scope"] = {
+        "include": ["Test intake."],
+        "exclude": [
+            {
+                "description": "Do not switch the live Plugin before confirmation.",
+                "disposition": "pending_confirmation",
+                "confirmation_id": "C-LIVE-OLD",
+            }
+        ],
+    }
+    frontmatter["activation"] = {
+        "status": "pending_confirmation",
+        "current_ref": "plugin:work-governance@1.0.7+codex.old",
+        "target_ref": current_target,
+        "confirmation_id": "C-LIVE-OLD",
+    }
+    frontmatter["route"] = {
+        "route_status": "active",
+        "slice_status": "activation-repair",
+        "next_phase": "Repair the exact legacy contract.",
+        "validation_standard": "Every live surface uses one accepted exact-build gate.",
+        "confirmation_gate": "C-LIVE-OLD",
+    }
+    write_plan_frontmatter(project, plan_id, frontmatter)
+    _proposal, _manifest, turn_sha256 = issue_intake(
+        project,
+        session_id=session_id,
+        turn_id="turn-activation-repair",
+        decision="proceed",
+        targets=["task:T-001", "activation", "route"],
+        expected_revision=1,
+    )
+    recorded = read_plan_frontmatter(project, plan_id)
+    intake_sha256 = cast(str, intake_records_for_assertion(recorded)[-1]["record_sha256"])
+    return project, turn_sha256, intake_sha256, exact_target
+
+
+def test_activation_repair_atomically_rebinds_exact_contract(tmp_path: Path) -> None:
+    """The dedicated repair moves every live surface to one exact accepted gate."""
+    project, turn_sha256, intake_sha256, exact_target = prepare_activation_repair_project(
+        tmp_path
+    )
+
+    repaired = run_controller(
+        project,
+        "plan",
+        "activation-repair",
+        "--task-id",
+        "T-001",
+        "--target-ref",
+        exact_target,
+        "--confirmation",
+        "C-LIVE-REPAIRED",
+        "--expected-revision",
+        "2",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+    )
+    frontmatter = read_plan_frontmatter(project, "PLAN-20260729-001")
+    task = cast(list[dict[str, object]], frontmatter["tasks"])[0]
+    scope = cast(dict[str, object], frontmatter["scope"])
+    exclusion = cast(list[dict[str, object]], scope["exclude"])[0]
+    activation = cast(dict[str, object], frontmatter["activation"])
+    route = cast(dict[str, object], frontmatter["route"])
+    contract = cast(dict[str, object], frontmatter["contract"])
+
+    assert "ACTIVATION_CONTRACT_REPAIRED" in repaired.stdout
+    assert frontmatter["revision"] == 3
+    assert contract["revision"] == 2
+    assert contract["confirmation_id"] == "C-LIVE-REPAIRED"
+    assert contract["confirmed_ref"] == "user:test-repaired-live"
+    assert task["status"] == "blocked"
+    assert task["requires_confirmation"] == "C-LIVE-REPAIRED"
+    assert exclusion["confirmation_id"] == "C-LIVE-REPAIRED"
+    assert activation["target_ref"] == exact_target
+    assert activation["confirmation_id"] == "C-LIVE-REPAIRED"
+    assert route["confirmation_gate"] == "C-LIVE-REPAIRED"
+    history = cast(list[dict[str, object]], frontmatter["revision_history"])
+    assert history[-1]["kind"] == "activation-contract-repaired"
+
+
+def test_activation_repair_rejects_gate_drift_without_plan_write(tmp_path: Path) -> None:
+    """A target not bound by the new gate leaves the old Plan bytes unchanged."""
+    project, turn_sha256, intake_sha256, exact_target = prepare_activation_repair_project(
+        tmp_path,
+        new_basis_ref="plugin:work-governance@1.0.7+codex.different",
+    )
+    plan = project / ".work-governance" / "_Plan" / "PLAN-20260729-001.md"
+    before = plan.read_bytes()
+
+    rejected = run_controller(
+        project,
+        "plan",
+        "activation-repair",
+        "--task-id",
+        "T-001",
+        "--target-ref",
+        exact_target,
+        "--confirmation",
+        "C-LIVE-REPAIRED",
+        "--expected-revision",
+        "2",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+        check=False,
+    )
+
+    assert rejected.returncode == 2
+    assert "ACTIVATION_REPAIR_CONFIRMATION_MISMATCH" in rejected.stderr
+    assert plan.read_bytes() == before
+
+
+def test_activation_repair_interruption_preserves_old_plan(tmp_path: Path) -> None:
+    """A pre-replace process interruption preserves the complete old Plan bytes."""
+    project, turn_sha256, intake_sha256, exact_target = prepare_activation_repair_project(
+        tmp_path
+    )
+    plan = project / ".work-governance" / "_Plan" / "PLAN-20260729-001.md"
+    before = plan.read_bytes()
+
+    interrupted = run_controller(
+        project,
+        "plan",
+        "activation-repair",
+        "--task-id",
+        "T-001",
+        "--target-ref",
+        exact_target,
+        "--confirmation",
+        "C-LIVE-REPAIRED",
+        "--expected-revision",
+        "2",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+        check=False,
+        env={"WORKCTL_TEST_ACTIVATION_REPAIR_INTERRUPT": "before-plan-write"},
+    )
+
+    assert interrupted.returncode == 2
+    assert "ACTIVATION_REPAIR_TEST_INTERRUPTED_BEFORE_PLAN_WRITE" in interrupted.stderr
+    assert plan.read_bytes() == before
+
+
+def test_activation_repair_rejects_canonical_target_without_plan_write(
+    tmp_path: Path,
+) -> None:
+    """Canonical placeholders stay on activation-promote instead of the repair path."""
+    project, turn_sha256, intake_sha256, exact_target = prepare_activation_repair_project(
+        tmp_path,
+        current_target="plugin:work-governance@1.0.7+codex.pending",
+    )
+    plan = project / ".work-governance" / "_Plan" / "PLAN-20260729-001.md"
+    before = plan.read_bytes()
+
+    rejected = run_controller(
+        project,
+        "plan",
+        "activation-repair",
+        "--task-id",
+        "T-001",
+        "--target-ref",
+        exact_target,
+        "--confirmation",
+        "C-LIVE-REPAIRED",
+        "--expected-revision",
+        "2",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+        check=False,
+    )
+
+    assert rejected.returncode == 2
+    assert "ACTIVATION_REPAIR_LEGACY_TARGET_REQUIRED" in rejected.stderr
+    assert plan.read_bytes() == before
+
+
 def test_activation_start_binds_exact_target_before_runtime_evidence(tmp_path: Path) -> None:
     """An accepted activation gate may replace a placeholder only before activation."""
     project, session_id = prepare_admitted_project(tmp_path)

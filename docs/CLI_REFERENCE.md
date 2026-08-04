@@ -47,6 +47,7 @@ Migration is explicit, backed up, and recovery-bound.
 - `plan ready`
 - `plan next`
 - `plan blocked`
+- `plan activation-repair`
 
 Contract edits require their existing confirmation and revision guards.
 
@@ -285,6 +286,26 @@ options:
   --evidence-manifest EVIDENCE_MANIFEST
   --evidence-ref EVIDENCE_REF
   --evidence-sha256 EVIDENCE_SHA256
+  --expected-revision EXPECTED_REVISION
+  --turn-receipt-sha256 TURN_RECEIPT_SHA256
+  --expected-intake-sha256 EXPECTED_INTAKE_SHA256
+```
+
+### `plan activation-repair`
+
+```text
+usage: workctl plan activation-repair [-h] --task-id TASK_ID
+                                      --target-ref TARGET_REF
+                                      --confirmation CONFIRMATION
+                                      --expected-revision EXPECTED_REVISION
+                                      [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
+                                      [--expected-intake-sha256 EXPECTED_INTAKE_SHA256]
+
+options:
+  -h, --help            show this help message and exit
+  --task-id TASK_ID
+  --target-ref TARGET_REF
+  --confirmation CONFIRMATION
   --expected-revision EXPECTED_REVISION
   --turn-receipt-sha256 TURN_RECEIPT_SHA256
   --expected-intake-sha256 EXPECTED_INTAKE_SHA256

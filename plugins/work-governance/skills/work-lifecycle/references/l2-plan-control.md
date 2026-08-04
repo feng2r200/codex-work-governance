@@ -312,6 +312,17 @@ Allowed structural changes:
   activation confirmation; multiple matches fail closed. Gate acceptance alone
   never resolves an exclusion. Generic Plan patches and the active transition
   cannot rebind that target.
+- `plan activation-repair`: repair only the bounded schema-v4 bootstrap defect
+  where an already-accepted live gate points at a malformed legacy Plugin
+  placeholder. The command requires a newly accepted external-authority gate
+  whose exact build basis and blocks match the owning route task, activation,
+  and route. It atomically freezes that build and rebinds the activation, task,
+  pending exclusion, and route gates while preserving the old decision as
+  history. The target must also equal the current trusted SessionStart
+  controller build. Canonical `+codex.pending` targets, non-blocked tasks,
+  mismatched Plugin identities or controller builds, incomplete gates, and
+  stale intake or revisions fail closed; normal activation evidence equality
+  remains unchanged.
 - When an undecided external-authority gate was created before its immutable
   candidate existed, re-run `plan confirmation classify` with the exact same
   `kind` and `blocks`, the previous `supersedes_basis_sha256`, and a changed
