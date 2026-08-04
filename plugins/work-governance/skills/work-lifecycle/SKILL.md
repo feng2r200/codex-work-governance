@@ -151,9 +151,10 @@ Explore first when the missing fact is discoverable within the Agent's safe
 boundary. Promote the result to a Plan unknown only when it blocks a named
 target or proves a material contract decision is needed. Use the bounded
 `plan status` view for routine progress; pass `--full` only when history or
-closeout detail is needed. Use `plan evidence record --stdin` and
-`task verify --evidence-stdin` for small structured evidence objects so a
-temporary manifest is not required.
+closeout detail is needed. Use `evidence capture --task T-001 --kind ...`
+for command output or project-local artifact capture, and use
+`plan evidence record --stdin` or `task verify --evidence-stdin` for small
+structured compatibility evidence objects.
 
 The public command aliases are generated from the controller parser. Use
 `docs/CLI_REFERENCE.md` in the repository for the complete option surface and

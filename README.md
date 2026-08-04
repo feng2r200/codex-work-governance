@@ -1,10 +1,17 @@
 # Work Governance Plugin
 
-Work Governance is a Codex plugin that governs a task from intake through
-planning, execution, evidence review, independent validation, and handoff.
+Work Governance is a Codex plugin that helps Codex move from an idea or
+unclear request to exploration, goal clarification, an auditable plan,
+execution, correction, validation, and handoff. The 1.1.0 candidate keeps the
+plugin goal-driven: Plan, Skill, script, and Hook behavior support the user
+goal instead of turning every turn into a heavy governance ritual.
 
 The repository-local marketplace is `.agents/plugins/marketplace.json` and the
 plugin source is `plugins/work-governance`.
+
+This repository can prepare a local 1.1.0 candidate, but candidate preparation
+does not install, enable, or switch the user's live Codex plugin. Live
+activation remains blocked on `CONFIRM_ACTIVATE_WORK_GOVERNANCE_1_1_0`.
 
 ## Skills
 
@@ -197,7 +204,11 @@ No-Plan answers remain ephemeral and create no Plan, index, or project log.
 
 ## Controller
 
-The stable high-frequency workflow surface is available through
+The public CLI entrypoint is the Bash wrapper
+`plugins/work-governance/scripts/workctl`; it routes to the receipt-bound
+private Python transaction engine. In a governed session, use the exact
+controller path and receipt emitted by SessionStart. The stable
+high-frequency workflow surface is available through
 `<receipt-bound-workctl> help <workflow>`. The complete parser-generated
 command and option reference is [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md);
 regenerate it after changing `build_parser()`:
@@ -258,6 +269,30 @@ Non-simple No-Plan work keeps only the current runtime receipt and visible
 reply; it does not call the Plan controller or persist an intake record.
 Intake rationale records only a minimal decision summary; never copy raw prompt
 content, credentials, tokens, or other secrets into the Plan.
+
+Direct evidence capture does not require the model to hand-author an evidence
+manifest. The controller reads stdin or a project-local file, applies
+conservative redaction, writes the redacted bytes to
+`.work-governance/evidence/blobs/<sha256>`, writes content-addressed metadata
+to `.work-governance/evidence/records/<sha256>.json`, appends metadata to
+`.work-governance/evidence/ledger.ndjson`, and returns an `evidence_ref`.
+For schema-v5 Plans, task-bound capture updates only runtime state and event
+ledger entries; it does not rewrite the Plan contract:
+
+```sh
+some_command | <receipt-bound-workctl> evidence capture \
+  --task T-001 \
+  --kind command-output \
+  --summary "focused validation output" \
+  --idempotency-key task-T-001-validation
+
+<receipt-bound-workctl> evidence capture \
+  --task T-001 \
+  --kind artifact \
+  --summary "generated validation report" \
+  --from-file reports/validation.json \
+  --expected-state-sequence 3
+```
 
 Protocol-v2 Plans keep one bounded `intake.current` anchor and a history head
 plus count. Complete canonical records are stored as ignored,

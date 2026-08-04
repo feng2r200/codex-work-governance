@@ -20,9 +20,7 @@ HOOKS_CONFIG = PLUGIN_ROOT / "hooks" / "hooks.json"
 SESSION_HOOK = PLUGIN_ROOT / "hooks" / "session_start.py"
 TURN_HOOK = PLUGIN_ROOT / "hooks" / "user_prompt_submit.py"
 WORKCTL = PLUGIN_ROOT / "scripts" / "workctl.py"
-STOCKLENS_REPLAY = (
-    REPOSITORY_ROOT / "tests" / "fixtures" / "stocklens_goal_driven_replay.json"
-)
+STOCKLENS_REPLAY = REPOSITORY_ROOT / "tests" / "fixtures" / "stocklens_goal_driven_replay.json"
 
 
 def sha256_bytes(payload: bytes) -> str:
@@ -1236,7 +1234,7 @@ def test_same_session_resumes_on_candidate_after_older_build_receipt(
     hook_specific = cast(dict[str, object], resumed["hookSpecificOutput"])
     context = cast(str, hook_specific["additionalContext"])
 
-    assert candidate_build.startswith("1.0.7+codex.")
+    assert candidate_build.startswith("1.1.0+codex.")
     assert old_receipt["plugin_build"] == "1.0.6+codex.old-session-probe"
     assert candidate_receipt["plugin_build"] == candidate_build
     assert session_path.read_bytes() != old_receipt_bytes
@@ -2841,9 +2839,7 @@ def prepare_activation_repair_project(
 
 def test_activation_repair_atomically_rebinds_exact_contract(tmp_path: Path) -> None:
     """The dedicated repair moves every live surface to one exact accepted gate."""
-    project, turn_sha256, intake_sha256, exact_target = prepare_activation_repair_project(
-        tmp_path
-    )
+    project, turn_sha256, intake_sha256, exact_target = prepare_activation_repair_project(tmp_path)
 
     repaired = run_controller(
         project,
@@ -2920,9 +2916,7 @@ def test_activation_repair_rejects_gate_drift_without_plan_write(tmp_path: Path)
 
 def test_activation_repair_interruption_preserves_old_plan(tmp_path: Path) -> None:
     """A pre-replace process interruption preserves the complete old Plan bytes."""
-    project, turn_sha256, intake_sha256, exact_target = prepare_activation_repair_project(
-        tmp_path
-    )
+    project, turn_sha256, intake_sha256, exact_target = prepare_activation_repair_project(tmp_path)
     plan = project / ".work-governance" / "_Plan" / "PLAN-20260729-001.md"
     before = plan.read_bytes()
 

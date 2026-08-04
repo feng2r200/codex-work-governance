@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+project_root="${WORK_GOVERNANCE_PROJECT_ROOT:-}"
+if [[ -z "${project_root}" ]]; then
+  if git_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+    project_root="${git_root}"
+  else
+    project_root="$(pwd -P)"
+  fi
+fi
+
+uv_bin="${UV:-uv}"
+cache_dir="${WORK_GOVERNANCE_UV_CACHE_DIR:-${project_root}/.work-governance/cache/uv}"
+
+exec "${uv_bin}" run --no-project --offline --cache-dir "${cache_dir}" \
+  --no-python-downloads --script "${script_dir}/workctl.py" "$@"

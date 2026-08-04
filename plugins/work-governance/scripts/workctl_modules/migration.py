@@ -100,7 +100,7 @@ def build_v5_contract(frontmatter: Mapping[str, Any]) -> dict[str, Any]:
     base = f".work-governance/runtime/plans/{plan_id}"
     contract["state_ref"] = f"runtime:{base}/state.json"
     contract["event_ref"] = f"runtime:{base}/events.jsonl"
-    contract["evidence_store_ref"] = f"evidence:.work-governance/_Plan/.evidence/{plan_id}"
+    contract["evidence_store_ref"] = "evidence:.work-governance/evidence"
     goal = contract.get("goal")
     if "success_criteria" not in contract:
         contract["success_criteria"] = deepcopy(
