@@ -272,9 +272,10 @@ Allowed structural changes:
 - `plan confirm`: resolve a pending gate as `accepted` or `declined` with a
   typed authority reference and the exact basis digest. Generic Plan patches
   cannot edit confirmations, unclassified gates cannot decide, and a pending
-  basis placeholder cannot authorize work. Schema-v4 decisions must also bind
-  the trusted current turn, a current intake covering every blocked target,
-  and the current turn's exact `request_ref`.
+  basis placeholder cannot authorize work. Schema-v4 and schema-v5 decisions bind
+  the trusted current turn and its exact `request_ref`; schema v4 additionally
+  requires current intake covering every blocked target. Schema-v5 confirmation
+  revisions are recorded in the event ledger without changing runtime state sequence.
 - `plan independent-review record --manifest ...`: record one isolated
   `plan_challenge`, `artifact_review`, or `evidence_audit` against exact
   contract and artifact digests. This is the only command allowed to migrate a

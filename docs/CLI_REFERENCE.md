@@ -10,9 +10,17 @@ Use the exact receipt-bound controller emitted by SessionStart. The placeholder 
 <receipt-bound-workctl> <domain> <command> [options]
 ```
 
-Plan-controlled mutations also require the current turn receipt and the expected contract/state guard appropriate to the command. `plan status`, `plan show`, queue views, `help`, and `migrate inspect` are read-only views.
+Mutable schema-v4 Plan commands and high-impact authorization require the current turn receipt. Ordinary schema-v5 runtime commands use the expected state guard without turn intake. `plan status`, `plan show`, queue views, `help`, and `migrate inspect` are read-only views.
 
 ## Stable workflow aliases
+
+### `action`
+
+- `action authorize`
+- `action consume`
+- `action status`
+
+High-impact authority is current-turn, target, digest, expiry, and single-consumption bound.
 
 ### `evidence`
 
@@ -50,9 +58,61 @@ Contract edits require their existing confirmation and revision guards.
 - `task verify [--evidence-stdin]`
 - `task reprioritize`
 
-Task transitions remain receipt-bound and dependency-checked.
+Schema-v5 runtime transitions use state_sequence and task gates without current-turn intake; mutable v4 transitions retain their turn binding.
 
 ## Parser command reference
+
+### `action authorize`
+
+```text
+usage: workctl action authorize [-h]
+                                --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+                                --target-ref TARGET_REF
+                                --action-sha256 ACTION_SHA256
+                                --confirmation-id CONFIRMATION_ID --ref REF
+                                --turn-receipt-sha256 TURN_RECEIPT_SHA256
+                                [--ttl-seconds TTL_SECONDS]
+
+options:
+  -h, --help            show this help message and exit
+  --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+  --target-ref TARGET_REF
+  --action-sha256 ACTION_SHA256
+  --confirmation-id CONFIRMATION_ID
+  --ref REF
+  --turn-receipt-sha256 TURN_RECEIPT_SHA256
+  --ttl-seconds TTL_SECONDS
+```
+
+### `action consume`
+
+```text
+usage: workctl action consume [-h] --authorization-id AUTHORIZATION_ID
+                              --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+                              --target-ref TARGET_REF
+                              --action-sha256 ACTION_SHA256
+                              --turn-receipt-sha256 TURN_RECEIPT_SHA256
+                              --consumer-ref CONSUMER_REF
+
+options:
+  -h, --help            show this help message and exit
+  --authorization-id AUTHORIZATION_ID
+  --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+  --target-ref TARGET_REF
+  --action-sha256 ACTION_SHA256
+  --turn-receipt-sha256 TURN_RECEIPT_SHA256
+  --consumer-ref CONSUMER_REF
+```
+
+### `action status`
+
+```text
+usage: workctl action status [-h] --authorization-id AUTHORIZATION_ID
+
+options:
+  -h, --help            show this help message and exit
+  --authorization-id AUTHORIZATION_ID
+```
 
 ### `evidence record`
 
@@ -68,10 +128,10 @@ options:
 ### `help`
 
 ```text
-usage: workctl help [-h] [{plan,task,evidence,migration}]
+usage: workctl help [-h] [{plan,task,evidence,action,migration}]
 
 positional arguments:
-  {plan,task,evidence,migration}
+  {plan,task,evidence,action,migration}
 
 options:
   -h, --help            show this help message and exit

@@ -26,7 +26,10 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
             "task verify [--evidence-stdin]",
             "task reprioritize",
         ],
-        "note": "Task transitions remain receipt-bound and dependency-checked.",
+        "note": (
+            "Schema-v5 runtime transitions use state_sequence and task gates without "
+            "current-turn intake; mutable v4 transitions retain their turn binding."
+        ),
     },
     "evidence": {
         "commands": [
@@ -34,6 +37,13 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
             "plan evidence record --manifest PATH|--stdin",
         ],
         "note": "Evidence is bounded, canonical, content-addressed, and redaction-safe.",
+    },
+    "action": {
+        "commands": ["action authorize", "action consume", "action status"],
+        "note": (
+            "High-impact authority is current-turn, target, digest, expiry, and "
+            "single-consumption bound."
+        ),
     },
     "migration": {
         "commands": ["migrate inspect", "migrate apply", "migrate recover"],

@@ -233,7 +233,7 @@ described above is a separate fail-closed channel for SessionStart layout
 mutation and never satisfies this READY requirement.
 
 For each non-simple request, show a fresh `proceed`, `explore`, or `ask`
-decision. Plan-controlled work also generates and records it:
+decision. Mutable schema-v4 Plan work also generates and records it:
 
 ```sh
 <receipt-bound-workctl> intake receipt \
@@ -244,10 +244,16 @@ decision. Plan-controlled work also generates and records it:
   --manifest /path/to/intake.json --expected-revision <revision>
 ```
 
-Advancing commands also require `--turn-receipt-sha256` and
+Schema-v4 advancing commands also require `--turn-receipt-sha256` and
 `--expected-intake-sha256`. The latest record must match the current request,
 decision basis, and every exact command target. `route` covers all targets;
 other target types do not imply cross-layer coverage.
+Schema-v5 ordinary exploration, scheduling, evidence recording, task transitions,
+and reprioritization do not consume a UserPromptSubmit receipt or persist intake.
+They use the SessionStart READY receipt plus `state_sequence`, dependency,
+confirmation, and evidence guards. A compatibility turn receipt may still be
+emitted while mutable schema-v4 writes remain supported, but ordinary v5 work
+does not consume it.
 Non-simple No-Plan work keeps only the current runtime receipt and visible
 reply; it does not call the Plan controller or persist an intake record.
 Intake rationale records only a minimal decision summary; never copy raw prompt
@@ -283,7 +289,9 @@ intervention kind, exact blocked targets, and an immutable basis;
 gate. Decisions are made through `plan confirm`, may be `accepted` or
 `declined`, and must bind the required basis digest. Schema-v4 gates are always
 created pending; their decisions require a current intake covering the blocked
-targets plus the trusted current turn's exact `request_ref`. Activation,
+targets plus the trusted current turn's exact `request_ref`. Schema-v5 decisions
+also require that exact trusted turn and basis, but do not recreate Plan intake.
+Activation,
 confirmation-bound exclusions, and
 terminal-route transitions are bound to their own decision ID; another
 accepted gate cannot authorize them. Activation declared `active` also
@@ -299,6 +307,18 @@ status `complete`; existing task gates and resolved exclusion decisions are
 stable, while delivery/evidence/route mutations bind to the current slice
 gate. Completion uses the dedicated closeout command.
 
+External high-impact work uses `action authorize` immediately before execution and
+`action consume` for the exact action. The authorization records only action kind,
+typed target, action SHA256, trusted session/turn identity, expiry, and consumption
+state. Issuance requires a same-turn accepted `external_authority` Plan gate whose
+basis reference and digest exactly match the target and action; substantive rollback
+uses a matching `deviation_recovery` gate. It is short-lived, cannot be reminted from
+the same turn after consumption,
+and rejects missing, superseded, target-mismatched, expired, or replayed authority.
+The supported kinds are remote write, production change, destructive operation,
+secret handling, and substantive rollback. This envelope authorizes an action; it
+does not claim that the external action succeeded.
+
 Schema v4 cannot be downgraded through ordinary revision. Verified
 obligations/validations, final artifacts, and completed delivery use dedicated
 commands that validate a bounded canonical evidence manifest stored under
@@ -312,7 +332,7 @@ finalization also requires the in-progress task that declares recovery
 ownership. Existing artifact records cannot be rewritten by generic Plan
 patches.
 
-New Plans use schema v4 to make these concerns first-class:
+New Plans use schema v5 to separate durable contract concerns from runtime state:
 
 - a stable goal statement and measurable success conditions;
 - a revisioned demand contract bound to an accepted confirmation;

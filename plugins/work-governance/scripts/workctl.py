@@ -26,7 +26,7 @@ import tempfile
 import time
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -64,6 +64,7 @@ ADMISSION_ID_RE = re.compile(r"^ADM-\d{8}-\d{3}$")
 CONTRACT_UPGRADE_ID_RE = re.compile(r"^UPG-\d{8}-\d{3}$")
 RECONCILE_UPGRADE_ID_RE = re.compile(r"^RCU-\d{8}-\d{3}$")
 STRUCTURAL_REBASE_ID_RE = re.compile(r"^SRB-\d{8}-\d{3}$")
+ACTION_AUTHORIZATION_ID_RE = re.compile(r"^AUTH-[0-9a-f]{32}$")
 ROLLOVER_CONFIRMATION_PAYLOAD_VERSION = 2
 UNKNOWN_ID_RE = re.compile(r"^U-\d{3}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -138,6 +139,14 @@ INTERVENTION_KINDS = {
     "external_authority",
     "deviation_recovery",
 }
+HIGH_IMPACT_ACTION_KINDS = {
+    "remote_write",
+    "production_change",
+    "destructive_operation",
+    "secret_handling",
+    "substantive_rollback",
+}
+MAX_ACTION_AUTHORIZATION_TTL_SECONDS = 900
 INTERVENTION_CONTRACT_STATES = {
     "STRICT_READY",
     "LEGACY_CLASSIFICATION_REQUIRED",
@@ -3712,6 +3721,8 @@ def bump_revision(
         raise WorkctlError("INVALID_PLAN: revision must be a positive integer")
     next_revision = revision + 1
     frontmatter["revision"] = next_revision
+    if frontmatter.get("schema_version") == 5:
+        frontmatter["contract_revision"] = next_revision
     frontmatter["updated_at"] = timestamp or utc_now()
     if frontmatter.get("schema_version") == 4:
         append_revision_record(
@@ -4130,9 +4141,70 @@ def v5_recover_pending_event(root: Path, frontmatter: Mapping[str, Any]) -> None
     pending = state.get("pending_event")
     if not isinstance(pending, dict):
         return
+    payload = pending.get("payload")
+    contract_sha256 = payload.get("contract_sha256") if isinstance(payload, dict) else None
+    if isinstance(contract_sha256, str):
+        plan_path = active_plan_path(root)
+        if plan_path.is_symlink() or not plan_path.is_file():
+            raise WorkctlError("SCHEMA_V5_PENDING_CONTRACT_INVALID")
+        if sha256_file(plan_path) != contract_sha256:
+            state["event_sequence"] = int(state["event_sequence"]) - 1
+            state.pop("pending_event", None)
+            write_atomic(
+                v5_state_path(root, plan_id),
+                json.dumps(state, indent=2, sort_keys=True) + "\n",
+            )
+            return
     events = v5_read_events(root, plan_id)
     if not events or events[-1] != pending:
         v5_append_event(root, plan_id, pending)
+    state.pop("pending_event", None)
+    write_atomic(v5_state_path(root, plan_id), json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def v5_persist_contract_transition(
+    root: Path,
+    doc: PlanDocument,
+    *,
+    event: str,
+    subject: str,
+    payload: Mapping[str, Any],
+) -> None:
+    """Atomically replace a v5 contract with a recoverable ledger event intent."""
+    plan_id = str(doc.frontmatter["plan_id"])
+    state = load_v5_state(root, doc.frontmatter)
+    target_bytes = dump_plan(doc).encode("utf-8")
+    contract_sha256 = sha256_bytes(target_bytes)
+    next_event_sequence = int(state["event_sequence"]) + 1
+    event_payload = {
+        "schema_version": 1,
+        "kind": "work-governance-plan-event",
+        "plan_id": plan_id,
+        "event_sequence": next_event_sequence,
+        "state_sequence": int(state["state_sequence"]),
+        "event": event,
+        "subject": subject,
+        "payload": {
+            **(
+                redacted_copy(dict(payload))
+                if redacted_copy is not None
+                else dict(payload)
+            ),
+            "contract_revision": doc.frontmatter["contract_revision"],
+            "contract_sha256": contract_sha256,
+        },
+        "recorded_at": utc_now(),
+    }
+    state["event_sequence"] = next_event_sequence
+    state["updated_at"] = utc_now()
+    state["pending_event"] = event_payload
+    write_atomic(v5_state_path(root, plan_id), json.dumps(state, indent=2, sort_keys=True) + "\n")
+    if os.environ.get("WORKCTL_TEST_V5_CONTRACT_INTERRUPT") == "before-plan":
+        raise WorkctlError("SCHEMA_V5_TEST_INTERRUPTED_BEFORE_CONTRACT")
+    write_atomic_bytes(doc.path, target_bytes)
+    if os.environ.get("WORKCTL_TEST_V5_CONTRACT_INTERRUPT") == "after-plan":
+        raise WorkctlError("SCHEMA_V5_TEST_INTERRUPTED_AFTER_CONTRACT")
+    v5_append_event(root, plan_id, event_payload)
     state.pop("pending_event", None)
     write_atomic(v5_state_path(root, plan_id), json.dumps(state, indent=2, sort_keys=True) + "\n")
 
@@ -11085,8 +11157,8 @@ def require_confirmation_turn_ref(
     *,
     ref: str,
     turn_receipt_sha256: str | None,
-) -> None:
-    """Bind a schema-v4 confirmation decision to the trusted current user turn."""
+) -> dict[str, object]:
+    """Bind a high-impact decision to the trusted current user turn."""
     if not isinstance(turn_receipt_sha256, str):
         raise WorkctlError("TURN_RECEIPT_REQUIRED")
     session_receipt = session_receipt_for_turn(
@@ -11101,6 +11173,348 @@ def require_confirmation_turn_ref(
     )
     if ref != turn.get("request_ref"):
         raise WorkctlError("CONFIRMATION_REF_CURRENT_TURN_REQUIRED")
+    return turn
+
+
+def action_authorization_directory(root: Path) -> Path:
+    """Return the private runtime directory for one-shot action authority."""
+    path = governance_root(root) / "runtime" / "action-authorizations"
+    reject_symlink_components(root, path)
+    return path
+
+
+def action_authorization_path(root: Path, authorization_id: str) -> Path:
+    """Resolve one action authorization after validating its content-derived ID."""
+    if ACTION_AUTHORIZATION_ID_RE.fullmatch(authorization_id) is None:
+        raise WorkctlError("ACTION_AUTHORIZATION_ID_INVALID")
+    path = action_authorization_directory(root) / f"{authorization_id}.json"
+    reject_symlink_components(root, path)
+    return path
+
+
+def action_authorization_digest(record: Mapping[str, object]) -> str:
+    """Hash an action authorization without its self-authenticating digest."""
+    projection = {key: value for key, value in record.items() if key != "record_sha256"}
+    return sha256_bytes(
+        json.dumps(
+            projection,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    )
+
+
+def parse_authorization_time(value: object) -> datetime:
+    """Parse one timezone-aware authorization timestamp."""
+    if not isinstance(value, str):
+        raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise WorkctlError("ACTION_AUTHORIZATION_INVALID") from exc
+    if parsed.tzinfo is None:
+        raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
+    return parsed.astimezone(UTC)
+
+
+def load_action_authorization(root: Path, authorization_id: str) -> dict[str, object]:
+    """Load and fully validate one persisted action authorization."""
+    path = action_authorization_path(root, authorization_id)
+    if path.is_symlink() or not path.is_file():
+        raise WorkctlError("ACTION_AUTHORIZATION_NOT_FOUND")
+    try:
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WorkctlError("ACTION_AUTHORIZATION_INVALID") from exc
+    required = {
+        "schema_version",
+        "kind",
+        "authorization_id",
+        "plan_id",
+        "contract_revision",
+        "confirmation_id",
+        "action_kind",
+        "target_ref",
+        "action_sha256",
+        "request_ref",
+        "turn_receipt_sha256",
+        "session_id",
+        "session_start_receipt_sha256",
+        "issued_at",
+        "expires_at",
+        "state",
+        "consumed_at",
+        "consumer_ref",
+        "record_sha256",
+    }
+    if not isinstance(payload, dict):
+        raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
+    record = cast(dict[str, object], payload)
+    if (
+        set(record) != required
+        or record.get("schema_version") != 1
+        or record.get("kind") != "work-governance-action-authorization"
+        or record.get("authorization_id") != authorization_id
+        or not isinstance(record.get("plan_id"), str)
+        or PLAN_ID_RE.fullmatch(str(record["plan_id"])) is None
+        or type(record.get("contract_revision")) is not int
+        or int(cast(int, record["contract_revision"])) < 1
+        or not isinstance(record.get("confirmation_id"), str)
+        or not str(record["confirmation_id"]).startswith("C-")
+        or record.get("action_kind") not in HIGH_IMPACT_ACTION_KINDS
+        or not valid_reference(record.get("target_ref"))
+        or not isinstance(record.get("action_sha256"), str)
+        or SHA256_RE.fullmatch(str(record["action_sha256"])) is None
+        or not valid_reference(record.get("request_ref"))
+        or not isinstance(record.get("turn_receipt_sha256"), str)
+        or SHA256_RE.fullmatch(str(record["turn_receipt_sha256"])) is None
+        or not isinstance(record.get("session_id"), str)
+        or SESSION_ID_RE.fullmatch(str(record["session_id"])) is None
+        or not isinstance(record.get("session_start_receipt_sha256"), str)
+        or SHA256_RE.fullmatch(str(record["session_start_receipt_sha256"])) is None
+        or record.get("state") not in {"authorized", "consumed"}
+        or not isinstance(record.get("record_sha256"), str)
+        or SHA256_RE.fullmatch(str(record["record_sha256"])) is None
+        or action_authorization_digest(record) != record.get("record_sha256")
+    ):
+        raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
+    issued_at = parse_authorization_time(record.get("issued_at"))
+    expires_at = parse_authorization_time(record.get("expires_at"))
+    if expires_at <= issued_at or expires_at - issued_at > timedelta(
+        seconds=MAX_ACTION_AUTHORIZATION_TTL_SECONDS
+    ):
+        raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
+    consumed_at = record.get("consumed_at")
+    consumer_ref = record.get("consumer_ref")
+    if record["state"] == "authorized":
+        if consumed_at is not None or consumer_ref is not None:
+            raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
+    elif (
+        parse_authorization_time(consumed_at) < issued_at
+        or not valid_reference(consumer_ref)
+    ):
+        raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
+    return record
+
+
+def action_authorization_binding(
+    *,
+    turn_receipt_sha256: str,
+    confirmation_id: str,
+    action_kind: str,
+    target_ref: str,
+    action_sha256: str,
+) -> dict[str, str]:
+    """Return the immutable fields that define one exact high-impact action."""
+    return {
+        "turn_receipt_sha256": turn_receipt_sha256,
+        "confirmation_id": confirmation_id,
+        "action_kind": action_kind,
+        "target_ref": target_ref,
+        "action_sha256": action_sha256,
+    }
+
+
+def action_authorization_id(binding: Mapping[str, str]) -> str:
+    """Derive an idempotent ID so one user turn cannot mint replay aliases."""
+    digest = sha256_bytes(
+        json.dumps(binding, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    return f"AUTH-{digest[:32]}"
+
+
+def validate_action_binding(args: argparse.Namespace) -> None:
+    """Validate caller-supplied action metadata without reading action payload bytes."""
+    if args.action_kind not in HIGH_IMPACT_ACTION_KINDS:
+        raise WorkctlError("ACTION_KIND_INVALID")
+    if not valid_reference(args.target_ref):
+        raise WorkctlError("ACTION_TARGET_REF_INVALID")
+    if SHA256_RE.fullmatch(args.action_sha256) is None:
+        raise WorkctlError("ACTION_SHA256_INVALID")
+
+
+def require_action_confirmation(
+    root: Path,
+    *,
+    confirmation_id: str,
+    action_kind: str,
+    target_ref: str,
+    action_sha256: str,
+    turn: Mapping[str, object],
+) -> tuple[str, int]:
+    """Require one same-turn Plan gate bound to the exact external action."""
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    require_plan_contract_ready(doc.frontmatter)
+    decision = confirmations(doc.frontmatter).get(confirmation_id)
+    if not isinstance(decision, dict) or decision.get("status") != "accepted":
+        raise WorkctlError("ACTION_CONFIRMATION_NOT_ACCEPTED")
+    intervention = decision.get("intervention")
+    expected_intervention = (
+        "deviation_recovery"
+        if action_kind == "substantive_rollback"
+        else "external_authority"
+    )
+    if (
+        decision.get("ref") != turn.get("request_ref")
+        or decision.get("evidence_sha256") != action_sha256
+        or not isinstance(intervention, dict)
+        or intervention.get("kind") != expected_intervention
+        or intervention.get("basis_ref") != target_ref
+        or intervention.get("basis_sha256") != action_sha256
+    ):
+        raise WorkctlError("ACTION_CONFIRMATION_BINDING_MISMATCH")
+    revision = doc.frontmatter.get("contract_revision", doc.frontmatter.get("revision"))
+    plan_id = doc.frontmatter.get("plan_id")
+    if not isinstance(plan_id, str) or type(revision) is not int:
+        raise WorkctlError("ACTION_CONFIRMATION_BINDING_MISMATCH")
+    return plan_id, revision
+
+
+def cmd_action_authorize(args: argparse.Namespace) -> None:
+    """Create one short-lived, target-bound, current-turn action capability."""
+    root = project_root()
+    validate_action_binding(args)
+    if not 1 <= args.ttl_seconds <= MAX_ACTION_AUTHORIZATION_TTL_SECONDS:
+        raise WorkctlError("ACTION_AUTHORIZATION_TTL_INVALID")
+    with lock(root):
+        turn = require_confirmation_turn_ref(
+            root,
+            ref=args.ref,
+            turn_receipt_sha256=args.turn_receipt_sha256,
+        )
+        plan_id, contract_revision = require_action_confirmation(
+            root,
+            confirmation_id=args.confirmation_id,
+            action_kind=args.action_kind,
+            target_ref=args.target_ref,
+            action_sha256=args.action_sha256,
+            turn=turn,
+        )
+        issued_at = parse_authorization_time(turn.get("issued_at"))
+        expires_at = issued_at + timedelta(seconds=args.ttl_seconds)
+        if datetime.now(UTC) >= expires_at:
+            raise WorkctlError("ACTION_AUTHORIZATION_EXPIRED")
+        binding = action_authorization_binding(
+            turn_receipt_sha256=args.turn_receipt_sha256,
+            confirmation_id=args.confirmation_id,
+            action_kind=args.action_kind,
+            target_ref=args.target_ref,
+            action_sha256=args.action_sha256,
+        )
+        authorization_id = action_authorization_id(binding)
+        path = action_authorization_path(root, authorization_id)
+        if path.exists() or path.is_symlink():
+            existing = load_action_authorization(root, authorization_id)
+            if existing.get("state") == "consumed":
+                raise WorkctlError("ACTION_AUTHORIZATION_REPLAYED")
+            if datetime.now(UTC) >= parse_authorization_time(existing.get("expires_at")):
+                raise WorkctlError("ACTION_AUTHORIZATION_EXPIRED")
+            print(json.dumps(existing, indent=2, sort_keys=True))
+            return
+        session_id = turn.get("session_id")
+        session_start_digest = turn.get("session_start_receipt_sha256")
+        if not isinstance(session_id, str) or not isinstance(session_start_digest, str):
+            raise WorkctlError("TURN_RECEIPT_INVALID")
+        record: dict[str, object] = {
+            "schema_version": 1,
+            "kind": "work-governance-action-authorization",
+            "authorization_id": authorization_id,
+            "plan_id": plan_id,
+            "contract_revision": contract_revision,
+            "confirmation_id": args.confirmation_id,
+            "action_kind": args.action_kind,
+            "target_ref": args.target_ref,
+            "action_sha256": args.action_sha256,
+            "request_ref": args.ref,
+            "turn_receipt_sha256": args.turn_receipt_sha256,
+            "session_id": session_id,
+            "session_start_receipt_sha256": session_start_digest,
+            "issued_at": issued_at.isoformat(),
+            "expires_at": expires_at.isoformat(),
+            "state": "authorized",
+            "consumed_at": None,
+            "consumer_ref": None,
+        }
+        record["record_sha256"] = action_authorization_digest(record)
+        write_atomic(path, json.dumps(record, indent=2, sort_keys=True) + "\n")
+        print(json.dumps(record, indent=2, sort_keys=True))
+
+
+def cmd_action_consume(args: argparse.Namespace) -> None:
+    """Consume one exact action capability atomically and reject every replay."""
+    root = project_root()
+    validate_action_binding(args)
+    with lock(root):
+        session_receipt = session_receipt_for_turn(
+            root,
+            args.turn_receipt_sha256,
+            require_current_controller=True,
+        )
+        turn = load_current_turn_receipt(
+            root,
+            supplied_sha256=args.turn_receipt_sha256,
+            session_receipt=cast(Mapping[str, object], session_receipt),
+        )
+        record = load_action_authorization(root, args.authorization_id)
+        if record.get("state") != "authorized":
+            raise WorkctlError("ACTION_AUTHORIZATION_REPLAYED")
+        if datetime.now(UTC) >= parse_authorization_time(record.get("expires_at")):
+            raise WorkctlError("ACTION_AUTHORIZATION_EXPIRED")
+        expected = action_authorization_binding(
+            turn_receipt_sha256=args.turn_receipt_sha256,
+            confirmation_id=str(record["confirmation_id"]),
+            action_kind=args.action_kind,
+            target_ref=args.target_ref,
+            action_sha256=args.action_sha256,
+        )
+        if any(record.get(key) != value for key, value in expected.items()):
+            raise WorkctlError("ACTION_AUTHORIZATION_TARGET_MISMATCH")
+        plan_id, contract_revision = require_action_confirmation(
+            root,
+            confirmation_id=str(record["confirmation_id"]),
+            action_kind=args.action_kind,
+            target_ref=args.target_ref,
+            action_sha256=args.action_sha256,
+            turn=turn,
+        )
+        if (
+            record.get("plan_id") != plan_id
+            or record.get("contract_revision") != contract_revision
+        ):
+            raise WorkctlError("ACTION_AUTHORIZATION_CONTRACT_DRIFT")
+        if (
+            record.get("request_ref") != turn.get("request_ref")
+            or record.get("session_id") != session_receipt.get("session_id")
+            or record.get("session_start_receipt_sha256")
+            != controller_receipt_digest(session_receipt)
+        ):
+            raise WorkctlError("ACTION_AUTHORIZATION_TURN_MISMATCH")
+        if not valid_reference(args.consumer_ref):
+            raise WorkctlError("ACTION_CONSUMER_REF_INVALID")
+        record["state"] = "consumed"
+        record["consumed_at"] = utc_now()
+        record["consumer_ref"] = args.consumer_ref
+        record["record_sha256"] = action_authorization_digest(record)
+        write_atomic(
+            action_authorization_path(root, args.authorization_id),
+            json.dumps(record, indent=2, sort_keys=True) + "\n",
+        )
+        print(json.dumps(record, indent=2, sort_keys=True))
+
+
+def cmd_action_status(args: argparse.Namespace) -> None:
+    """Show one authorization plus its effective expiry state without mutation."""
+    record = load_action_authorization(project_root(), args.authorization_id)
+    payload = dict(record)
+    if record.get("state") == "authorized" and datetime.now(UTC) >= parse_authorization_time(
+        record.get("expires_at")
+    ):
+        payload["effective_state"] = "expired"
+    else:
+        payload["effective_state"] = record.get("state")
+    print(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def cmd_plan_status(args: argparse.Namespace) -> None:
@@ -11949,6 +12363,9 @@ def cmd_plan_revise(args: argparse.Namespace) -> None:
     with lock(root):
         require_governed_authority(root)
         doc = load_plan(active_plan_path(root))
+        if doc.frontmatter.get("schema_version") == 5:
+            v5_recover_pending_event(root, doc.frontmatter)
+            doc = load_plan(active_plan_path(root))
         require_expected_revision(doc.frontmatter, args.expected_revision)
         if doc.frontmatter.get("schema_version") == 4:
             raise WorkctlError("PLAN_ADAPT_REQUIRED: use plan adapt --manifest")
@@ -12197,6 +12614,9 @@ def cmd_plan_confirm(args: argparse.Namespace) -> None:
     with lock(root):
         require_governed_authority(root)
         doc = load_plan(active_plan_path(root))
+        if doc.frontmatter.get("schema_version") == 5:
+            v5_recover_pending_event(root, doc.frontmatter)
+            doc = load_plan(active_plan_path(root))
         require_expected_revision(doc.frontmatter, args.expected_revision)
         raw = doc.frontmatter.setdefault("confirmations", {})
         required = raw.setdefault("required", [])
@@ -12213,7 +12633,8 @@ def cmd_plan_confirm(args: argparse.Namespace) -> None:
                 f"{target.get('status')} -> {args.decision}"
             )
         intervention = target.get("intervention")
-        if doc.frontmatter.get("schema_version") == 4:
+        schema_version = doc.frontmatter.get("schema_version")
+        if schema_version in {4, 5}:
             if not isinstance(intervention, dict):
                 raise WorkctlError("CONFIRMATION_CLASSIFICATION_REQUIRED")
             if intervention_placeholder(target):
@@ -12221,13 +12642,14 @@ def cmd_plan_confirm(args: argparse.Namespace) -> None:
             blocks = intervention.get("blocks", [])
             if not isinstance(blocks, list):
                 raise WorkctlError("INVALID_INTERVENTION_CONTRACT")
-            require_current_intake(
-                root,
-                doc.frontmatter,
-                turn_receipt_sha256=args.turn_receipt_sha256,
-                expected_intake_sha256=args.expected_intake_sha256,
-                targets=blocks,
-            )
+            if schema_version == 4:
+                require_current_intake(
+                    root,
+                    doc.frontmatter,
+                    turn_receipt_sha256=args.turn_receipt_sha256,
+                    expected_intake_sha256=args.expected_intake_sha256,
+                    targets=blocks,
+                )
             require_confirmation_turn_ref(
                 root,
                 ref=args.ref,
@@ -12243,7 +12665,7 @@ def cmd_plan_confirm(args: argparse.Namespace) -> None:
                 for current_target in current_advancement_targets(doc.frontmatter):
                     if current_target in blocks:
                         require_independent_target(root, doc.frontmatter, current_target)
-        if doc.frontmatter.get("schema_version") in {3, 4} and not valid_reference(args.ref):
+        if schema_version in {3, 4, 5} and not valid_reference(args.ref):
             raise WorkctlError("INVALID_CONFIRMATION_REF")
         target["status"] = args.decision
         target["ref"] = args.ref
@@ -12262,7 +12684,20 @@ def cmd_plan_confirm(args: argparse.Namespace) -> None:
             confirmation_id=args.confirmation_id,
         )
         require_valid_candidate(doc)
-        write_atomic(doc.path, dump_plan(doc))
+        if schema_version == 5:
+            v5_persist_contract_transition(
+                root,
+                doc,
+                event="confirmation.decided",
+                subject=f"confirmation:{args.confirmation_id}",
+                payload={
+                    "decision": args.decision,
+                    "ref": args.ref,
+                    "evidence_sha256": args.evidence_sha256,
+                },
+            )
+        else:
+            write_atomic(doc.path, dump_plan(doc))
         print(
             f"CONFIRMATION_DECIDED {args.confirmation_id} {args.decision} "
             f"revision={doc.frontmatter['revision']}"
@@ -16872,7 +17307,7 @@ def build_parser() -> argparse.ArgumentParser:
     help_command.add_argument(
         "workflow",
         nargs="?",
-        choices=["plan", "task", "evidence", "migration"],
+        choices=["plan", "task", "evidence", "action", "migration"],
     )
     help_command.set_defaults(func=cmd_workflow_help)
 
@@ -16883,6 +17318,40 @@ def build_parser() -> argparse.ArgumentParser:
     evidence_source.add_argument("--manifest")
     evidence_source.add_argument("--stdin", action="store_true")
     evidence_record.set_defaults(func=cmd_plan_evidence_record)
+
+    action_command = sub.add_parser("action")
+    action_sub = action_command.add_subparsers(
+        dest="action_authorization_action",
+        required=True,
+    )
+    action_authorize = action_sub.add_parser("authorize")
+    action_authorize.add_argument(
+        "--action-kind",
+        choices=sorted(HIGH_IMPACT_ACTION_KINDS),
+        required=True,
+    )
+    action_authorize.add_argument("--target-ref", required=True)
+    action_authorize.add_argument("--action-sha256", required=True)
+    action_authorize.add_argument("--confirmation-id", required=True)
+    action_authorize.add_argument("--ref", required=True)
+    action_authorize.add_argument("--turn-receipt-sha256", required=True)
+    action_authorize.add_argument("--ttl-seconds", type=int, default=300)
+    action_authorize.set_defaults(func=cmd_action_authorize)
+    action_consume = action_sub.add_parser("consume")
+    action_consume.add_argument("--authorization-id", required=True)
+    action_consume.add_argument(
+        "--action-kind",
+        choices=sorted(HIGH_IMPACT_ACTION_KINDS),
+        required=True,
+    )
+    action_consume.add_argument("--target-ref", required=True)
+    action_consume.add_argument("--action-sha256", required=True)
+    action_consume.add_argument("--turn-receipt-sha256", required=True)
+    action_consume.add_argument("--consumer-ref", required=True)
+    action_consume.set_defaults(func=cmd_action_consume)
+    action_status = action_sub.add_parser("status")
+    action_status.add_argument("--authorization-id", required=True)
+    action_status.set_defaults(func=cmd_action_status)
 
     migrate = sub.add_parser("migrate")
     migrate_sub = migrate.add_subparsers(dest="migration_action", required=True)
@@ -17296,6 +17765,8 @@ def command_mutates_state(args: argparse.Namespace) -> bool:
         return False
     if args.domain == "evidence":
         return True
+    if args.domain == "action":
+        return cast(str, args.action_authorization_action) != "status"
     if args.domain == "migrate":
         return bool(args.migration_action == "apply")
     if args.domain == "layout":

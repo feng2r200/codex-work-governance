@@ -207,17 +207,23 @@ revision checks, candidate validation, bounded lock acquisition with holder
 diagnostics, and atomic writes.
 
 `UserPromptSubmit` separately injects the current `turn_receipt_sha256`.
-For Plan-controlled work, run controller `intake receipt`, state an explicit
+For mutable schema-v4 Plan work, run controller `intake receipt`, state an explicit
 `proceed|explore|ask` decision, then append it with `plan intake record`.
 Non-simple No-Plan work shows the reply-level `INTAKE_RECEIPT` but does not call
-the Plan controller or persist an intake record. Advancing task, obligation,
-validation, artifact, delivery, activation, adaptation, and closeout commands
-require that turn digest plus the latest `expected_intake_sha256`. Never reuse
-a prior turn decision. One route-level `proceed` decision remains the basis for
-all dependency-ready tasks, validations, and evidence transitions in the same
-user turn. Reclassify only when a new turn, contract revision, unknown, task,
-or route-structure change invalidates that basis; a task or phase boundary
-alone does not.
+the Plan controller or persist an intake record. Schema-v5 ordinary exploration,
+scheduling, evidence, task-state, and reprioritization commands do not consume the
+turn receipt or persist intake; they use the READY session receipt, state sequence,
+dependencies, confirmation gates, and evidence rules. Schema-v4 advancing commands
+still require the turn digest plus the latest `expected_intake_sha256`. Never reuse
+a prior turn decision for v4 or a high-impact action.
+
+Schema-v4 and schema-v5 `plan confirm` decisions bind the exact current-turn
+`request_ref` and basis; only schema v4 additionally requires current Plan intake.
+Before remote write, production change, destructive work, secret handling, or
+substantive rollback, use `action authorize` and consume the returned capability for
+the exact kind, typed target, and action digest. Issuance also requires an accepted
+same-turn Plan confirmation with an exactly matching intervention basis. The capability
+expires quickly and is single-use.
 
 The Plan keeps one bounded `intake.current` anchor and a digest/count summary.
 Complete canonical records live in ignored, project-local, content-addressed
