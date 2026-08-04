@@ -1,6 +1,6 @@
 {
   "name": "work-governance",
-  "version": "1.0.7+codex.20260803104249",
+  "version": "1.0.7+codex.20260804112627",
   "description": "Govern goal-driven Codex work with trusted intake, durable Plan contracts, runtime state, evidence, and recovery.",
   "author": {
     "name": "Work Governance Contributors"
