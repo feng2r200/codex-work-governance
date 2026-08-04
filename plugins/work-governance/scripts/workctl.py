@@ -43,18 +43,18 @@ try:
     from workctl_modules.model import TaskProjection
     from workctl_modules.storage import canonical_event_bytes, redacted_copy
 except ImportError:  # pragma: no cover - legacy single-file runtime bundles
-    MODULE_WORKFLOW_HELP = None
-    MODULE_BLOCKED_TASK_TARGETS = None
-    MODULE_CANONICAL_EVIDENCE_BYTES = None
-    MODULE_NEXT_SUGGESTION = None
-    MODULE_PARSE_EVIDENCE_BYTES = None
-    MODULE_READY_TASK_TARGETS = None
-    build_v5_contract = None
-    build_v5_state = None
-    migration_projection = None
-    TaskProjection = None
-    canonical_event_bytes = None
-    redacted_copy = None
+    MODULE_WORKFLOW_HELP = None  # type: ignore[assignment,misc]
+    MODULE_BLOCKED_TASK_TARGETS = None  # type: ignore[assignment]
+    MODULE_CANONICAL_EVIDENCE_BYTES = None  # type: ignore[assignment]
+    MODULE_NEXT_SUGGESTION = None  # type: ignore[assignment]
+    MODULE_PARSE_EVIDENCE_BYTES = None  # type: ignore[assignment]
+    MODULE_READY_TASK_TARGETS = None  # type: ignore[assignment]
+    build_v5_contract = None  # type: ignore[assignment]
+    build_v5_state = None  # type: ignore[assignment]
+    migration_projection = None  # type: ignore[assignment]
+    TaskProjection = None  # type: ignore[assignment,misc]
+    canonical_event_bytes = None  # type: ignore[assignment]
+    redacted_copy = None  # type: ignore[assignment]
 
 PLAN_ID_RE = re.compile(r"^PLAN-\d{8}-\d{3}$")
 MIGRATION_ID_RE = re.compile(r"^MIG-\d{8}-\d{3}$")
@@ -3964,10 +3964,7 @@ def v5_state_defaults(frontmatter: Mapping[str, Any]) -> dict[str, Any]:
     """Build a valid empty runtime state for a newly created v5 contract."""
     if build_v5_state is None:
         raise WorkctlError("SCHEMA_V5_RUNTIME_MODULE_UNAVAILABLE")
-    return cast(
-        dict[str, Any],
-        build_v5_state(frontmatter, updated_at=str(frontmatter.get("updated_at", utc_now()))),
-    )
+    return build_v5_state(frontmatter, updated_at=str(frontmatter.get("updated_at", utc_now())))
 
 
 def v5_redact_evidence_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -11321,16 +11318,19 @@ def cmd_workflow_help(args: argparse.Namespace) -> None:
             "note": "Task transitions remain receipt-bound and dependency-checked.",
         },
         "evidence": {
-            "commands": ["evidence record --stdin", "plan evidence record --manifest PATH"],
+            "commands": [
+                "evidence record --stdin",
+                "plan evidence record --manifest PATH|--stdin",
+            ],
             "note": "Evidence is bounded, canonical, content-addressed, and redaction-safe.",
         },
         "migration": {
-            "commands": ["migrate inspect", "migrate apply"],
+            "commands": ["migrate inspect", "migrate apply", "migrate recover"],
             "note": "Migration is explicit, backed up, and recovery-bound.",
         },
     }
     if isinstance(MODULE_WORKFLOW_HELP, dict):
-        workflows = cast(dict[str, dict[str, object]], MODULE_WORKFLOW_HELP)
+        workflows = MODULE_WORKFLOW_HELP
     workflow = args.workflow or "plan"
     if workflow not in workflows:
         raise WorkctlError(f"UNKNOWN_WORKFLOW: {workflow}")
@@ -11400,7 +11400,7 @@ def validate_v5_migration_confirmation(
     """Require an accepted explicit gate for a durable schema migration."""
     if not isinstance(supplied, str) or not supplied:
         raise WorkctlError("SCHEMA_V5_MIGRATION_CONFIRMATION_REQUIRED")
-    decision = confirmations(frontmatter).get(supplied)
+    decision = confirmations(cast(dict[str, Any], frontmatter)).get(supplied)
     if (
         not isinstance(decision, dict)
         or decision.get("status") != "accepted"
@@ -11423,15 +11423,12 @@ def prepare_v5_migration(
     if build_v5_contract is None or build_v5_state is None:
         raise WorkctlError("SCHEMA_V5_MIGRATION_MODULE_UNAVAILABLE")
     source_bytes = source.path.read_bytes()
-    contract = cast(dict[str, Any], build_v5_contract(source.frontmatter))
+    contract = build_v5_contract(source.frontmatter)
     if redacted_copy is not None:
         contract = cast(dict[str, Any], redacted_copy(contract))
-    state = cast(
-        dict[str, Any],
-        build_v5_state(
-            source.frontmatter,
-            updated_at=str(source.frontmatter.get("updated_at", utc_now())),
-        ),
+    state = build_v5_state(
+        source.frontmatter,
+        updated_at=str(source.frontmatter.get("updated_at", utc_now())),
     )
     if redacted_copy is not None:
         state = cast(dict[str, Any], redacted_copy(state))
@@ -11600,7 +11597,11 @@ def cmd_migrate_apply(args: argparse.Namespace) -> None:
                 migration_id="MIG-DRY-RUN-001",
                 confirmation_id=str(args.confirmation),
             )
-            payload = migration_projection(source.frontmatter) if migration_projection else {}
+            payload = (
+                migration_projection(source.frontmatter)
+                if callable(migration_projection)
+                else {}
+            )
             payload.update(
                 {
                     "status": "dry_run",
@@ -17296,7 +17297,7 @@ def command_mutates_state(args: argparse.Namespace) -> bool:
     if args.domain == "evidence":
         return True
     if args.domain == "migrate":
-        return args.migration_action == "apply"
+        return bool(args.migration_action == "apply")
     if args.domain == "layout":
         return args.action not in {"status", "validate"}
     if args.domain in {"task", "log"}:

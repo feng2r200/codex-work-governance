@@ -29,11 +29,14 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
         "note": "Task transitions remain receipt-bound and dependency-checked.",
     },
     "evidence": {
-        "commands": ["evidence record --stdin", "plan evidence record --manifest PATH"],
+        "commands": [
+            "evidence record --stdin",
+            "plan evidence record --manifest PATH|--stdin",
+        ],
         "note": "Evidence is bounded, canonical, content-addressed, and redaction-safe.",
     },
     "migration": {
-        "commands": ["migrate inspect", "migrate apply"],
+        "commands": ["migrate inspect", "migrate apply", "migrate recover"],
         "note": "Migration is explicit, backed up, and recovery-bound.",
     },
 }

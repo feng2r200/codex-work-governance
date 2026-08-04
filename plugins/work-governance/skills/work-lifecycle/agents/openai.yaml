@@ -1,4 +1,4 @@
 interface:
   display_name: "Work Lifecycle"
-  short_description: "Govern task lifecycle, plans, and evidence"
-  default_prompt: "Use $work-governance:work-lifecycle to govern this task from intake through closeout."
+  short_description: "Govern goal-driven tasks, plans, evidence, and recovery"
+  default_prompt: "Use $work-governance:work-lifecycle to govern this goal-driven task from intake through closeout."
