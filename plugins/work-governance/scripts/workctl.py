@@ -4541,8 +4541,15 @@ def set_v5_task_status(args: argparse.Namespace, status: str, doc: PlanDocument)
     allowed = TASK_TRANSITIONS.get(current_status, set())
     if status not in allowed:
         raise WorkctlError(f"INVALID_TASK_TRANSITION: {args.task_id} {current_status} -> {status}")
+    if status != "blocked":
+        require_no_blocking_artifacts(doc.frontmatter, task)
     if status in {"in_progress", "verified", "skipped"}:
         require_dependencies_verified(runtime, runtime_task)
+        require_independent_target(
+            root,
+            doc.frontmatter,
+            f"task:{args.task_id}",
+        )
         require_task_confirmation(doc.frontmatter, task, status)
     evidence_ref: str | None = None
     evidence_sha256: str | None = None
@@ -12686,7 +12693,7 @@ def cmd_plan_confirmation_add(args: argparse.Namespace) -> None:
             raise WorkctlError("INVALID_PLAN: confirmations.required must be a list")
         if args.confirmation_id in confirmations(doc.frontmatter):
             raise WorkctlError(f"CONFIRMATION_EXISTS: {args.confirmation_id}")
-        if doc.frontmatter.get("schema_version") == 4 and args.status == "accepted":
+        if doc.frontmatter.get("schema_version") in {4, 5} and args.status == "accepted":
             raise WorkctlError("CONFIRMATION_ACCEPTED_REQUIRES_PLAN_CONFIRM")
         item: dict[str, Any] = {
             "id": args.confirmation_id,
@@ -14116,7 +14123,9 @@ def evidence_payload_from_args(args: argparse.Namespace) -> dict[str, Any] | Non
     """Read an optional evidence object from a manifest path or standard input."""
     if getattr(args, "evidence_stdin", False) or getattr(args, "stdin", False):
         return parse_evidence_content(sys.stdin.buffer.read())
-    input_path_value = getattr(args, "manifest", None)
+    input_path_value = getattr(args, "evidence_manifest", None)
+    if not isinstance(input_path_value, str):
+        input_path_value = getattr(args, "manifest", None)
     if not isinstance(input_path_value, str):
         return None
     input_path = Path(input_path_value)
@@ -18662,7 +18671,7 @@ def command_mutates_state(args: argparse.Namespace) -> bool:
     if args.domain == "action":
         return cast(str, args.action_authorization_action) != "status"
     if args.domain == "migrate":
-        return bool(args.migration_action == "apply")
+        return args.migration_action in {"apply", "recover"}
     if args.domain == "layout":
         return args.action not in {"status", "validate"}
     if args.domain in {"task", "log"}:
