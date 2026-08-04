@@ -12,9 +12,18 @@ from .model import V5ContractProjection
 def migration_projection(frontmatter: Mapping[str, object]) -> dict[str, object]:
     """Describe one Plan's read-only migration source and target versions."""
     version = frontmatter.get("schema_version")
-    tasks = frontmatter.get("tasks", [])
-    unknowns = frontmatter.get("unknowns", [])
+    tasks_value = frontmatter.get("tasks", [])
+    tasks = tasks_value if isinstance(tasks_value, list) else []
+    unknowns_value = frontmatter.get("unknowns", [])
+    unknowns = unknowns_value if isinstance(unknowns_value, list) else []
     confirmations = frontmatter.get("confirmations", {})
+    confirmation_items: list[object] = []
+    if isinstance(confirmations, dict):
+        required = confirmations.get("required", [])
+        if isinstance(required, list):
+            confirmation_items = required
+    truth_refs_value = frontmatter.get("truth_refs", [])
+    truth_refs = truth_refs_value if isinstance(truth_refs_value, list) else []
     return {
         "from_schema_version": version,
         "to_schema_version": 5,
@@ -43,17 +52,11 @@ def migration_projection(frontmatter: Mapping[str, object]) -> dict[str, object]
         ],
         "confirmation_mapping": [
             item.get("id")
-            for item in (
-                confirmations.get("required", [])
-                if isinstance(confirmations, dict)
-                else []
-            )
+            for item in confirmation_items
             if isinstance(item, dict) and isinstance(item.get("id"), str)
         ],
         "evidence_mapping": "canonical Plan evidence remains addressable by content hash",
-        "truth_refs": list(frontmatter.get("truth_refs", []))
-        if isinstance(frontmatter.get("truth_refs"), list)
-        else [],
+        "truth_refs": list(truth_refs),
     }
 
 
@@ -82,11 +85,15 @@ def build_v5_contract(frontmatter: Mapping[str, Any]) -> dict[str, Any]:
     contract["schema_version"] = 5
     nested = contract.get("contract")
     nested_revision = nested.get("revision") if isinstance(nested, dict) else None
-    revision = contract.get("contract_revision", nested_revision or contract.get("revision", 1))
-    contract["contract_revision"] = int(revision)
-    contract["revision"] = int(revision)
+    revision_value = contract.get(
+        "contract_revision",
+        nested_revision or contract.get("revision", 1),
+    )
+    revision = revision_value if isinstance(revision_value, int) else 1
+    contract["contract_revision"] = revision
+    contract["revision"] = revision
     if isinstance(nested, dict):
-        nested["revision"] = int(revision)
+        nested["revision"] = revision
     contract.pop("revision_history", None)
     contract.setdefault("truth_refs", [])
     plan_id = str(contract["plan_id"])

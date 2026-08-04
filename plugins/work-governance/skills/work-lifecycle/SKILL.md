@@ -155,6 +155,13 @@ closeout detail is needed. Use `plan evidence record --stdin` and
 `task verify --evidence-stdin` for small structured evidence objects so a
 temporary manifest is not required.
 
+The public command aliases are generated from the controller parser. Use
+`docs/CLI_REFERENCE.md` in the repository for the complete option surface and
+`workctl help <workflow>` for the short runtime view; do not maintain a second
+handwritten option table in this Skill. Schema-v5 Plans keep the contract
+revision in the Plan and task, event, and evidence runtime state in the ignored
+bundle referenced by `state_ref`, `event_ref`, and `evidence_store_ref`.
+
 Never infer a second execution authority from a filename, Git history, a phase
 design, or text such as "next step" alone. A likely second authority requires
 review; a confirmed second authority requires reconciliation.

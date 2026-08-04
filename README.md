@@ -197,6 +197,24 @@ No-Plan answers remain ephemeral and create no Plan, index, or project log.
 
 ## Controller
 
+The stable high-frequency workflow surface is available through
+`<receipt-bound-workctl> help <workflow>`. The complete parser-generated
+command and option reference is [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md);
+regenerate it after changing `build_parser()`:
+
+```sh
+.venv/bin/python plugins/work-governance/scripts/generate_cli_reference.py
+.venv/bin/python plugins/work-governance/scripts/generate_cli_reference.py --check
+```
+
+Schema v5 separates the durable Plan contract (`goal`, scope, success criteria,
+truth references, task definitions, hard dependencies, and confirmation
+gates) from ignored runtime state (task status, dynamic priority, current task,
+state sequence, event ledger, and redacted evidence snapshots). Reads accept
+v1-v4 and v5; new writes use v5, while `migrate inspect` is read-only and
+`migrate apply` requires an explicit confirmation, expected contract revision,
+backup, atomic replacement, and recoverable staging.
+
 Run only the exact `intake_command` emitted by the current SessionStart. It uses
 `controller_ref`, `controller_sha256`, and `receipt_sha256` from the READY
 receipt; do not derive a controller from a repository or Plugin-cache path:
