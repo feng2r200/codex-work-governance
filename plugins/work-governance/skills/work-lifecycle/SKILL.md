@@ -222,8 +222,8 @@ Schema-v4 and schema-v5 `plan confirm` decisions bind the exact current-turn
 Before remote write, production change, destructive work, secret handling, or
 substantive rollback, use `action authorize` and consume the returned capability for
 the exact kind, typed target, and action digest. Issuance also requires an accepted
-same-turn Plan confirmation with an exactly matching intervention basis. The capability
-expires quickly and is single-use.
+same-turn Plan confirmation with an exactly matching intervention action kind and basis.
+The capability expires quickly and is single-use.
 
 The Plan keeps one bounded `intake.current` anchor and a digest/count summary.
 Complete canonical records live in ignored, project-local, content-addressed

@@ -19,10 +19,11 @@ materially identical.
 
 Immediately before remote write, production change, destructive operation, secret
 handling, or substantive rollback, hash the exact bounded action description and run
-accept a same-turn Plan confirmation whose intervention basis is that exact target and
-digest, then run `action authorize` with its confirmation ID, kind, target, request
-reference, and current turn receipt. Execute only after `action consume` succeeds for the same digest and
-target. Consumption is atomic and single-use; missing, expired, superseded, mismatched,
+`plan confirm` to accept a same-turn Plan confirmation whose intervention binds that
+exact action kind, target, and digest, then run `action authorize` with its confirmation
+ID, kind, target, request reference, and current turn receipt. Execute only after
+`action consume` succeeds for the same digest and target. Consumption is atomic and
+single-use; missing, expired, superseded, mismatched,
 or replayed authority fails closed. The record authorizes the attempt but is never
 evidence that the external action succeeded.
 
