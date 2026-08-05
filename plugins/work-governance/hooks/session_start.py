@@ -2,9 +2,10 @@
 # ruff: noqa: UP006, UP017, UP035, UP045
 """Prepare Work Governance layout state for one Codex session.
 
-This hook intentionally uses only the Python standard library. It prewarms the
-controller's locked PEP 723 dependency environment in the project-local UV
-cache, then runs every state-changing or validating controller command offline.
+This hook intentionally uses only the Python standard library. It verifies that
+the bundled controller can start from the project-local UV cache, performs one
+bounded prewarm only when script dependencies are unavailable, then runs every
+state-changing or validating controller command offline.
 """
 
 from __future__ import annotations

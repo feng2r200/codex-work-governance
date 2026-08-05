@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyyaml==6.0.3"]
+# dependencies = []
 # ///
 """Deterministic controller for Work Governance Plan files."""
 
@@ -30,8 +30,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-import yaml
-
 try:
     from workctl_modules import WORKFLOW_HELP as MODULE_WORKFLOW_HELP
     from workctl_modules import WORKFLOW_HELP_ALIASES as MODULE_WORKFLOW_HELP_ALIASES
@@ -40,10 +38,13 @@ try:
     from workctl_modules import next_suggestion as MODULE_NEXT_SUGGESTION
     from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
     from workctl_modules import ready_task_targets as MODULE_READY_TASK_TARGETS
+    from workctl_modules import yaml_compat as yaml
     from workctl_modules.migration import build_v5_contract, build_v5_state, migration_projection
     from workctl_modules.model import TaskProjection
     from workctl_modules.storage import canonical_event_bytes, redacted_copy
 except ImportError:  # pragma: no cover - legacy single-file runtime bundles
+    import yaml  # type: ignore[no-redef]
+
     MODULE_WORKFLOW_HELP = None  # type: ignore[assignment,misc]
     MODULE_WORKFLOW_HELP_ALIASES = None  # type: ignore[assignment,misc]
     MODULE_BLOCKED_TASK_TARGETS = None  # type: ignore[assignment]
