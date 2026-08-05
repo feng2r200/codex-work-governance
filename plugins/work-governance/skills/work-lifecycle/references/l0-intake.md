@@ -18,6 +18,21 @@ Build a compact cognition map:
 - Exploratory unknowns: facts that must be discovered by reading files, running
   commands, checking logs, data, browser state, official docs, or runtime.
 
+For non-trivial work, use four lightweight decision gates before admitting or
+expanding governance:
+
+- Value: what user-visible result changes if this succeeds?
+- Impact: what behavior, cost, data, irreversibility, authority, or delivery
+  surface can change?
+- Cognition: what missing fact would change the route, and who owns it?
+- Verification: what check or evidence boundary can prove the result?
+
+These gates are an intake thinking aid, not a required Plan artifact. Persist
+only the answers that become obligations, scope boundaries, blockers, or
+confirmation bases. If any gate cannot be answered compactly and the missing
+fact is agent-owned, choose `explore`; if it is user-owned and blocks the next
+target, choose `ask`.
+
 Prefer exploration over questions when the answer is discoverable locally.
 Ask only the path-changing question when user choice is required.
 

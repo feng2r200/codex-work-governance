@@ -16,6 +16,9 @@ Report:
 - next phase, its validation standard, and its confirmation gate;
 - changed files and delivery boundary;
 - obligations covered and the check for each;
+- acceptance anchors for every must-have obligation;
+- weak-link surfaces checked, their artifact digests or freshness evidence, and
+  any deferred disposition;
 - validation commands and key outputs;
 - unverified areas and residual risks;
 - Git status, commit hash, and excluded files when Git was used;
@@ -49,6 +52,9 @@ Do not claim complete when:
 - authority is not `GOVERNED_ACTIVE`;
 - verification was skipped, failed, or only adjacent;
 - any must obligation lacks evidence;
+- any must obligation lacks an acceptance anchor;
+- an in-scope weak-link artifact was not checked for existence, digest, or
+  freshness;
 - any required confirmation is missing;
 - suspect, quarantined, or rollback-pending artifacts remain;
 - live switch or remote mutation remains unconfirmed.
@@ -91,6 +97,14 @@ Verified obligations and validations, final artifacts, and complete delivery
 must be produced by their dedicated evidence-bound transitions. A declined
 activation decision may resolve only its bound activation, exclusion, route,
 and handoff; it cannot certify delivery or validation evidence.
+
+For a candidate release, plugin activation, migration, or governance-framework
+claim, do a claim-boundary check before writing the final wording. The claim
+must name the exact implemented executable surface, the current validation
+evidence, and the still-deferred target-architecture items. `workctl help
+<workflow>` and generated `docs/CLI_REFERENCE.md` define implemented CLI
+surface; design drafts, historical plans, replay reports, or tests for adjacent
+behavior do not prove unimplemented commands or full architecture completion.
 
 Use this final line only when accurate for the current scope:
 

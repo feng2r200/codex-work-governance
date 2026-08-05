@@ -61,6 +61,15 @@ request. Validation challenges claims; it does not own the parent Plan.
 - For layout/bootstrap claims, inspect the exact Plugin build, READY receipt,
   version contract, local evidence record, offline command evidence, and both
   layout and Plan-authority axes. A hook's self-report is not sufficient.
+- For candidate release, migration, activation, or governance-framework claims,
+  inspect the executable surface named by `workctl help <workflow>` and
+  generated `docs/CLI_REFERENCE.md`, then compare it with the proposed wording.
+  Flag any wording that treats target architecture, historical plans, replay
+  summaries, or adjacent tests as proof of unimplemented capability.
+- For evidence audits, check obligation-to-anchor coverage, command freshness,
+  artifact digests, changed-file scope, skipped/flaky tests, absence of
+  `FAIL`/`ERROR` indicators in cited logs, and whether manual or degraded
+  evidence is labeled with its residual risk.
 - Prefer evidence from the cheapest safe real boundary that determines the user
   result. Treat synthetic tests as support, not a substitute, and require an
   explicit infeasibility reason when the real boundary was not probed.

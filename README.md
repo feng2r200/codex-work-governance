@@ -108,6 +108,23 @@ cause hypothesis, causal chain, contradicting evidence, and discriminating
 probe. It then compares materially plausible containment, causal correction,
 and alternate routes so a workaround is not mislabeled as a root-cause fix.
 
+## Candidate Claim And Weak-Link Checks
+
+For candidate releases, migrations, activation handoffs, and governance-rule
+changes, Work Governance treats the final wording as an artifact that must be
+checked. The claim may describe only the implemented executable surface and the
+current validation evidence. Architecture drafts, historical Plans, replay
+reports, and adjacent tests are useful context, but they do not prove full
+implementation of commands or storage concepts that are not present in
+`workctl help <workflow>` and [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md).
+
+High-impact plans should also name weak-link obligations when they touch
+documentation, templates, public help, plugin metadata, migrations, activation
+steps, rollback information, or handoff wording. These checks run at review or
+closeout boundaries and require artifact existence, digest, or freshness
+evidence. They are modeled as ordinary obligations/checks so they do not
+recreate a second process ledger or per-turn Plan churn.
+
 ## Install
 
 Add the repository root as a local marketplace, then install the plugin:
