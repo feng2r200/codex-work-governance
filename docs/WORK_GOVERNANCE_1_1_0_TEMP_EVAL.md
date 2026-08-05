@@ -51,6 +51,24 @@ Fix applied:
 - Added a regression assertion that `workctl help migrate` and
   `workctl help migration` return the same payload.
 
+## Follow-up Historical Friction Fix
+
+After this temporary evaluation, the 1.0.7 historical friction re-audit found
+one activation-relevant gap: repeated high-impact actions could still force
+new user turns even after the route and safety boundary were clear. The
+candidate now includes bounded route authority leases:
+
+- `action lease prepare` computes the exact lease basis for confirmation.
+- `action lease issue` records the confirmed lease in runtime state.
+- `action lease authorize` mints one single-use authorization per concrete
+  action inside the lease scope, with an explicit idempotency key for same
+  target/same digest retries after consumption.
+- `action consume` remains required immediately before execution.
+
+The lease does not waive pilot evidence, validation evidence, action success
+evidence, Plan contract drift checks, review blockers, artifact blockers, or
+activation confirmation.
+
 ## Residual Risk
 
 - Full candidate `codex exec` with hooks and model response was not run because

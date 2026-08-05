@@ -119,6 +119,32 @@ def add_pending_action_confirmation(
     write_plan(tmp_path, frontmatter, body)
 
 
+def add_pending_action_lease_confirmation(
+    tmp_path: Path,
+    *,
+    action_kind: str,
+    basis_ref: str,
+    basis_sha256: str,
+) -> None:
+    """Add an external-authority gate bound to one route authority lease basis."""
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["confirmations"]["required"].append(
+        {
+            "id": "C-ROUTE-ACTION-LEASE",
+            "description": "Authorize a bounded route action lease.",
+            "status": "pending",
+            "intervention": {
+                "kind": "external_authority",
+                "action_kind": action_kind,
+                "blocks": ["route"],
+                "basis_ref": basis_ref,
+                "basis_sha256": basis_sha256,
+            },
+        }
+    )
+    write_plan(tmp_path, frontmatter, body)
+
+
 def prepare_v4_plan(tmp_path: Path) -> None:
     """Create a valid v4 Plan with an explicit migration gate."""
     init_plan(tmp_path)
@@ -267,6 +293,7 @@ def test_public_help_matches_candidate_boundaries(tmp_path: Path) -> None:
     migration_help = json.loads(run_workctl(tmp_path, "help", "migration").stdout)
     migrate_help = json.loads(run_workctl(tmp_path, "help", "migrate").stdout)
     doctor_help = json.loads(run_workctl(tmp_path, "help", "doctor").stdout)
+    action_help = json.loads(run_workctl(tmp_path, "help", "action").stdout)
     gate_help = subprocess.run(
         [sys.executable, str(SCRIPT), "gate", "open", "--help"],
         cwd=tmp_path,
@@ -279,6 +306,8 @@ def test_public_help_matches_candidate_boundaries(tmp_path: Path) -> None:
     assert "migrate rollback-info" in migration_help["commands"]
     assert "doctor" in migration_help["commands"]
     assert doctor_help["commands"] == ["doctor", "doctor --clean-stale-transactions"]
+    assert "action lease prepare" in action_help["commands"]
+    assert "action lease authorize" in action_help["commands"]
     assert gate_help.returncode == 0
     assert "--status {pending,accepted}" not in gate_help.stdout
 
@@ -1601,6 +1630,428 @@ def test_high_impact_action_authorization_is_target_bound_and_single_use(
     )
     assert remint.returncode == 2
     assert "ACTION_AUTHORIZATION_REPLAYED" in remint.stderr
+
+
+def test_route_action_lease_mints_bounded_single_use_authorizations(
+    tmp_path: Path,
+) -> None:
+    """A confirmed route lease avoids repeat user turns without widening action authority."""
+    action_one = "a" * 64
+    action_two = "b" * 64
+    action_three = "c" * 64
+    target_prefix = "project:service/stocklens-production/"
+    target_one = "project:service/stocklens-production/deploy"
+    target_two = "project:service/stocklens-production/verify"
+    scope_args = [
+        "--action-kind",
+        "production_change",
+        "--target-prefix",
+        target_prefix,
+        "--allowed-action-sha256",
+        action_one,
+        "--allowed-action-sha256",
+        action_two,
+        "--allowed-action-sha256",
+        action_three,
+        "--lease-ttl-seconds",
+        "3600",
+        "--authorization-ttl-seconds",
+        "300",
+        "--max-authorizations",
+        "3",
+    ]
+    prepare_v4_plan(tmp_path)
+    prepared = json.loads(
+        run_without_receipt(
+            tmp_path,
+            "action",
+            "lease",
+            "prepare",
+            *scope_args,
+        ).stdout
+    )
+    assert prepared["scope"]["blocks"] == ["route"]
+    explicit_blocks = json.loads(
+        run_without_receipt(
+            tmp_path,
+            "action",
+            "lease",
+            "prepare",
+            *scope_args,
+            "--blocks",
+            "task:T-001",
+        ).stdout
+    )
+    assert explicit_blocks["scope"]["blocks"] == ["task:T-001"]
+    assert explicit_blocks["basis_sha256"] != prepared["basis_sha256"]
+    add_pending_action_lease_confirmation(
+        tmp_path,
+        action_kind="production_change",
+        basis_ref=prepared["basis_ref"],
+        basis_sha256=prepared["basis_sha256"],
+    )
+    run_workctl(
+        tmp_path,
+        "migrate",
+        "apply",
+        "--confirmation",
+        "C-MIGRATION-SCHEMA-V5",
+        "--expected-contract-revision",
+        "1",
+        env=STRICT_CONTROLLER_ENV,
+    )
+    request_ref, turn_sha256 = issue_test_turn(
+        tmp_path,
+        turn_id="turn-action-lease",
+        prompt="authorize bounded route lease",
+    )
+    unconfirmed = run_workctl(
+        tmp_path,
+        "action",
+        "lease",
+        "issue",
+        *scope_args,
+        "--confirmation-id",
+        "C-ROUTE-ACTION-LEASE",
+        "--basis-sha256",
+        prepared["basis_sha256"],
+        "--ref",
+        request_ref,
+        "--turn-receipt-sha256",
+        turn_sha256,
+        env=STRICT_CONTROLLER_ENV,
+        check=False,
+    )
+    assert unconfirmed.returncode == 2
+    assert "ACTION_LEASE_CONFIRMATION_NOT_ACCEPTED" in unconfirmed.stderr
+
+    run_workctl(
+        tmp_path,
+        "plan",
+        "confirm",
+        "--confirmation-id",
+        "C-ROUTE-ACTION-LEASE",
+        "--ref",
+        request_ref,
+        "--evidence-sha256",
+        prepared["basis_sha256"],
+        "--expected-revision",
+        "1",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        env=STRICT_CONTROLLER_ENV,
+    )
+    plan_path = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260723-001.md"
+    confirmed_contract = plan_path.read_bytes()
+    lease = json.loads(
+        run_workctl(
+            tmp_path,
+            "action",
+            "lease",
+            "issue",
+            *scope_args,
+            "--confirmation-id",
+            "C-ROUTE-ACTION-LEASE",
+            "--basis-sha256",
+            prepared["basis_sha256"],
+            "--ref",
+            request_ref,
+            "--turn-receipt-sha256",
+            turn_sha256,
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    assert lease["state"] == "active"
+    assert lease["basis_ref"] == prepared["basis_ref"]
+    assert lease["issued_authorizations"] == []
+    assert plan_path.read_bytes() == confirmed_contract
+
+    first_authorization = json.loads(
+        run_workctl(
+            tmp_path,
+            "action",
+            "lease",
+            "authorize",
+            "--lease-id",
+            lease["lease_id"],
+            "--action-kind",
+            "production_change",
+            "--target-ref",
+            target_one,
+            "--action-sha256",
+            action_one,
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    assert first_authorization["schema_version"] == 2
+    assert first_authorization["authority_source"] == "lease"
+    assert first_authorization["idempotency_key"] == "default"
+    assert first_authorization["turn_receipt_sha256"] == turn_sha256
+
+    consumed_first = json.loads(
+        run_workctl(
+            tmp_path,
+            "action",
+            "consume",
+            "--authorization-id",
+            first_authorization["authorization_id"],
+            "--action-kind",
+            "production_change",
+            "--target-ref",
+            target_one,
+            "--action-sha256",
+            action_one,
+            "--consumer-ref",
+            "runtime:executor",
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    assert consumed_first["state"] == "consumed"
+
+    replay_same_default_key = run_workctl(
+        tmp_path,
+        "action",
+        "lease",
+        "authorize",
+        "--lease-id",
+        lease["lease_id"],
+        "--action-kind",
+        "production_change",
+        "--target-ref",
+        target_one,
+        "--action-sha256",
+        action_one,
+        env=STRICT_CONTROLLER_ENV,
+        check=False,
+    )
+    assert replay_same_default_key.returncode == 2
+    assert "ACTION_AUTHORIZATION_REPLAYED" in replay_same_default_key.stderr
+
+    retry_authorization = json.loads(
+        run_workctl(
+            tmp_path,
+            "action",
+            "lease",
+            "authorize",
+            "--lease-id",
+            lease["lease_id"],
+            "--action-kind",
+            "production_change",
+            "--target-ref",
+            target_one,
+            "--action-sha256",
+            action_one,
+            "--idempotency-key",
+            "retry-after-command-failure",
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    assert retry_authorization["authorization_id"] != first_authorization["authorization_id"]
+    assert retry_authorization["lease_authorization_index"] == 2
+    assert retry_authorization["idempotency_key"] == "retry-after-command-failure"
+
+    mismatch = run_workctl(
+        tmp_path,
+        "action",
+        "lease",
+        "authorize",
+        "--lease-id",
+        lease["lease_id"],
+        "--action-kind",
+        "production_change",
+        "--target-ref",
+        "project:service/other-production/deploy",
+        "--action-sha256",
+        action_two,
+        env=STRICT_CONTROLLER_ENV,
+        check=False,
+    )
+    assert mismatch.returncode == 2
+    assert "ACTION_LEASE_TARGET_MISMATCH" in mismatch.stderr
+
+    digest_rejected = run_workctl(
+        tmp_path,
+        "action",
+        "lease",
+        "authorize",
+        "--lease-id",
+        lease["lease_id"],
+        "--action-kind",
+        "production_change",
+        "--target-ref",
+        target_two,
+        "--action-sha256",
+        "d" * 64,
+        env=STRICT_CONTROLLER_ENV,
+        check=False,
+    )
+    assert digest_rejected.returncode == 2
+    assert "ACTION_LEASE_ACTION_SHA256_NOT_ALLOWED" in digest_rejected.stderr
+
+    second_authorization = json.loads(
+        run_workctl(
+            tmp_path,
+            "action",
+            "lease",
+            "authorize",
+            "--lease-id",
+            lease["lease_id"],
+            "--action-kind",
+            "production_change",
+            "--target-ref",
+            target_two,
+            "--action-sha256",
+            action_two,
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    assert second_authorization["lease_authorization_index"] == 3
+
+    exhausted = run_workctl(
+        tmp_path,
+        "action",
+        "lease",
+        "authorize",
+        "--lease-id",
+        lease["lease_id"],
+        "--action-kind",
+        "production_change",
+        "--target-ref",
+        target_two,
+        "--action-sha256",
+        action_three,
+        env=STRICT_CONTROLLER_ENV,
+        check=False,
+    )
+    assert exhausted.returncode == 2
+    assert "ACTION_LEASE_EXHAUSTED" in exhausted.stderr
+    status = json.loads(
+        run_workctl(
+            tmp_path,
+            "action",
+            "lease",
+            "status",
+            "--lease-id",
+            lease["lease_id"],
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    assert status["effective_state"] == "active"
+    assert len(status["issued_authorizations"]) == 3
+    assert plan_path.read_bytes() == confirmed_contract
+
+
+def test_route_action_lease_freezes_on_contract_drift(tmp_path: Path) -> None:
+    """A lease cannot mint more capability after the confirmed Plan contract drifts."""
+    action_sha256 = "e" * 64
+    scope_args = [
+        "--action-kind",
+        "remote_write",
+        "--target-ref",
+        "project:service/stocklens-production/deploy",
+        "--allowed-action-sha256",
+        action_sha256,
+    ]
+    prepare_v4_plan(tmp_path)
+    prepared = json.loads(
+        run_without_receipt(
+            tmp_path,
+            "action",
+            "lease",
+            "prepare",
+            *scope_args,
+        ).stdout
+    )
+    add_pending_action_lease_confirmation(
+        tmp_path,
+        action_kind="remote_write",
+        basis_ref=prepared["basis_ref"],
+        basis_sha256=prepared["basis_sha256"],
+    )
+    run_workctl(
+        tmp_path,
+        "migrate",
+        "apply",
+        "--confirmation",
+        "C-MIGRATION-SCHEMA-V5",
+        "--expected-contract-revision",
+        "1",
+        env=STRICT_CONTROLLER_ENV,
+    )
+    request_ref, turn_sha256 = issue_test_turn(
+        tmp_path,
+        turn_id="turn-action-lease-drift",
+        prompt="authorize bounded route lease before drift",
+    )
+    run_workctl(
+        tmp_path,
+        "plan",
+        "confirm",
+        "--confirmation-id",
+        "C-ROUTE-ACTION-LEASE",
+        "--ref",
+        request_ref,
+        "--evidence-sha256",
+        prepared["basis_sha256"],
+        "--expected-revision",
+        "1",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        env=STRICT_CONTROLLER_ENV,
+    )
+    lease = json.loads(
+        run_workctl(
+            tmp_path,
+            "action",
+            "lease",
+            "issue",
+            *scope_args,
+            "--confirmation-id",
+            "C-ROUTE-ACTION-LEASE",
+            "--basis-sha256",
+            prepared["basis_sha256"],
+            "--ref",
+            request_ref,
+            "--turn-receipt-sha256",
+            turn_sha256,
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    plan_path = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260723-001.md"
+    plan_path.write_bytes(plan_path.read_bytes() + b"\nOut-of-band drift.\n")
+
+    drifted = run_workctl(
+        tmp_path,
+        "action",
+        "lease",
+        "authorize",
+        "--lease-id",
+        lease["lease_id"],
+        "--action-kind",
+        "remote_write",
+        "--target-ref",
+        "project:service/stocklens-production/deploy",
+        "--action-sha256",
+        action_sha256,
+        env=STRICT_CONTROLLER_ENV,
+        check=False,
+    )
+
+    assert drifted.returncode == 2
+    assert "ACTION_LEASE_CONTRACT_DRIFT" in drifted.stderr
+    status = json.loads(
+        run_workctl(
+            tmp_path,
+            "action",
+            "lease",
+            "status",
+            "--lease-id",
+            lease["lease_id"],
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    assert status["effective_state"] == "frozen"
+    assert status["freeze_reason"] == "contract-drift"
 
 
 def test_v5_confirmation_recovers_event_after_contract_replace_interrupt(

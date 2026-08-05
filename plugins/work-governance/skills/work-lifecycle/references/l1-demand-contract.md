@@ -65,6 +65,9 @@ defect, the pilot task and validation remain explicit dependencies of every
 downstream batch. The authorization cannot satisfy or bypass the pilot gate.
 Name the confirmed pilot evidence, the invariant checked at later batch
 boundaries, and the downstream freeze condition before bulk execution starts.
+Use a route authority lease only after that boundary is explicit: its scope
+must name kind, target refs or typed prefixes, digest policy, expiry, max
+authorizations, blocked targets, and drift/freeze conditions.
 
 Do not treat examples, candidate designs, logs, or memory as confirmed facts.
 If a future agent must obey the contract, write it into the Plan frontmatter.

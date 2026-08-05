@@ -369,11 +369,26 @@ expiry, and consumption state. Issuance requires a same-turn accepted
 `external_authority` Plan gate whose basis action kind, reference, and digest exactly
 match the action kind, target, and action; substantive rollback uses a matching
 `deviation_recovery` gate. It is short-lived, cannot be reminted from the same turn
-after consumption,
-and rejects missing, superseded, target-mismatched, expired, or replayed authority.
-The supported kinds are remote write, production change, destructive operation,
-secret handling, and substantive rollback. This envelope authorizes an action; it
-does not claim that the external action succeeded.
+after consumption, and rejects missing, superseded, target-mismatched, expired, or
+replayed authority.
+
+For repeated high-impact actions already covered by a clear route decision, use a
+bounded route authority lease instead of asking the user for each identical class of
+permission. `action lease prepare` prints the exact lease basis digest and typed
+`basis_ref`; create and accept an `external_authority` gate for that basis, then
+`action lease issue` records the lease in runtime. Each later action still calls
+`action lease authorize` to mint a single-use capability and then `action consume`
+for the concrete action digest and target. Authorization is idempotent by default;
+if the same target and action digest must be retried after a consumed attempt, pass a
+new `--idempotency-key` and the lease consumes another bounded authorization slot. A
+lease is scoped by kind, exact targets or typed target prefixes, digest policy,
+expiry, max authorization count, Plan contract SHA256, and review/artifact blockers.
+It reduces repeated confirmation prompts; it does not waive pilot evidence,
+validation, execution evidence, activation evidence, or drift checks. The supported
+kinds are remote write, production change, destructive operation, secret handling,
+and substantive rollback.
+This envelope authorizes an action; it does not claim that the external action
+succeeded.
 
 Schema v4 cannot be downgraded through ordinary revision. Verified
 obligations/validations, final artifacts, and completed delivery use dedicated
