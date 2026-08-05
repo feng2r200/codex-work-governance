@@ -32,6 +32,7 @@ if not _PY_YAML_DISABLED:
 else:  # pragma: no cover - used by fallback-specific tests.
     _pyyaml = None
 
+
 class _FallbackYAMLError(ValueError):
     """Raised when the fallback parser cannot safely read YAML."""
 
@@ -70,9 +71,7 @@ else:
         text: str
 
     _INT_RE = re.compile(r"^[+-]?\d+$")
-    _FLOAT_RE = re.compile(
-        r"^[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?$"
-    )
+    _FLOAT_RE = re.compile(r"^[+-]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?$")
     _PLAIN_SCALAR_RE = re.compile(r"^[A-Za-z0-9_./@:+-][A-Za-z0-9_./@:+ -]*$")
 
     def safe_load(stream: str | bytes) -> Any:
@@ -166,9 +165,7 @@ else:
             line = lines[position]
             if line.indent < indent:
                 break
-            if line.indent != indent or (
-                line.text != "-" and not line.text.startswith("- ")
-            ):
+            if line.indent != indent or (line.text != "-" and not line.text.startswith("- ")):
                 break
             content = "" if line.text == "-" else line.text[2:].strip()
             position += 1
@@ -231,19 +228,47 @@ else:
         scalar_indent: int,
     ) -> tuple[Any, int]:
         parts = [raw_value.strip()]
+        open_quote = _open_multiline_quote(parts)
         while position < len(lines):
             line = lines[position]
             if line.indent <= scalar_indent:
                 break
-            if (
-                line.text == "-"
-                or line.text.startswith("- ")
-                or _maybe_split_key_value(line.text) is not None
-            ):
-                break
             parts.append(line.text.strip())
             position += 1
+            open_quote = _open_multiline_quote(parts)
+        if open_quote is not None:
+            raise YAMLError("unterminated quoted scalar")
         return _parse_scalar(" ".join(part for part in parts if part)), position
+
+    def _open_multiline_quote(parts: Sequence[str]) -> str | None:
+        text = " ".join(part.strip() for part in parts if part.strip())
+        if not text or text[0] not in {"'", '"'}:
+            return None
+        quote = text[0]
+        if _quoted_scalar_is_closed(text, quote):
+            return None
+        return quote
+
+    def _quoted_scalar_is_closed(text: str, quote: str) -> bool:
+        escaped = False
+        index = 1
+        while index < len(text):
+            character = text[index]
+            if quote == '"' and escaped:
+                escaped = False
+                index += 1
+                continue
+            if quote == '"' and character == "\\":
+                escaped = True
+                index += 1
+                continue
+            if character == quote:
+                if quote == "'" and index + 1 < len(text) and text[index + 1] == "'":
+                    index += 2
+                    continue
+                return text[index + 1 :].strip() == ""
+            index += 1
+        return False
 
     def _split_key_value(text: str) -> tuple[str, str]:
         split = _maybe_split_key_value(text)
@@ -268,6 +293,8 @@ else:
                     quote = None
                 continue
             if character == ":" and quote is None:
+                if index + 1 < len(text) and not text[index + 1].isspace():
+                    continue
                 key = text[:index].strip()
                 if not key or " " in key:
                     return None
@@ -275,9 +302,8 @@ else:
         return None
 
     def _parse_key(text: str) -> str:
-        if (
-            (text.startswith("'") and text.endswith("'"))
-            or (text.startswith('"') and text.endswith('"'))
+        if (text.startswith("'") and text.endswith("'")) or (
+            text.startswith('"') and text.endswith('"')
         ):
             value = _parse_scalar(text)
             if not isinstance(value, str):
@@ -290,7 +316,7 @@ else:
         if value == "":
             return ""
         lowered = value.lower()
-        if lowered in {"null", "~", "none"}:
+        if lowered in {"null", "~"}:
             return None
         if lowered == "true":
             return True
