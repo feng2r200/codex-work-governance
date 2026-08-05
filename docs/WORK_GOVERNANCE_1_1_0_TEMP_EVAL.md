@@ -69,10 +69,21 @@ The lease does not waive pilot evidence, validation evidence, action success
 evidence, Plan contract drift checks, review blockers, artifact blockers, or
 activation confirmation.
 
+The subsequent reviewer-acquisition follow-up adds runtime failure caching for
+external reviewer attempts. Repeated proxy/API/auth/timeout failures can be
+classified as `VALIDATOR_UNAVAILABLE_CACHED` by `review acquisition check` after
+`review acquisition record-failure` records the first failed attempt and
+cooldown. Environment-level classes also cool down the same reviewer mechanism
+when the reviewed input digest changes. This reduces repeated
+unavailable-review loops; it does not certify the candidate or replace trusted
+independent validation.
+
 ## Residual Risk
 
-- Full candidate `codex exec` with hooks and model response was not run because
-  the isolated temporary Codex home intentionally did not copy real auth.
+- Full candidate `codex exec` with hooks and model response was not run under a
+  trusted reviewer attestor. Reviewer acquisition failure caching can avoid
+  repeated unavailable-review attempts, but cannot turn that condition into a
+  verified independent review.
 - The current live plugin was not replaced or redirected, so this report does
   not prove live activation.
 - The broader destructive redesign draft remains partially implemented by

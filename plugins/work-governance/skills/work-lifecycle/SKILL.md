@@ -84,7 +84,13 @@ component, and the recovery condition.
   materially changed retry, a deterministic self-challenge may release only
   ordinary reversible local tasks; concrete blocker/high findings and delivery,
   activation, route, confirmation-bound, or other high-impact targets remain
-  fail-closed.
+  fail-closed. Before trying the same external reviewer path again, use
+  `review acquisition check`; after a failed attempt, record the redacted failure
+  with `review acquisition record-failure` so the runtime cooldown can return
+  `VALIDATOR_UNAVAILABLE_CACHED` instead of repeating an unavailable path. For
+  proxy, auth, missing-command, timeout, and attestor failures, treat a fresh
+  cache for the same reviewer mechanism as matching even when the reviewed input
+  digest changed.
 - Keep a goal anchor before repeating an action or expanding validation: restate
   the user-visible target, the unresolved fact, and the next action expected to
   change evidence. Tests and coverage are support tools, not the target.

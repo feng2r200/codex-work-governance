@@ -36,6 +36,14 @@ evidence reference and SHA256 for later challenge.
 If role isolation is unavailable:
 
 - disclose the downgrade;
+- check `review acquisition status` and do not repeat a matching
+  `VALIDATOR_UNAVAILABLE_CACHED` target, mechanism, and reviewed input digest
+  during cooldown; for proxy, auth, missing-command, timeout, and attestor
+  failures, a fresh cache for the same reviewer mechanism also counts as
+  matching even when the reviewed input digest changed;
+- after a failed reviewer acquisition attempt, record the redacted failure
+  through `review acquisition record-failure` instead of keeping only terminal
+  scrollback;
 - strengthen deterministic checks where possible;
 - lower conclusion strength for high-impact work unless the user accepts the
   downgrade.

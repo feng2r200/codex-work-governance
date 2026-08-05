@@ -76,6 +76,18 @@ blocker/high findings stop their declared downstream targets. Same-context or
 unproven isolation is `degraded` and cannot support high-impact completion
 without separately accepted, evidence-bound risk authority.
 
+Reviewer acquisition failures are runtime state, not Plan contract changes.
+Before retrying an external reviewer, use `review acquisition check` with the
+target, mechanism, and reviewed input digest. If the exact reviewer input is in
+cooldown, or if the same reviewer mechanism has a fresh environment-level
+failure such as proxy, auth, missing command, timeout, or untrusted attestor, it
+reports `VALIDATOR_UNAVAILABLE_CACHED` so the agent can stop repeating the same
+unavailable path. A failed acquisition can be recorded by piping the redacted
+command output into `review acquisition record-failure`; the record stores a
+stable failure class, fingerprint, cooldown, and bounded excerpt.
+This supports deterministic self-challenge for ordinary reversible local work,
+but it never turns unavailable review into verified independent validation.
+
 ## Goal-first stop-loss
 
 Work stays anchored to the user-visible target rather than test volume. After

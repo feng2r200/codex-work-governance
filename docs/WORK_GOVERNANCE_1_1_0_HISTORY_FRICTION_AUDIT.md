@@ -22,6 +22,7 @@ activation, and it names residual work without claiming it is already done.
 | Previously clarified business facts could be lost across long work. | Partially improved | Goal/Plan contracts, TruthRefs, evidence refs, and runtime events give durable anchors; full standalone TruthRef CRUD is deferred to later 1.1.x work. |
 | High-impact routes asked for repeated user turns even after a route was clear. | Improved by this follow-up | Route authority leases let one current-turn confirmation create a bounded runtime authority for repeated same-kind actions. Each action still mints and consumes a single-use capability. |
 | Confirmation and receipt constraints blocked progress after target expansion. | Improved, still fail-closed | Leases reduce repeated prompts inside the confirmed scope. Scope expansion, contract drift, review blockers, artifact blockers, or expired leases still require a fresh decision. |
+| Reviewer acquisition could repeat the same unavailable external path. | Improved by this follow-up | `review acquisition check/status/record-failure` caches validator-unavailable failures in runtime with class, fingerprint, cooldown, and redacted excerpt. It avoids repeat attempts but does not verify independent review. |
 | The candidate might overclaim the destructive redesign draft. | Guarded | Candidate notes now identify implemented control-plane behavior and explicitly defer broader CRUD surfaces and full TruthRef validation. |
 
 ## Route Authority Lease Decision
@@ -43,6 +44,24 @@ lease:
 
 This improves goal throughput without turning a broad statement into unlimited
 remote, production, destructive, secret, or rollback authority.
+
+## Reviewer Acquisition Decision
+
+The reviewer acquisition correction handles an observed external-validator
+availability failure:
+
+- `review acquisition check` decides whether the same target, mechanism, and
+  review input digest should be attempted, and reports a mechanism-scoped cache
+  when the same reviewer mechanism has a fresh proxy, auth, missing-command,
+  timeout, or attestor failure.
+- `review acquisition record-failure` records one failed acquisition in runtime
+  with redacted output, stable failure class, fingerprint, cooldown, and
+  idempotency key.
+- `review acquisition status` exposes current cached failures without changing
+  the Plan contract.
+- Cached failure supports deterministic self-challenge only for ordinary
+  reversible local work. Activation, route closeout, external actions, and
+  confirmation-bound targets remain fail-closed.
 
 ## Deferred Work
 

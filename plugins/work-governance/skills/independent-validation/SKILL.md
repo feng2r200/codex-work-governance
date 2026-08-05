@@ -52,7 +52,12 @@ request. Validation challenges claims; it does not own the parent Plan.
   self-challenge may support only ordinary reversible local tasks; delivery,
   activation, route closeout, external actions, and any task with a confirmation
   gate remain blocked, as do all targets covered by an open blocker or high
-  finding.
+  finding. Use `review acquisition check` before retrying the same target,
+  mechanism, and reviewed input digest. Treat a fresh same-mechanism cache as
+  matching for proxy, auth, missing-command, timeout, and attestor failures even
+  when the reviewed input digest changed. When acquisition fails, pipe the
+  redacted command output to `review acquisition record-failure`; the resulting
+  runtime cooldown is availability evidence only, not an independent review.
 - For layout/bootstrap claims, inspect the exact Plugin build, READY receipt,
   version contract, local evidence record, offline command evidence, and both
   layout and Plan-authority axes. A hook's self-report is not sufficient.
