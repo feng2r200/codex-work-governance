@@ -40,6 +40,23 @@ evidence named by the target result. Prefer the smallest validation set that
 can discriminate the important failure modes, then add cases only when new
 evidence exposes a real gap.
 
+Bind every must-have obligation to at least one acceptance anchor: an
+executable command, deterministic script, checklist item, current artifact
+digest, runtime observation, or contract-allowed user/manual signoff that can
+prove the exact obligation. High-impact or external claims cannot use manual or
+degraded evidence as the only anchor unless a separate risk-authority
+confirmation accepts that downgrade. A task without an anchor is not done;
+classify it as unscoped, deferred, or still blocked instead of letting nearby
+green tests certify it.
+
+Model weak-link work inside the same obligation set. Do not create a second
+parallel checklist system. When the route touches docs, templates, public help,
+plugin metadata, migrations, activation instructions, rollback information, or
+handoff wording, tag the relevant obligation/check as `weak-link` and state the
+artifact and freshness evidence it needs. Weak-link checks run at review or
+closeout boundaries; they do not create a Plan revision or runtime event for
+every ordinary note.
+
 Classify every scope exclusion. In schema-v4 Plans, use a structured
 `disposition`:
 
@@ -65,6 +82,9 @@ defect, the pilot task and validation remain explicit dependencies of every
 downstream batch. The authorization cannot satisfy or bypass the pilot gate.
 Name the confirmed pilot evidence, the invariant checked at later batch
 boundaries, and the downstream freeze condition before bulk execution starts.
+Use a route authority lease only after that boundary is explicit: its scope
+must name kind, target refs or typed prefixes, digest policy, expiry, max
+authorizations, blocked targets, and drift/freeze conditions.
 
 Do not treat examples, candidate designs, logs, or memory as confirmed facts.
 If a future agent must obey the contract, write it into the Plan frontmatter.

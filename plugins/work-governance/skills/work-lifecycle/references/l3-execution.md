@@ -27,6 +27,16 @@ single-use; missing, expired, superseded, mismatched,
 or replayed authority fails closed. The record authorizes the attempt but is never
 evidence that the external action succeeded.
 
+For a repeated high-impact route that the user has explicitly authorized as a
+bounded batch, first run `action lease prepare` and confirm the printed lease basis
+through the same current-turn Plan confirmation path. After `action lease issue`,
+each concrete action still needs `action lease authorize` and `action consume`.
+The default authorization key is idempotent; pass a new `--idempotency-key` only
+when a consumed same-target/same-digest attempt must be retried inside the same
+bounded route. The lease freezes on Plan contract drift and, by default, review or
+artifact blockers. It can waive repeated prompts only; it cannot satisfy pilot
+evidence, quality gates, action success evidence, or activation evidence.
+
 During execution:
 
 - keep changes scoped to the obligation;

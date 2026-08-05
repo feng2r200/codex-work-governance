@@ -1,10 +1,21 @@
 # Work Governance Plugin
 
-Work Governance is a Codex plugin that governs a task from intake through
-planning, execution, evidence review, independent validation, and handoff.
+Work Governance is a Codex plugin that helps Codex move from an idea or
+unclear request to exploration, goal clarification, an auditable plan,
+execution, correction, validation, and handoff. The 1.1.0 candidate keeps the
+plugin goal-driven: Plan, Skill, script, and Hook behavior support the user
+goal instead of turning every turn into a heavy governance ritual.
 
 The repository-local marketplace is `.agents/plugins/marketplace.json` and the
 plugin source is `plugins/work-governance`.
+
+This repository can prepare a local 1.1.0 candidate, but candidate preparation
+does not install, enable, or switch the user's live Codex plugin. Live
+activation remains blocked on `CONFIRM_ACTIVATE_WORK_GOVERNANCE_1_1_0`.
+The candidate implements the documented core control plane; it does not claim
+that every command named in the architecture draft is already present. Treat
+`workctl help <workflow>` and [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) as
+the current executable surface.
 
 ## Skills
 
@@ -65,6 +76,18 @@ blocker/high findings stop their declared downstream targets. Same-context or
 unproven isolation is `degraded` and cannot support high-impact completion
 without separately accepted, evidence-bound risk authority.
 
+Reviewer acquisition failures are runtime state, not Plan contract changes.
+Before retrying an external reviewer, use `review acquisition check` with the
+target, mechanism, and reviewed input digest. If the exact reviewer input is in
+cooldown, or if the same reviewer mechanism has a fresh environment-level
+failure such as proxy, auth, missing command, timeout, or untrusted attestor, it
+reports `VALIDATOR_UNAVAILABLE_CACHED` so the agent can stop repeating the same
+unavailable path. A failed acquisition can be recorded by piping the redacted
+command output into `review acquisition record-failure`; the record stores a
+stable failure class, fingerprint, cooldown, and bounded excerpt.
+This supports deterministic self-challenge for ordinary reversible local work,
+but it never turns unavailable review into verified independent validation.
+
 ## Goal-first stop-loss
 
 Work stays anchored to the user-visible target rather than test volume. After
@@ -84,6 +107,23 @@ Before a fix is selected, the lifecycle separates the symptom, falsifiable
 cause hypothesis, causal chain, contradicting evidence, and discriminating
 probe. It then compares materially plausible containment, causal correction,
 and alternate routes so a workaround is not mislabeled as a root-cause fix.
+
+## Candidate Claim And Weak-Link Checks
+
+For candidate releases, migrations, activation handoffs, and governance-rule
+changes, Work Governance treats the final wording as an artifact that must be
+checked. The claim may describe only the implemented executable surface and the
+current validation evidence. Architecture drafts, historical Plans, replay
+reports, and adjacent tests are useful context, but they do not prove full
+implementation of commands or storage concepts that are not present in
+`workctl help <workflow>` and [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md).
+
+High-impact plans should also name weak-link obligations when they touch
+documentation, templates, public help, plugin metadata, migrations, activation
+steps, rollback information, or handoff wording. These checks run at review or
+closeout boundaries and require artifact existence, digest, or freshness
+evidence. They are modeled as ordinary obligations/checks so they do not
+recreate a second process ledger or per-turn Plan churn.
 
 ## Install
 
@@ -146,13 +186,15 @@ controller to perform layout migration or recovery for this SessionStart; it
 cannot authorize Plan or other ordinary writes. A same-session SessionStart
 replaces it, so an older capability for that session fails closed; capabilities
 from different sessions neither authorize nor supersede one another.
-The hook then prewarms the controller's pinned PEP 723 dependency
-in `.work-governance/cache/uv`, trying the existing cache offline before using
-permitted dependency access, disables Python downloads, and runs migration,
-validation, and status commands offline. Exact Plugin builds and incremental
-state live in the ignored session-scoped bootstrap receipt; detailed command
-evidence stays under `.work-governance/evidence/`. The runtime snapshot remains
-available if the Codex Plugin cache entry is replaced or removed after
+The hook then proves the controller can start from `.work-governance/cache/uv`,
+trying the existing cache offline before using permitted dependency access only
+for a script-dependency miss, disables Python downloads, and runs migration,
+validation, and status commands offline. The bundled controller has a
+stdlib-backed YAML compatibility layer, so a fresh project does not need PyPI
+or a pre-existing PyYAML wheel just to bootstrap. Exact Plugin builds and
+incremental state live in the ignored session-scoped bootstrap receipt; detailed
+command evidence stays under `.work-governance/evidence/`. The runtime snapshot
+remains available if the Codex Plugin cache entry is replaced or removed after
 SessionStart.
 
 When a same-session compaction emits another SessionStart and the trusted
@@ -197,10 +239,23 @@ No-Plan answers remain ephemeral and create no Plan, index, or project log.
 
 ## Controller
 
-The stable high-frequency workflow surface is available through
+The public CLI entrypoint is the Bash wrapper
+`plugins/work-governance/scripts/workctl`; it routes to the receipt-bound
+private Python transaction engine. In a governed session, use the exact
+controller path and receipt emitted by SessionStart. The stable
+high-frequency workflow surface is available through
 `<receipt-bound-workctl> help <workflow>`. The complete parser-generated
 command and option reference is [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md);
 regenerate it after changing `build_parser()`:
+
+The wrapper first tries the project-local UV cache offline. If the failure is a
+script-dependency cache miss, it performs one normal `uv run` prewarm using the
+same project-local cache, then continues. Set
+`WORK_GOVERNANCE_STRICT_OFFLINE=1` to keep fail-closed offline-only behavior.
+SessionStart remains the required trusted path for Plan-controlled work;
+wrapper prewarm only makes `workctl help`, diagnostics, and later
+receipt-bound controller calls executable if a future controller adds a script
+dependency.
 
 ```sh
 .venv/bin/python plugins/work-governance/scripts/generate_cli_reference.py
@@ -211,9 +266,14 @@ Schema v5 separates the durable Plan contract (`goal`, scope, success criteria,
 truth references, task definitions, hard dependencies, and confirmation
 gates) from ignored runtime state (task status, dynamic priority, current task,
 state sequence, event ledger, and redacted evidence snapshots). Reads accept
-v1-v4 and v5; new writes use v5, while `migrate inspect` is read-only and
+v1-v4 and v5; new writes use v5. `migrate inspect`, `migrate apply --dry-run`,
+`migrate rollback-info`, and default `doctor` are read-only. Durable
 `migrate apply` requires an explicit confirmation, expected contract revision,
-backup, atomic replacement, and recoverable staging.
+backup, atomic replacement, and recoverable staging; `migrate recover` is also
+receipt-bound because it can finish an interrupted replacement. Schema-v5
+durable migration accepts only the exact `C-MIGRATION-SCHEMA-V5` gate, either
+as a legacy accepted migration gate or as a strict route-bound
+`plan_contract` intervention.
 
 Run only the exact `intake_command` emitted by the current SessionStart. It uses
 `controller_ref`, `controller_sha256`, and `receipt_sha256` from the READY
@@ -258,6 +318,41 @@ Non-simple No-Plan work keeps only the current runtime receipt and visible
 reply; it does not call the Plan controller or persist an intake record.
 Intake rationale records only a minimal decision summary; never copy raw prompt
 content, credentials, tokens, or other secrets into the Plan.
+
+Direct evidence capture does not require the model to hand-author an evidence
+manifest. The controller reads stdin or a project-local file, applies
+conservative redaction, writes the redacted bytes to
+`.work-governance/evidence/blobs/<sha256>`, writes content-addressed metadata
+to `.work-governance/evidence/records/<sha256>.json`, appends metadata to
+`.work-governance/evidence/ledger.ndjson`, and returns an `evidence_ref`.
+For schema-v5 Plans, task-bound capture updates only runtime state and event
+ledger entries; it does not rewrite the Plan contract:
+
+```sh
+some_command | <receipt-bound-workctl> evidence capture \
+  --task T-001 \
+  --kind command-output \
+  --summary "focused validation output" \
+  --idempotency-key task-T-001-validation
+
+<receipt-bound-workctl> evidence capture \
+  --task T-001 \
+  --kind artifact \
+  --summary "generated validation report" \
+  --from-file reports/validation.json \
+  --expected-state-sequence 3
+```
+
+Oversized capture input fails closed. Non-UTF-8 binary input is represented by
+a digest placeholder instead of being persisted verbatim. Corrupt direct
+evidence ledgers fail closed for idempotency checks instead of silently
+minting ambiguous records.
+
+Scheduler views are read-only and explain both progress and blockers. Compact
+`plan status` includes `ready`, `parallel_ready`, `blocked`, and
+`blocked_details`, where blocker details cover dependencies, explicit blocked
+state, artifact quarantine/suspect rules, independent-review blocks, and
+pending task confirmations.
 
 Protocol-v2 Plans keep one bounded `intake.current` anchor and a history head
 plus count. Complete canonical records are stored as ignored,
@@ -314,11 +409,26 @@ expiry, and consumption state. Issuance requires a same-turn accepted
 `external_authority` Plan gate whose basis action kind, reference, and digest exactly
 match the action kind, target, and action; substantive rollback uses a matching
 `deviation_recovery` gate. It is short-lived, cannot be reminted from the same turn
-after consumption,
-and rejects missing, superseded, target-mismatched, expired, or replayed authority.
-The supported kinds are remote write, production change, destructive operation,
-secret handling, and substantive rollback. This envelope authorizes an action; it
-does not claim that the external action succeeded.
+after consumption, and rejects missing, superseded, target-mismatched, expired, or
+replayed authority.
+
+For repeated high-impact actions already covered by a clear route decision, use a
+bounded route authority lease instead of asking the user for each identical class of
+permission. `action lease prepare` prints the exact lease basis digest and typed
+`basis_ref`; create and accept an `external_authority` gate for that basis, then
+`action lease issue` records the lease in runtime. Each later action still calls
+`action lease authorize` to mint a single-use capability and then `action consume`
+for the concrete action digest and target. Authorization is idempotent by default;
+if the same target and action digest must be retried after a consumed attempt, pass a
+new `--idempotency-key` and the lease consumes another bounded authorization slot. A
+lease is scoped by kind, exact targets or typed target prefixes, digest policy,
+expiry, max authorization count, Plan contract SHA256, and review/artifact blockers.
+It reduces repeated confirmation prompts; it does not waive pilot evidence,
+validation, execution evidence, activation evidence, or drift checks. The supported
+kinds are remote write, production change, destructive operation, secret handling,
+and substantive rollback.
+This envelope authorizes an action; it does not claim that the external action
+succeeded.
 
 Schema v4 cannot be downgraded through ordinary revision. Verified
 obligations/validations, final artifacts, and completed delivery use dedicated

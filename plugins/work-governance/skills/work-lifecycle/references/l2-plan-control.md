@@ -165,11 +165,11 @@ Allowed structural changes:
   install the strict Plan, and activate the index last.
 - `plan admit recover`: deterministically roll an interrupted admission
   forward. `plan init` is not a normal public admission path.
-- `plan confirmation add`: create a gate with `--intervention-kind`,
+- `plan confirmation add`: create a pending gate with `--intervention-kind`,
   repeatable exact `--blocks`, `--basis-ref`, and the digest required for
   Plan-contract or deviation decisions. A gate intended for `action authorize`
-  also carries the exact `--action-kind`. Schema v4 creates it only as pending;
-  accepted legacy records remain compatible.
+  also carries the exact `--action-kind`. Schema v4 and schema v5 create it
+  only as pending; accepted legacy records remain compatible.
 - `plan confirmation classify --manifest ...`: repair one legacy pending gate
   into the strict intervention contract. During the live-controller bootstrap
   only, it may also replace an accepted external-authority placeholder when
@@ -270,6 +270,14 @@ Allowed structural changes:
   evidence metadata under the active Plan and return its exact path and SHA256.
   `task verify --evidence-stdin` performs the same bounded record and task
   transition as one controller command.
+- `evidence capture --task T-001 --kind ... --summary ...`: capture stdin or a
+  project-local file directly into the evidence store, with redaction, blob
+  hashing, ledger append, optional idempotency key, and schema-v5 runtime task
+  binding without a Plan contract revision.
+- `plan status|ready|next|blocked`: read the runtime scheduler projection.
+  Schema-v5 compact status includes `parallel_ready` and `blocked_details`
+  so dependency waits, explicit blocks, artifact states, independent review
+  blocks, and pending task confirmations are visible before task advancement.
 - `plan confirm`: resolve a pending gate as `accepted` or `declined` with a
   typed authority reference and the exact basis digest. Generic Plan patches
   cannot edit confirmations, unclassified gates cannot decide, and a pending
@@ -331,6 +339,21 @@ Allowed structural changes:
   exact `basis_ref` plus `basis_sha256`. This may rebind only a still-pending
   strict gate. It cannot change protected targets, revise an accepted decision,
   or serve as evidence that the external action happened.
+- `migrate inspect` and `migrate apply --dry-run`: inspect or preview schema-v5
+  migration without writing project state or requiring a READY receipt.
+- `migrate apply`: after explicit confirmation and expected contract revision,
+  write backup, staging, runtime state, event ledger and journal data, then
+  replace the active Plan. It is receipt-bound and accepts only the exact
+  `C-MIGRATION-SCHEMA-V5` migration gate, never an unrelated accepted
+  confirmation.
+- `migrate recover`: finish only the authenticated schema-v5 migration journal
+  and is receipt-bound because it can replace Plan/runtime files.
+- `migrate rollback-info`: show backup, staging, recovery command and manual
+  rollback boundary without writing state.
+- `doctor`: report layout, authority, schema-v5 migration journals, and generic
+  runtime transactions. `doctor --clean-stale-transactions` is receipt-bound
+  and removes only stale generic transaction directories that have no journal;
+  it never deletes schema-v5 migration journals or backup/staging bundles.
 - `task start|block|verify|skip`: update task state.
 - `log append`: preserve local process detail without granting it completion
   authority.

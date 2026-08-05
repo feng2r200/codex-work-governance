@@ -22,6 +22,8 @@ class SchedulerProjection:
     current_task: str | None
     ready: tuple[str, ...]
     blocked: tuple[str, ...]
+    blocked_details: tuple[dict[str, object], ...]
+    parallel_ready: tuple[str, ...]
     next_suggestion: str
 
 

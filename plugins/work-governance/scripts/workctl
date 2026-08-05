@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+project_root="${WORK_GOVERNANCE_PROJECT_ROOT:-}"
+if [[ -z "${project_root}" ]]; then
+  if git_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+    project_root="${git_root}"
+  else
+    project_root="$(pwd -P)"
+  fi
+fi
+
+uv_bin="${UV:-uv}"
+cache_dir="${WORK_GOVERNANCE_UV_CACHE_DIR:-${project_root}/.work-governance/cache/uv}"
+strict_offline="${WORK_GOVERNANCE_STRICT_OFFLINE:-0}"
+
+stdout_file="$(mktemp "${TMPDIR:-/tmp}/workctl.stdout.XXXXXX")"
+stderr_file="$(mktemp "${TMPDIR:-/tmp}/workctl.stderr.XXXXXX")"
+cleanup() {
+  rm -f "${stdout_file}" "${stderr_file}"
+}
+trap cleanup EXIT
+
+offline_command=(
+  "${uv_bin}" run --no-project --offline --cache-dir "${cache_dir}"
+  --no-python-downloads --script "${script_dir}/workctl.py"
+)
+
+if "${offline_command[@]}" "$@" >"${stdout_file}" 2>"${stderr_file}"; then
+  cat "${stdout_file}"
+  cat "${stderr_file}" >&2
+  exit 0
+else
+  status=$?
+fi
+
+if [[ "${strict_offline}" != "1" ]] && grep -Eq \
+  "was not found in the cache|Packages were unavailable because the network was disabled|No solution found when resolving script dependencies" \
+  "${stderr_file}"; then
+  exec "${uv_bin}" run --no-project --cache-dir "${cache_dir}" \
+    --no-python-downloads --script "${script_dir}/workctl.py" "$@"
+fi
+
+cat "${stdout_file}"
+cat "${stderr_file}" >&2
+exit "${status}"

@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyyaml==6.0.3"]
+# dependencies = []
 # ///
 """Deterministic controller for Work Governance Plan files."""
 
@@ -24,26 +24,29 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-import yaml
-
 try:
     from workctl_modules import WORKFLOW_HELP as MODULE_WORKFLOW_HELP
+    from workctl_modules import WORKFLOW_HELP_ALIASES as MODULE_WORKFLOW_HELP_ALIASES
     from workctl_modules import blocked_task_targets as MODULE_BLOCKED_TASK_TARGETS
     from workctl_modules import canonical_evidence_bytes as MODULE_CANONICAL_EVIDENCE_BYTES
     from workctl_modules import next_suggestion as MODULE_NEXT_SUGGESTION
     from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
     from workctl_modules import ready_task_targets as MODULE_READY_TASK_TARGETS
+    from workctl_modules import yaml_compat as yaml
     from workctl_modules.migration import build_v5_contract, build_v5_state, migration_projection
     from workctl_modules.model import TaskProjection
     from workctl_modules.storage import canonical_event_bytes, redacted_copy
 except ImportError:  # pragma: no cover - legacy single-file runtime bundles
+    import yaml  # type: ignore[no-redef]
+
     MODULE_WORKFLOW_HELP = None  # type: ignore[assignment,misc]
+    MODULE_WORKFLOW_HELP_ALIASES = None  # type: ignore[assignment,misc]
     MODULE_BLOCKED_TASK_TARGETS = None  # type: ignore[assignment]
     MODULE_CANONICAL_EVIDENCE_BYTES = None  # type: ignore[assignment]
     MODULE_NEXT_SUGGESTION = None  # type: ignore[assignment]
@@ -65,6 +68,7 @@ CONTRACT_UPGRADE_ID_RE = re.compile(r"^UPG-\d{8}-\d{3}$")
 RECONCILE_UPGRADE_ID_RE = re.compile(r"^RCU-\d{8}-\d{3}$")
 STRUCTURAL_REBASE_ID_RE = re.compile(r"^SRB-\d{8}-\d{3}$")
 ACTION_AUTHORIZATION_ID_RE = re.compile(r"^AUTH-[0-9a-f]{32}$")
+ACTION_AUTHORITY_LEASE_ID_RE = re.compile(r"^LEASE-[0-9a-f]{32}$")
 ROLLOVER_CONFIRMATION_PAYLOAD_VERSION = 2
 UNKNOWN_ID_RE = re.compile(r"^U-\d{3}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -154,6 +158,9 @@ HIGH_IMPACT_ACTION_KINDS = {
     "substantive_rollback",
 }
 MAX_ACTION_AUTHORIZATION_TTL_SECONDS = 900
+MAX_ACTION_LEASE_TTL_SECONDS = 86400
+MAX_ACTION_LEASE_AUTHORIZATIONS = 100
+ACTION_DIGEST_POLICIES = {"exact-list", "dynamic"}
 INTERVENTION_CONTRACT_STATES = {
     "STRICT_READY",
     "LEGACY_CLASSIFICATION_REQUIRED",
@@ -212,6 +219,30 @@ RETIREMENT_DISPOSITIONS = {
 }
 EVIDENCE_MANIFEST_MAX_BYTES = 64 * 1024
 EVIDENCE_MANIFEST_MAX_ITEMS = 64
+EVIDENCE_CAPTURE_MAX_BYTES = 1024 * 1024
+EVIDENCE_CAPTURE_KIND_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+EVIDENCE_CAPTURE_IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+EVIDENCE_CAPTURE_ID_RE = re.compile(r"^E-\d{8}T\d{6}Z-[0-9a-f]{12}$")
+REVIEWER_ACQUISITION_ID_RE = re.compile(r"^RA-[0-9a-f]{32}$")
+REVIEWER_ACQUISITION_MECHANISM_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+REVIEWER_ACQUISITION_MAX_BYTES = 64 * 1024
+REVIEWER_ACQUISITION_MAX_COOLDOWN_SECONDS = 86400
+REVIEWER_ACQUISITION_MAX_ATTEMPTS = 32
+REVIEWER_FAILURE_CLASSES = {
+    "network_proxy_blocked",
+    "auth_unavailable",
+    "command_missing",
+    "timeout",
+    "attestor_untrusted",
+    "unknown_failure",
+}
+MECHANISM_SCOPED_REVIEWER_FAILURE_CLASSES = {
+    "network_proxy_blocked",
+    "auth_unavailable",
+    "command_missing",
+    "timeout",
+    "attestor_untrusted",
+}
 TASK_TRANSITIONS = {
     "pending": {"in_progress", "blocked", "skipped"},
     "in_progress": {"blocked", "verified", "skipped"},
@@ -913,9 +944,7 @@ def validate_current_ready_receipt(
         "lifecycle_sha256": receipt["lifecycle_sha256"],
     }
     module_files = (
-        runtime_manifest.get("module_files")
-        if isinstance(runtime_manifest, dict)
-        else None
+        runtime_manifest.get("module_files") if isinstance(runtime_manifest, dict) else None
     )
     if module_files is not None:
         if not isinstance(module_files, list):
@@ -3828,19 +3857,11 @@ def intervention_errors(
     action_kind = intervention.get("action_kind")
     if action_kind is not None:
         if action_kind not in HIGH_IMPACT_ACTION_KINDS:
-            errors.append(
-                f"{confirmation_id}.intervention.action_kind must be supported"
-            )
-        elif (
-            action_kind == "substantive_rollback"
-            and kind != "deviation_recovery"
-        ) or (
-            action_kind != "substantive_rollback"
-            and kind != "external_authority"
+            errors.append(f"{confirmation_id}.intervention.action_kind must be supported")
+        elif (action_kind == "substantive_rollback" and kind != "deviation_recovery") or (
+            action_kind != "substantive_rollback" and kind != "external_authority"
         ):
-            errors.append(
-                f"{confirmation_id}.intervention.action_kind does not match kind"
-            )
+            errors.append(f"{confirmation_id}.intervention.action_kind does not match kind")
     blocks = intervention.get("blocks")
     if (
         not isinstance(blocks, list)
@@ -3972,8 +3993,7 @@ def load_scheduler_state(root: Path, plan_id: str) -> dict[str, Any]:
         or payload["state_sequence"] < 0
         or not isinstance(priorities, dict)
         or any(
-            not isinstance(key, str) or type(value) is not int
-            for key, value in priorities.items()
+            not isinstance(key, str) or type(value) is not int for key, value in priorities.items()
         )
     ):
         raise WorkctlError("SCHEDULER_STATE_INVALID")
@@ -4209,11 +4229,7 @@ def v5_persist_contract_transition(
         "event": event,
         "subject": subject,
         "payload": {
-            **(
-                redacted_copy(dict(payload))
-                if redacted_copy is not None
-                else dict(payload)
-            ),
+            **(redacted_copy(dict(payload)) if redacted_copy is not None else dict(payload)),
             "contract_revision": doc.frontmatter["contract_revision"],
             "contract_sha256": contract_sha256,
         },
@@ -4287,8 +4303,7 @@ def ready_task_targets(
         ):
             continue
         if all(
-            dependency in task_map
-            and task_map[dependency].get("status") in VERIFIED_TASK_STATES
+            dependency in task_map and task_map[dependency].get("status") in VERIFIED_TASK_STATES
             for dependency in dependencies
         ):
             ready.append(f"task:{task['id']}")
@@ -4319,6 +4334,146 @@ def blocked_task_targets(frontmatter: Mapping[str, Any]) -> list[str]:
     ]
 
 
+def downstream_task_targets(
+    task_id: str,
+    task_map: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    """Return non-terminal tasks that transitively depend on one blocked task."""
+    downstream: list[str] = []
+    visited: set[str] = set()
+    frontier = [task_id]
+    while frontier:
+        blocked_id = frontier.pop(0)
+        for candidate_id, candidate in task_map.items():
+            if candidate_id in visited:
+                continue
+            dependencies = candidate.get("depends_on", [])
+            if not isinstance(dependencies, list) or blocked_id not in dependencies:
+                continue
+            visited.add(candidate_id)
+            if candidate.get("status") not in VERIFIED_TASK_STATES:
+                downstream.append(f"task:{candidate_id}")
+            frontier.append(candidate_id)
+    return downstream
+
+
+def task_artifact_blockers(
+    frontmatter: Mapping[str, Any],
+    task: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    """Project artifact blockers with the same recovery exception as task advancement."""
+    blocked = blocking_artifacts(cast(dict[str, Any], frontmatter))
+    if not blocked:
+        return []
+    non_suspect = {
+        artifact_id: status for artifact_id, status in blocked.items() if status != "suspect"
+    }
+    if non_suspect:
+        return [
+            {
+                "kind": "artifact",
+                "artifact": artifact_id,
+                "state": non_suspect[artifact_id],
+            }
+            for artifact_id in sorted(non_suspect)
+        ]
+    resolves = task.get("resolves_artifacts", [])
+    if (
+        isinstance(resolves, list)
+        and resolves
+        and all(isinstance(artifact_id, str) and artifact_id in blocked for artifact_id in resolves)
+    ):
+        return []
+    return [
+        {
+            "kind": "artifact",
+            "artifact": artifact_id,
+            "state": blocked[artifact_id],
+        }
+        for artifact_id in sorted(blocked)
+    ]
+
+
+def task_confirmation_blocker(
+    frontmatter: Mapping[str, Any],
+    task: Mapping[str, Any],
+) -> dict[str, str] | None:
+    """Return the pending task gate that blocks a normal start/verify path."""
+    confirmation_id = task.get("requires_confirmation")
+    if not isinstance(confirmation_id, str):
+        return None
+    item = confirmations(cast(dict[str, Any], frontmatter)).get(confirmation_id)
+    if item and item.get("status") == "accepted" and item.get("ref"):
+        return None
+    return {"kind": "confirmation", "confirmation_id": confirmation_id}
+
+
+def task_blocking_details(
+    root: Path,
+    frontmatter: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Explain every task that cannot currently advance and what it blocks downstream."""
+    raw_tasks = frontmatter.get("tasks", [])
+    if not isinstance(raw_tasks, list):
+        return []
+    task_map: dict[str, Mapping[str, Any]] = {
+        str(task["id"]): task
+        for task in raw_tasks
+        if isinstance(task, dict) and isinstance(task.get("id"), str)
+    }
+    details: list[dict[str, Any]] = []
+    for task_id, task in task_map.items():
+        status = str(task.get("status", "pending"))
+        if status in VERIFIED_TASK_STATES:
+            continue
+        reasons: list[dict[str, Any]] = []
+        if status == "blocked":
+            note = task.get("blocker", task.get("note", "task status is blocked"))
+            reasons.append({"kind": "explicit-block", "detail": str(note)})
+        dependencies = task.get("depends_on", [])
+        if isinstance(dependencies, list):
+            for dependency in dependencies:
+                if not isinstance(dependency, str):
+                    reasons.append({"kind": "dependency-invalid"})
+                    continue
+                dependency_task = task_map.get(dependency)
+                if dependency_task is None:
+                    reasons.append({"kind": "dependency-missing", "dependency": dependency})
+                elif dependency_task.get("status") not in VERIFIED_TASK_STATES:
+                    reasons.append(
+                        {
+                            "kind": "dependency-not-verified",
+                            "dependency": dependency,
+                            "state": str(dependency_task.get("status", "pending")),
+                        }
+                    )
+        elif "depends_on" in task:
+            reasons.append({"kind": "dependency-invalid"})
+        if status in {"pending", "in_progress"}:
+            reasons.extend(task_artifact_blockers(frontmatter, task))
+            review_modes = independent_review_blockers(root, frontmatter, f"task:{task_id}")
+            if review_modes:
+                reasons.append(
+                    {
+                        "kind": "independent-review",
+                        "modes": sorted(review_modes),
+                    }
+                )
+            confirmation_blocker = task_confirmation_blocker(frontmatter, task)
+            if confirmation_blocker is not None:
+                reasons.append(confirmation_blocker)
+        if reasons:
+            details.append(
+                {
+                    "task": f"task:{task_id}",
+                    "status": status,
+                    "reasons": reasons,
+                    "blocks_downstream": downstream_task_targets(task_id, task_map),
+                }
+            )
+    return details
+
+
 def pending_confirmation_ids(frontmatter: Mapping[str, Any]) -> list[str]:
     """Return pending confirmation IDs in stable Plan order."""
     raw = frontmatter.get("confirmations", {})
@@ -4333,6 +4488,7 @@ def pending_confirmation_ids(frontmatter: Mapping[str, Any]) -> list[str]:
 
 
 def compact_plan_status(
+    root: Path,
     frontmatter: Mapping[str, Any],
     *,
     scheduler: Mapping[str, Any] | None = None,
@@ -4348,8 +4504,14 @@ def compact_plan_status(
         and task.get("status") == "in_progress"
     ]
     priorities = scheduler.get("priorities", {}) if isinstance(scheduler, Mapping) else None
-    ready = ready_task_targets(frontmatter, cast(Mapping[str, int], priorities or {}))
-    blocked = blocked_task_targets(frontmatter)
+    blocked_details = task_blocking_details(root, frontmatter)
+    blocked = [str(item["task"]) for item in blocked_details]
+    blocked_set = set(blocked)
+    ready = [
+        target
+        for target in ready_task_targets(frontmatter, cast(Mapping[str, int], priorities or {}))
+        if target not in blocked_set
+    ]
     current_task = current[0] if current else (ready[0] if ready else None)
     confirmation_gates = pending_confirmation_ids(frontmatter)
     if MODULE_NEXT_SUGGESTION is not None:
@@ -4359,6 +4521,8 @@ def compact_plan_status(
             blocked,
             confirmation_gates,
         )
+    elif current and current[0] in blocked_set:
+        next_suggestion = f"Resolve blockers for {current[0]} before advancing."
     elif current:
         next_suggestion = f"Continue {current[0]}"
     elif ready:
@@ -4375,6 +4539,8 @@ def compact_plan_status(
         "current_task": current_task,
         "ready": ready,
         "blocked": blocked,
+        "blocked_details": blocked_details,
+        "parallel_ready": ready,
         "confirmation_gates": confirmation_gates,
         "next_suggestion": next_suggestion,
     }
@@ -4541,8 +4707,7 @@ def set_v5_task_status(args: argparse.Namespace, status: str, doc: PlanDocument)
     state = load_v5_state(root, doc.frontmatter)
     if state["state_sequence"] != expected:
         raise WorkctlError(
-            "STATE_SEQUENCE_MISMATCH: "
-            f"expected {expected}, found {state['state_sequence']}"
+            f"STATE_SEQUENCE_MISMATCH: expected {expected}, found {state['state_sequence']}"
         )
     task = task_for(doc.frontmatter, args.task_id)
     state_task = state["tasks"].get(args.task_id)
@@ -4554,8 +4719,15 @@ def set_v5_task_status(args: argparse.Namespace, status: str, doc: PlanDocument)
     allowed = TASK_TRANSITIONS.get(current_status, set())
     if status not in allowed:
         raise WorkctlError(f"INVALID_TASK_TRANSITION: {args.task_id} {current_status} -> {status}")
+    if status != "blocked":
+        require_no_blocking_artifacts(doc.frontmatter, task)
     if status in {"in_progress", "verified", "skipped"}:
         require_dependencies_verified(runtime, runtime_task)
+        require_independent_target(
+            root,
+            doc.frontmatter,
+            f"task:{args.task_id}",
+        )
         require_task_confirmation(doc.frontmatter, task, status)
     evidence_ref: str | None = None
     evidence_sha256: str | None = None
@@ -4572,16 +4744,12 @@ def set_v5_task_status(args: argparse.Namespace, status: str, doc: PlanDocument)
         )
     state_task["status"] = status
     if args.note:
-        state_task["note"] = (
-            redacted_copy(args.note) if redacted_copy is not None else args.note
-        )
+        state_task["note"] = redacted_copy(args.note) if redacted_copy is not None else args.note
     if evidence_ref is not None and evidence_sha256 is not None:
         state_task["evidence_ref"] = evidence_ref
         state_task["evidence_sha256"] = evidence_sha256
         state_task["verified_at"] = utc_now()
-    state["current_task"] = (
-        f"task:{args.task_id}" if status == "in_progress" else None
-    )
+    state["current_task"] = f"task:{args.task_id}" if status == "in_progress" else None
     v5_persist_state_transition(
         root,
         doc.frontmatter,
@@ -11228,6 +11396,13 @@ def action_authorization_directory(root: Path) -> Path:
     return path
 
 
+def action_authority_lease_directory(root: Path) -> Path:
+    """Return the private runtime directory for bounded route action leases."""
+    path = governance_root(root) / "runtime" / "action-authority-leases"
+    reject_symlink_components(root, path)
+    return path
+
+
 def action_authorization_path(root: Path, authorization_id: str) -> Path:
     """Resolve one action authorization after validating its content-derived ID."""
     if ACTION_AUTHORIZATION_ID_RE.fullmatch(authorization_id) is None:
@@ -11237,8 +11412,30 @@ def action_authorization_path(root: Path, authorization_id: str) -> Path:
     return path
 
 
+def action_authority_lease_path(root: Path, lease_id: str) -> Path:
+    """Resolve one route authority lease after validating its content-derived ID."""
+    if ACTION_AUTHORITY_LEASE_ID_RE.fullmatch(lease_id) is None:
+        raise WorkctlError("ACTION_LEASE_ID_INVALID")
+    path = action_authority_lease_directory(root) / f"{lease_id}.json"
+    reject_symlink_components(root, path)
+    return path
+
+
 def action_authorization_digest(record: Mapping[str, object]) -> str:
     """Hash an action authorization without its self-authenticating digest."""
+    projection = {key: value for key, value in record.items() if key != "record_sha256"}
+    return sha256_bytes(
+        json.dumps(
+            projection,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    )
+
+
+def action_authority_lease_digest(record: Mapping[str, object]) -> str:
+    """Hash a route authority lease without its self-authenticating digest."""
     projection = {key: value for key, value in record.items() if key != "record_sha256"}
     return sha256_bytes(
         json.dumps(
@@ -11297,9 +11494,19 @@ def load_action_authorization(root: Path, authorization_id: str) -> dict[str, ob
     if not isinstance(payload, dict):
         raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
     record = cast(dict[str, object], payload)
+    schema_version = record.get("schema_version")
+    lease_fields = {
+        "authority_source",
+        "lease_id",
+        "lease_basis_sha256",
+        "lease_authorization_index",
+        "idempotency_key",
+    }
+    required_fields = required if schema_version == 1 else required | lease_fields
+    if set(record) != required_fields:
+        raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
     if (
-        set(record) != required
-        or record.get("schema_version") != 1
+        schema_version not in {1, 2}
         or record.get("kind") != "work-governance-action-authorization"
         or record.get("authorization_id") != authorization_id
         or not isinstance(record.get("plan_id"), str)
@@ -11327,6 +11534,18 @@ def load_action_authorization(root: Path, authorization_id: str) -> dict[str, ob
         or action_authorization_digest(record) != record.get("record_sha256")
     ):
         raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
+    if schema_version == 2 and (
+        record.get("authority_source") != "lease"
+        or not isinstance(record.get("lease_id"), str)
+        or ACTION_AUTHORITY_LEASE_ID_RE.fullmatch(str(record["lease_id"])) is None
+        or not isinstance(record.get("lease_basis_sha256"), str)
+        or SHA256_RE.fullmatch(str(record["lease_basis_sha256"])) is None
+        or type(record.get("lease_authorization_index")) is not int
+        or int(cast(int, record["lease_authorization_index"])) < 1
+        or not isinstance(record.get("idempotency_key"), str)
+        or EVIDENCE_CAPTURE_IDEMPOTENCY_RE.fullmatch(str(record["idempotency_key"])) is None
+    ):
+        raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
     issued_at = parse_authorization_time(record.get("issued_at"))
     expires_at = parse_authorization_time(record.get("expires_at"))
     if expires_at <= issued_at or expires_at - issued_at > timedelta(
@@ -11338,10 +11557,7 @@ def load_action_authorization(root: Path, authorization_id: str) -> dict[str, ob
     if record["state"] == "authorized":
         if consumed_at is not None or consumer_ref is not None:
             raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
-    elif (
-        parse_authorization_time(consumed_at) < issued_at
-        or not valid_reference(consumer_ref)
-    ):
+    elif parse_authorization_time(consumed_at) < issued_at or not valid_reference(consumer_ref):
         raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
     return record
 
@@ -11372,6 +11588,338 @@ def action_authorization_id(binding: Mapping[str, str]) -> str:
     return f"AUTH-{digest[:32]}"
 
 
+def action_lease_authorization_binding(
+    *,
+    lease_id: str,
+    action_kind: str,
+    target_ref: str,
+    action_sha256: str,
+    idempotency_key: str,
+) -> dict[str, str]:
+    """Return the immutable fields for one lease-derived action capability."""
+    return {
+        "lease_id": lease_id,
+        "action_kind": action_kind,
+        "target_ref": target_ref,
+        "action_sha256": action_sha256,
+        "idempotency_key": idempotency_key,
+    }
+
+
+def action_lease_authorization_id(binding: Mapping[str, str]) -> str:
+    """Derive an idempotent ID so a lease cannot mint replay aliases."""
+    digest = sha256_bytes(
+        json.dumps(binding, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    return f"AUTH-{digest[:32]}"
+
+
+def action_lease_basis_ref(basis_sha256: str) -> str:
+    """Return the typed confirmation basis reference for one lease scope digest."""
+    if SHA256_RE.fullmatch(basis_sha256) is None:
+        raise WorkctlError("ACTION_LEASE_BASIS_SHA256_INVALID")
+    return f"runtime:action-lease/{basis_sha256}"
+
+
+def valid_target_prefix(value: object) -> bool:
+    """Return whether a route lease target prefix is typed and path-bounded."""
+    if not isinstance(value, str) or REFERENCE_RE.fullmatch(value) is None:
+        return False
+    if "*" in value or not value.endswith("/"):
+        return False
+    _scheme, rest = value.split(":", 1)
+    return bool(rest.strip("/"))
+
+
+def normalize_unique_strings(values: Sequence[str], *, field: str) -> list[str]:
+    """Return sorted unique strings or raise a field-specific validation error."""
+    if any(not isinstance(value, str) for value in values):
+        raise WorkctlError(f"{field}_INVALID")
+    result = sorted(set(values))
+    if len(result) != len(values):
+        raise WorkctlError(f"{field}_DUPLICATE")
+    return result
+
+
+def action_lease_scope_from_args(args: argparse.Namespace) -> dict[str, object]:
+    """Build the canonical, confirmed scope payload for a route authority lease."""
+    target_refs = normalize_unique_strings(args.target_ref or [], field="ACTION_LEASE_TARGET_REF")
+    target_prefixes = normalize_unique_strings(
+        args.target_prefix or [],
+        field="ACTION_LEASE_TARGET_PREFIX",
+    )
+    allowed_digests = normalize_unique_strings(
+        args.allowed_action_sha256 or [],
+        field="ACTION_LEASE_ALLOWED_ACTION_SHA256",
+    )
+    blocks = normalize_unique_strings(args.blocks or ["route"], field="ACTION_LEASE_BLOCKS")
+    if args.action_kind not in HIGH_IMPACT_ACTION_KINDS:
+        raise WorkctlError("ACTION_KIND_INVALID")
+    if not target_refs and not target_prefixes:
+        raise WorkctlError("ACTION_LEASE_TARGET_SCOPE_REQUIRED")
+    for target_ref in target_refs:
+        if not valid_reference(target_ref):
+            raise WorkctlError("ACTION_LEASE_TARGET_REF_INVALID")
+    for prefix in target_prefixes:
+        if not valid_target_prefix(prefix):
+            raise WorkctlError("ACTION_LEASE_TARGET_PREFIX_INVALID")
+    for digest in allowed_digests:
+        if SHA256_RE.fullmatch(digest) is None:
+            raise WorkctlError("ACTION_LEASE_ALLOWED_ACTION_SHA256_INVALID")
+    if args.action_digest_policy not in ACTION_DIGEST_POLICIES:
+        raise WorkctlError("ACTION_LEASE_DIGEST_POLICY_INVALID")
+    if args.action_digest_policy == "exact-list" and not allowed_digests:
+        raise WorkctlError("ACTION_LEASE_ALLOWED_ACTION_SHA256_REQUIRED")
+    if not 1 <= args.lease_ttl_seconds <= MAX_ACTION_LEASE_TTL_SECONDS:
+        raise WorkctlError("ACTION_LEASE_TTL_INVALID")
+    if not 1 <= args.authorization_ttl_seconds <= MAX_ACTION_AUTHORIZATION_TTL_SECONDS:
+        raise WorkctlError("ACTION_AUTHORIZATION_TTL_INVALID")
+    if not 1 <= args.max_authorizations <= MAX_ACTION_LEASE_AUTHORIZATIONS:
+        raise WorkctlError("ACTION_LEASE_MAX_AUTHORIZATIONS_INVALID")
+    for block in blocks:
+        if not valid_target_ref(block):
+            raise WorkctlError("ACTION_LEASE_BLOCK_TARGET_INVALID")
+    pilot_evidence_ref = args.pilot_evidence_ref
+    if pilot_evidence_ref is not None and not valid_reference(pilot_evidence_ref):
+        raise WorkctlError("ACTION_LEASE_PILOT_EVIDENCE_REF_INVALID")
+    return {
+        "schema_version": 1,
+        "kind": "work-governance-action-lease-basis",
+        "action_kind": args.action_kind,
+        "target_refs": target_refs,
+        "target_prefixes": target_prefixes,
+        "action_digest_policy": args.action_digest_policy,
+        "allowed_action_sha256s": allowed_digests,
+        "blocks": blocks,
+        "lease_ttl_seconds": args.lease_ttl_seconds,
+        "authorization_ttl_seconds": args.authorization_ttl_seconds,
+        "max_authorizations": args.max_authorizations,
+        "freeze_on_review_blocker": bool(args.freeze_on_review_blocker),
+        "pilot_evidence_ref": pilot_evidence_ref,
+    }
+
+
+def action_lease_basis_sha256(scope: Mapping[str, object]) -> str:
+    """Hash a canonical route authority lease scope."""
+    return sha256_bytes(
+        json.dumps(scope, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+            "utf-8"
+        )
+    )
+
+
+def target_ref_allowed_by_lease(lease: Mapping[str, object], target_ref: str) -> bool:
+    """Return whether a concrete action target falls within a confirmed lease scope."""
+    target_refs = lease.get("target_refs", [])
+    if isinstance(target_refs, list) and target_ref in target_refs:
+        return True
+    target_prefixes = lease.get("target_prefixes", [])
+    return isinstance(target_prefixes, list) and any(
+        isinstance(prefix, str) and target_ref.startswith(prefix) for prefix in target_prefixes
+    )
+
+
+def load_action_authority_lease(root: Path, lease_id: str) -> dict[str, object]:
+    """Load and fully validate one persisted route authority lease."""
+    path = action_authority_lease_path(root, lease_id)
+    if path.is_symlink() or not path.is_file():
+        raise WorkctlError("ACTION_LEASE_NOT_FOUND")
+    try:
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WorkctlError("ACTION_LEASE_INVALID") from exc
+    if not isinstance(payload, dict):
+        raise WorkctlError("ACTION_LEASE_INVALID")
+    lease = cast(dict[str, object], payload)
+    required = {
+        "schema_version",
+        "kind",
+        "lease_id",
+        "plan_id",
+        "contract_revision",
+        "contract_sha256",
+        "confirmation_id",
+        "action_kind",
+        "target_refs",
+        "target_prefixes",
+        "action_digest_policy",
+        "allowed_action_sha256s",
+        "blocks",
+        "basis_ref",
+        "basis_sha256",
+        "request_ref",
+        "turn_receipt_sha256",
+        "session_id",
+        "session_start_receipt_sha256",
+        "issued_at",
+        "expires_at",
+        "authorization_ttl_seconds",
+        "max_authorizations",
+        "freeze_on_review_blocker",
+        "pilot_evidence_ref",
+        "state",
+        "issued_authorizations",
+        "frozen_at",
+        "freeze_reason",
+        "revoked_at",
+        "revoke_ref",
+        "record_sha256",
+    }
+    target_refs = lease.get("target_refs")
+    target_prefixes = lease.get("target_prefixes")
+    allowed_digests = lease.get("allowed_action_sha256s")
+    blocks = lease.get("blocks")
+    issued = lease.get("issued_authorizations")
+    invalid = (
+        set(lease) != required
+        or lease.get("schema_version") != 1
+        or lease.get("kind") != "work-governance-action-authority-lease"
+        or lease.get("lease_id") != lease_id
+        or not isinstance(lease.get("plan_id"), str)
+        or PLAN_ID_RE.fullmatch(str(lease["plan_id"])) is None
+        or type(lease.get("contract_revision")) is not int
+        or int(cast(int, lease["contract_revision"])) < 1
+        or not isinstance(lease.get("contract_sha256"), str)
+        or SHA256_RE.fullmatch(str(lease["contract_sha256"])) is None
+        or not isinstance(lease.get("confirmation_id"), str)
+        or not str(lease["confirmation_id"]).startswith("C-")
+        or lease.get("action_kind") not in HIGH_IMPACT_ACTION_KINDS
+        or not isinstance(target_refs, list)
+        or (not target_refs and not target_prefixes)
+        or not isinstance(target_prefixes, list)
+        or not isinstance(allowed_digests, list)
+        or lease.get("action_digest_policy") not in ACTION_DIGEST_POLICIES
+        or (lease.get("action_digest_policy") == "exact-list" and not allowed_digests)
+        or not isinstance(blocks, list)
+        or not isinstance(lease.get("basis_ref"), str)
+        or not valid_reference(lease.get("basis_ref"))
+        or not isinstance(lease.get("basis_sha256"), str)
+        or SHA256_RE.fullmatch(str(lease["basis_sha256"])) is None
+        or lease.get("basis_ref") != action_lease_basis_ref(str(lease["basis_sha256"]))
+        or not valid_reference(lease.get("request_ref"))
+        or not isinstance(lease.get("turn_receipt_sha256"), str)
+        or SHA256_RE.fullmatch(str(lease["turn_receipt_sha256"])) is None
+        or not isinstance(lease.get("session_id"), str)
+        or SESSION_ID_RE.fullmatch(str(lease["session_id"])) is None
+        or not isinstance(lease.get("session_start_receipt_sha256"), str)
+        or SHA256_RE.fullmatch(str(lease["session_start_receipt_sha256"])) is None
+        or type(lease.get("authorization_ttl_seconds")) is not int
+        or not (
+            1
+            <= int(cast(int, lease["authorization_ttl_seconds"]))
+            <= MAX_ACTION_AUTHORIZATION_TTL_SECONDS
+        )
+        or type(lease.get("max_authorizations")) is not int
+        or not (1 <= int(cast(int, lease["max_authorizations"])) <= MAX_ACTION_LEASE_AUTHORIZATIONS)
+        or type(lease.get("freeze_on_review_blocker")) is not bool
+        or (
+            lease.get("pilot_evidence_ref") is not None
+            and not valid_reference(lease.get("pilot_evidence_ref"))
+        )
+        or lease.get("state") not in {"active", "frozen", "revoked"}
+        or not isinstance(issued, list)
+        or len(issued) > int(cast(int, lease["max_authorizations"]))
+        or not isinstance(lease.get("record_sha256"), str)
+        or SHA256_RE.fullmatch(str(lease["record_sha256"])) is None
+        or action_authority_lease_digest(lease) != lease.get("record_sha256")
+    )
+    if invalid:
+        raise WorkctlError("ACTION_LEASE_INVALID")
+    target_ref_values = cast(list[object], target_refs)
+    target_prefix_values = cast(list[object], target_prefixes)
+    allowed_digest_values = cast(list[object], allowed_digests)
+    block_values = cast(list[object], blocks)
+    issued_values = cast(list[object], issued)
+    if any(not isinstance(item, str) or not valid_reference(item) for item in target_ref_values):
+        raise WorkctlError("ACTION_LEASE_INVALID")
+    if any(
+        not isinstance(item, str) or not valid_target_prefix(item) for item in target_prefix_values
+    ):
+        raise WorkctlError("ACTION_LEASE_INVALID")
+    if any(
+        not isinstance(item, str) or SHA256_RE.fullmatch(item) is None
+        for item in allowed_digest_values
+    ):
+        raise WorkctlError("ACTION_LEASE_INVALID")
+    if any(not isinstance(item, str) or not valid_target_ref(item) for item in block_values):
+        raise WorkctlError("ACTION_LEASE_INVALID")
+    seen_authorizations: set[str] = set()
+    for index, item in enumerate(issued_values, start=1):
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("authorization_id"), str)
+            or ACTION_AUTHORIZATION_ID_RE.fullmatch(str(item["authorization_id"])) is None
+            or item["authorization_id"] in seen_authorizations
+            or not isinstance(item.get("target_ref"), str)
+            or not valid_reference(item.get("target_ref"))
+            or not isinstance(item.get("action_sha256"), str)
+            or SHA256_RE.fullmatch(str(item["action_sha256"])) is None
+            or not isinstance(item.get("idempotency_key"), str)
+            or EVIDENCE_CAPTURE_IDEMPOTENCY_RE.fullmatch(str(item["idempotency_key"])) is None
+            or type(item.get("index")) is not int
+            or item.get("index") != index
+            or not isinstance(item.get("authorized_at"), str)
+        ):
+            raise WorkctlError("ACTION_LEASE_INVALID")
+        parse_authorization_time(item["authorized_at"])
+        seen_authorizations.add(str(item["authorization_id"]))
+    issued_at = parse_authorization_time(lease.get("issued_at"))
+    expires_at = parse_authorization_time(lease.get("expires_at"))
+    if expires_at <= issued_at or expires_at - issued_at > timedelta(
+        seconds=MAX_ACTION_LEASE_TTL_SECONDS
+    ):
+        raise WorkctlError("ACTION_LEASE_INVALID")
+    if lease["state"] == "active":
+        if lease.get("frozen_at") is not None or lease.get("freeze_reason") is not None:
+            raise WorkctlError("ACTION_LEASE_INVALID")
+        if lease.get("revoked_at") is not None or lease.get("revoke_ref") is not None:
+            raise WorkctlError("ACTION_LEASE_INVALID")
+    elif lease["state"] == "frozen":
+        if not isinstance(lease.get("freeze_reason"), str) or not lease["freeze_reason"]:
+            raise WorkctlError("ACTION_LEASE_INVALID")
+        parse_authorization_time(lease.get("frozen_at"))
+        if lease.get("revoked_at") is not None or lease.get("revoke_ref") is not None:
+            raise WorkctlError("ACTION_LEASE_INVALID")
+    elif (
+        parse_authorization_time(lease.get("revoked_at")) < issued_at
+        or not valid_reference(lease.get("revoke_ref"))
+    ):
+        raise WorkctlError("ACTION_LEASE_INVALID")
+    return lease
+
+
+def action_authority_lease_id(binding: Mapping[str, object]) -> str:
+    """Derive an idempotent lease ID from the confirmed turn and scope."""
+    digest = sha256_bytes(
+        json.dumps(binding, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+            "utf-8"
+        )
+    )
+    return f"LEASE-{digest[:32]}"
+
+
+def write_action_authority_lease(root: Path, lease: dict[str, object]) -> None:
+    """Persist one validated lease record with a fresh self digest."""
+    lease["record_sha256"] = action_authority_lease_digest(lease)
+    write_atomic(
+        action_authority_lease_path(root, str(lease["lease_id"])),
+        json.dumps(lease, indent=2, sort_keys=True) + "\n",
+    )
+
+
+def freeze_action_authority_lease(
+    root: Path,
+    lease: dict[str, object],
+    reason: str,
+) -> None:
+    """Fail closed by freezing a lease that no longer matches its route guard."""
+    if lease.get("state") == "active":
+        lease["state"] = "frozen"
+        lease["frozen_at"] = utc_now()
+        lease["freeze_reason"] = reason
+        write_action_authority_lease(root, lease)
+
+
 def validate_action_binding(args: argparse.Namespace) -> None:
     """Validate caller-supplied action metadata without reading action payload bytes."""
     if args.action_kind not in HIGH_IMPACT_ACTION_KINDS:
@@ -11400,9 +11948,7 @@ def require_action_confirmation(
         raise WorkctlError("ACTION_CONFIRMATION_NOT_ACCEPTED")
     intervention = decision.get("intervention")
     expected_intervention = (
-        "deviation_recovery"
-        if action_kind == "substantive_rollback"
-        else "external_authority"
+        "deviation_recovery" if action_kind == "substantive_rollback" else "external_authority"
     )
     if (
         decision.get("ref") != turn.get("request_ref")
@@ -11419,6 +11965,300 @@ def require_action_confirmation(
     if not isinstance(plan_id, str) or type(revision) is not int:
         raise WorkctlError("ACTION_CONFIRMATION_BINDING_MISMATCH")
     return plan_id, revision, sha256_file(doc.path)
+
+
+def require_action_lease_confirmation(
+    root: Path,
+    *,
+    confirmation_id: str,
+    action_kind: str,
+    basis_sha256: str,
+    turn: Mapping[str, object],
+) -> tuple[str, int, str]:
+    """Require one same-turn Plan gate bound to a route authority lease scope."""
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    require_plan_contract_ready(doc.frontmatter)
+    decision = confirmations(doc.frontmatter).get(confirmation_id)
+    basis_ref = action_lease_basis_ref(basis_sha256)
+    if not isinstance(decision, dict) or decision.get("status") != "accepted":
+        raise WorkctlError("ACTION_LEASE_CONFIRMATION_NOT_ACCEPTED")
+    intervention = decision.get("intervention")
+    if (
+        decision.get("ref") != turn.get("request_ref")
+        or decision.get("evidence_sha256") != basis_sha256
+        or not isinstance(intervention, dict)
+        or intervention.get("kind") != "external_authority"
+        or intervention.get("action_kind") != action_kind
+        or intervention.get("basis_ref") != basis_ref
+        or intervention.get("basis_sha256") != basis_sha256
+    ):
+        raise WorkctlError("ACTION_LEASE_CONFIRMATION_BINDING_MISMATCH")
+    revision = doc.frontmatter.get("contract_revision", doc.frontmatter.get("revision"))
+    plan_id = doc.frontmatter.get("plan_id")
+    if not isinstance(plan_id, str) or type(revision) is not int:
+        raise WorkctlError("ACTION_LEASE_CONFIRMATION_BINDING_MISMATCH")
+    return plan_id, revision, sha256_file(doc.path)
+
+
+def cmd_action_lease_prepare(args: argparse.Namespace) -> None:
+    """Print the exact route authority lease basis to confirm through Plan gates."""
+    scope = action_lease_scope_from_args(args)
+    basis_sha256 = action_lease_basis_sha256(scope)
+    basis_ref = action_lease_basis_ref(basis_sha256)
+    payload = {
+        "basis_ref": basis_ref,
+        "basis_sha256": basis_sha256,
+        "scope": scope,
+        "confirmation": {
+            "intervention_kind": "external_authority",
+            "action_kind": args.action_kind,
+            "basis_ref": basis_ref,
+            "basis_sha256": basis_sha256,
+        },
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_action_lease_issue(args: argparse.Namespace) -> None:
+    """Create one bounded route-level authority lease after same-turn confirmation."""
+    root = project_root()
+    scope = action_lease_scope_from_args(args)
+    basis_sha256 = action_lease_basis_sha256(scope)
+    if args.basis_sha256 != basis_sha256:
+        raise WorkctlError("ACTION_LEASE_BASIS_SHA256_MISMATCH")
+    with lock(root):
+        turn = require_confirmation_turn_ref(
+            root,
+            ref=args.ref,
+            turn_receipt_sha256=args.turn_receipt_sha256,
+        )
+        plan_id, contract_revision, contract_sha256 = require_action_lease_confirmation(
+            root,
+            confirmation_id=args.confirmation_id,
+            action_kind=args.action_kind,
+            basis_sha256=basis_sha256,
+            turn=turn,
+        )
+        issued_at = parse_authorization_time(turn.get("issued_at"))
+        expires_at = issued_at + timedelta(seconds=args.lease_ttl_seconds)
+        if datetime.now(UTC) >= expires_at:
+            raise WorkctlError("ACTION_LEASE_EXPIRED")
+        session_id = turn.get("session_id")
+        session_start_digest = turn.get("session_start_receipt_sha256")
+        if not isinstance(session_id, str) or not isinstance(session_start_digest, str):
+            raise WorkctlError("TURN_RECEIPT_INVALID")
+        binding = {
+            "turn_receipt_sha256": args.turn_receipt_sha256,
+            "confirmation_id": args.confirmation_id,
+            "basis_sha256": basis_sha256,
+        }
+        lease_id = action_authority_lease_id(binding)
+        path = action_authority_lease_path(root, lease_id)
+        if path.exists() or path.is_symlink():
+            existing = load_action_authority_lease(root, lease_id)
+            if (
+                existing.get("plan_id") != plan_id
+                or existing.get("contract_revision") != contract_revision
+                or existing.get("contract_sha256") != contract_sha256
+            ):
+                raise WorkctlError("ACTION_LEASE_CONTRACT_DRIFT")
+            print(json.dumps(existing, indent=2, sort_keys=True))
+            return
+        lease: dict[str, object] = {
+            "schema_version": 1,
+            "kind": "work-governance-action-authority-lease",
+            "lease_id": lease_id,
+            "plan_id": plan_id,
+            "contract_revision": contract_revision,
+            "contract_sha256": contract_sha256,
+            "confirmation_id": args.confirmation_id,
+            "action_kind": args.action_kind,
+            "target_refs": scope["target_refs"],
+            "target_prefixes": scope["target_prefixes"],
+            "action_digest_policy": scope["action_digest_policy"],
+            "allowed_action_sha256s": scope["allowed_action_sha256s"],
+            "blocks": scope["blocks"],
+            "basis_ref": action_lease_basis_ref(basis_sha256),
+            "basis_sha256": basis_sha256,
+            "request_ref": args.ref,
+            "turn_receipt_sha256": args.turn_receipt_sha256,
+            "session_id": session_id,
+            "session_start_receipt_sha256": session_start_digest,
+            "issued_at": issued_at.isoformat(),
+            "expires_at": expires_at.isoformat(),
+            "authorization_ttl_seconds": scope["authorization_ttl_seconds"],
+            "max_authorizations": scope["max_authorizations"],
+            "freeze_on_review_blocker": scope["freeze_on_review_blocker"],
+            "pilot_evidence_ref": scope["pilot_evidence_ref"],
+            "state": "active",
+            "issued_authorizations": [],
+            "frozen_at": None,
+            "freeze_reason": None,
+            "revoked_at": None,
+            "revoke_ref": None,
+        }
+        write_action_authority_lease(root, lease)
+        print(json.dumps(lease, indent=2, sort_keys=True))
+
+
+def require_lease_route_still_clear(
+    root: Path,
+    lease: dict[str, object],
+    doc: PlanDocument,
+) -> None:
+    """Freeze a lease when route-level blockers appear after it was issued."""
+    if (
+        lease.get("plan_id") != doc.frontmatter.get("plan_id")
+        or lease.get("contract_revision")
+        != doc.frontmatter.get("contract_revision", doc.frontmatter.get("revision"))
+        or lease.get("contract_sha256") != sha256_file(doc.path)
+    ):
+        freeze_action_authority_lease(root, lease, "contract-drift")
+        raise WorkctlError("ACTION_LEASE_CONTRACT_DRIFT")
+    if lease.get("freeze_on_review_blocker") is not True:
+        return
+    try:
+        require_no_blocking_artifacts(doc.frontmatter)
+        blocks = lease.get("blocks", [])
+        for target in blocks if isinstance(blocks, list) else []:
+            require_independent_target(root, doc.frontmatter, str(target))
+    except WorkctlError as exc:
+        freeze_action_authority_lease(root, lease, str(exc).split(":", 1)[0])
+        raise
+
+
+def cmd_action_lease_authorize(args: argparse.Namespace) -> None:
+    """Mint one single-use action capability from an active route authority lease."""
+    root = project_root()
+    validate_action_binding(args)
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        require_plan_contract_ready(doc.frontmatter)
+        lease = load_action_authority_lease(root, args.lease_id)
+        if lease.get("state") != "active":
+            raise WorkctlError("ACTION_LEASE_NOT_ACTIVE")
+        if datetime.now(UTC) >= parse_authorization_time(lease.get("expires_at")):
+            freeze_action_authority_lease(root, lease, "expired")
+            raise WorkctlError("ACTION_LEASE_EXPIRED")
+        if lease.get("action_kind") != args.action_kind:
+            raise WorkctlError("ACTION_LEASE_ACTION_KIND_MISMATCH")
+        if not target_ref_allowed_by_lease(lease, args.target_ref):
+            raise WorkctlError("ACTION_LEASE_TARGET_MISMATCH")
+        allowed_digests = lease.get("allowed_action_sha256s", [])
+        if lease.get("action_digest_policy") == "exact-list" and (
+            not isinstance(allowed_digests, list) or args.action_sha256 not in allowed_digests
+        ):
+            raise WorkctlError("ACTION_LEASE_ACTION_SHA256_NOT_ALLOWED")
+        require_lease_route_still_clear(root, lease, doc)
+        issued = lease.get("issued_authorizations")
+        if not isinstance(issued, list):
+            raise WorkctlError("ACTION_LEASE_INVALID")
+        idempotency_key = args.idempotency_key or "default"
+        if EVIDENCE_CAPTURE_IDEMPOTENCY_RE.fullmatch(idempotency_key) is None:
+            raise WorkctlError("ACTION_LEASE_IDEMPOTENCY_KEY_INVALID")
+        binding = action_lease_authorization_binding(
+            lease_id=args.lease_id,
+            action_kind=args.action_kind,
+            target_ref=args.target_ref,
+            action_sha256=args.action_sha256,
+            idempotency_key=idempotency_key,
+        )
+        authorization_id = action_lease_authorization_id(binding)
+        path = action_authorization_path(root, authorization_id)
+        if path.exists() or path.is_symlink():
+            existing = load_action_authorization(root, authorization_id)
+            if existing.get("state") == "consumed":
+                raise WorkctlError("ACTION_AUTHORIZATION_REPLAYED")
+            if datetime.now(UTC) >= parse_authorization_time(existing.get("expires_at")):
+                raise WorkctlError("ACTION_AUTHORIZATION_EXPIRED")
+            print(json.dumps(existing, indent=2, sort_keys=True))
+            return
+        if len(issued) >= int(cast(int, lease["max_authorizations"])):
+            raise WorkctlError("ACTION_LEASE_EXHAUSTED")
+        issued_at = datetime.now(UTC).replace(microsecond=0)
+        requested_ttl = args.ttl_seconds or int(cast(int, lease["authorization_ttl_seconds"]))
+        if not 1 <= requested_ttl <= int(cast(int, lease["authorization_ttl_seconds"])):
+            raise WorkctlError("ACTION_AUTHORIZATION_TTL_INVALID")
+        expires_at = issued_at + timedelta(seconds=requested_ttl)
+        lease_expires_at = parse_authorization_time(lease.get("expires_at"))
+        if expires_at > lease_expires_at:
+            expires_at = lease_expires_at
+        if datetime.now(UTC) >= expires_at:
+            raise WorkctlError("ACTION_AUTHORIZATION_EXPIRED")
+        lease_index = len(issued) + 1
+        record: dict[str, object] = {
+            "schema_version": 2,
+            "kind": "work-governance-action-authorization",
+            "authorization_id": authorization_id,
+            "plan_id": lease["plan_id"],
+            "contract_revision": lease["contract_revision"],
+            "contract_sha256": lease["contract_sha256"],
+            "confirmation_id": lease["confirmation_id"],
+            "action_kind": args.action_kind,
+            "target_ref": args.target_ref,
+            "action_sha256": args.action_sha256,
+            "request_ref": lease["request_ref"],
+            "turn_receipt_sha256": lease["turn_receipt_sha256"],
+            "session_id": lease["session_id"],
+            "session_start_receipt_sha256": lease["session_start_receipt_sha256"],
+            "issued_at": issued_at.isoformat(),
+            "expires_at": expires_at.isoformat(),
+            "state": "authorized",
+            "consumed_at": None,
+            "consumer_ref": None,
+            "authority_source": "lease",
+            "lease_id": args.lease_id,
+            "lease_basis_sha256": lease["basis_sha256"],
+            "lease_authorization_index": lease_index,
+            "idempotency_key": idempotency_key,
+        }
+        record["record_sha256"] = action_authorization_digest(record)
+        issued.append(
+            {
+                "index": lease_index,
+                "authorization_id": authorization_id,
+                "target_ref": args.target_ref,
+                "action_sha256": args.action_sha256,
+                "idempotency_key": idempotency_key,
+                "authorized_at": issued_at.isoformat(),
+            }
+        )
+        write_action_authority_lease(root, lease)
+        write_atomic(path, json.dumps(record, indent=2, sort_keys=True) + "\n")
+        print(json.dumps(record, indent=2, sort_keys=True))
+
+
+def cmd_action_lease_status(args: argparse.Namespace) -> None:
+    """Show one route authority lease plus its effective state."""
+    lease = load_action_authority_lease(project_root(), args.lease_id)
+    payload = dict(lease)
+    if lease.get("state") == "active" and datetime.now(UTC) >= parse_authorization_time(
+        lease.get("expires_at")
+    ):
+        payload["effective_state"] = "expired"
+    else:
+        payload["effective_state"] = lease.get("state")
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_action_lease_revoke(args: argparse.Namespace) -> None:
+    """Revoke one route authority lease without touching already consumed evidence."""
+    if not valid_reference(args.ref):
+        raise WorkctlError("ACTION_LEASE_REVOKE_REF_INVALID")
+    root = project_root()
+    with lock(root):
+        lease = load_action_authority_lease(root, args.lease_id)
+        if lease.get("state") != "revoked":
+            lease["state"] = "revoked"
+            lease["revoked_at"] = utc_now()
+            lease["revoke_ref"] = args.ref
+            if lease.get("frozen_at") is not None:
+                lease["frozen_at"] = None
+                lease["freeze_reason"] = None
+            write_action_authority_lease(root, lease)
+        print(json.dumps(lease, indent=2, sort_keys=True))
 
 
 def cmd_action_authorize(args: argparse.Namespace) -> None:
@@ -11503,51 +12343,78 @@ def cmd_action_consume(args: argparse.Namespace) -> None:
     root = project_root()
     validate_action_binding(args)
     with lock(root):
-        session_receipt = session_receipt_for_turn(
-            root,
-            args.turn_receipt_sha256,
-            require_current_controller=True,
-        )
-        turn = load_current_turn_receipt(
-            root,
-            supplied_sha256=args.turn_receipt_sha256,
-            session_receipt=cast(Mapping[str, object], session_receipt),
-        )
         record = load_action_authorization(root, args.authorization_id)
         if record.get("state") != "authorized":
             raise WorkctlError("ACTION_AUTHORIZATION_REPLAYED")
         if datetime.now(UTC) >= parse_authorization_time(record.get("expires_at")):
             raise WorkctlError("ACTION_AUTHORIZATION_EXPIRED")
-        expected = action_authorization_binding(
-            turn_receipt_sha256=args.turn_receipt_sha256,
-            confirmation_id=str(record["confirmation_id"]),
-            action_kind=args.action_kind,
-            target_ref=args.target_ref,
-            action_sha256=args.action_sha256,
-        )
-        if any(record.get(key) != value for key, value in expected.items()):
-            raise WorkctlError("ACTION_AUTHORIZATION_TARGET_MISMATCH")
-        plan_id, contract_revision, contract_sha256 = require_action_confirmation(
-            root,
-            confirmation_id=str(record["confirmation_id"]),
-            action_kind=args.action_kind,
-            target_ref=args.target_ref,
-            action_sha256=args.action_sha256,
-            turn=turn,
-        )
-        if (
-            record.get("plan_id") != plan_id
-            or record.get("contract_revision") != contract_revision
-            or record.get("contract_sha256") != contract_sha256
-        ):
-            raise WorkctlError("ACTION_AUTHORIZATION_CONTRACT_DRIFT")
-        if (
-            record.get("request_ref") != turn.get("request_ref")
-            or record.get("session_id") != session_receipt.get("session_id")
-            or record.get("session_start_receipt_sha256")
-            != controller_receipt_digest(session_receipt)
-        ):
-            raise WorkctlError("ACTION_AUTHORIZATION_TURN_MISMATCH")
+        if record.get("schema_version") == 2:
+            lease = load_action_authority_lease(root, str(record["lease_id"]))
+            if lease.get("state") != "active":
+                raise WorkctlError("ACTION_LEASE_NOT_ACTIVE")
+            if datetime.now(UTC) >= parse_authorization_time(lease.get("expires_at")):
+                freeze_action_authority_lease(root, lease, "expired")
+                raise WorkctlError("ACTION_LEASE_EXPIRED")
+            if (
+                record.get("action_kind") != args.action_kind
+                or record.get("target_ref") != args.target_ref
+                or record.get("action_sha256") != args.action_sha256
+                or record.get("lease_basis_sha256") != lease.get("basis_sha256")
+                or record.get("confirmation_id") != lease.get("confirmation_id")
+            ):
+                raise WorkctlError("ACTION_AUTHORIZATION_TARGET_MISMATCH")
+            doc = load_plan(active_plan_path(root))
+            require_plan_contract_ready(doc.frontmatter)
+            require_lease_route_still_clear(root, lease, doc)
+            if (
+                record.get("plan_id") != lease.get("plan_id")
+                or record.get("contract_revision") != lease.get("contract_revision")
+                or record.get("contract_sha256") != lease.get("contract_sha256")
+            ):
+                raise WorkctlError("ACTION_AUTHORIZATION_CONTRACT_DRIFT")
+        else:
+            if args.turn_receipt_sha256 is None:
+                raise WorkctlError("TURN_RECEIPT_REQUIRED")
+            session_receipt = session_receipt_for_turn(
+                root,
+                args.turn_receipt_sha256,
+                require_current_controller=True,
+            )
+            turn = load_current_turn_receipt(
+                root,
+                supplied_sha256=args.turn_receipt_sha256,
+                session_receipt=cast(Mapping[str, object], session_receipt),
+            )
+            expected = action_authorization_binding(
+                turn_receipt_sha256=args.turn_receipt_sha256,
+                confirmation_id=str(record["confirmation_id"]),
+                action_kind=args.action_kind,
+                target_ref=args.target_ref,
+                action_sha256=args.action_sha256,
+            )
+            if any(record.get(key) != value for key, value in expected.items()):
+                raise WorkctlError("ACTION_AUTHORIZATION_TARGET_MISMATCH")
+            plan_id, contract_revision, contract_sha256 = require_action_confirmation(
+                root,
+                confirmation_id=str(record["confirmation_id"]),
+                action_kind=args.action_kind,
+                target_ref=args.target_ref,
+                action_sha256=args.action_sha256,
+                turn=turn,
+            )
+            if (
+                record.get("plan_id") != plan_id
+                or record.get("contract_revision") != contract_revision
+                or record.get("contract_sha256") != contract_sha256
+            ):
+                raise WorkctlError("ACTION_AUTHORIZATION_CONTRACT_DRIFT")
+            if (
+                record.get("request_ref") != turn.get("request_ref")
+                or record.get("session_id") != session_receipt.get("session_id")
+                or record.get("session_start_receipt_sha256")
+                != controller_receipt_digest(session_receipt)
+            ):
+                raise WorkctlError("ACTION_AUTHORIZATION_TURN_MISMATCH")
         if not valid_reference(args.consumer_ref):
             raise WorkctlError("ACTION_CONSUMER_REF_INVALID")
         record["state"] = "consumed"
@@ -11589,6 +12456,8 @@ def cmd_plan_status(args: argparse.Namespace) -> None:
                         "current_task": None,
                         "ready": [],
                         "blocked": [],
+                        "blocked_details": [],
+                        "parallel_ready": [],
                         "confirmation_gates": [],
                         "next_suggestion": (
                             "Admit a Plan only when durable execution state is needed."
@@ -11637,12 +12506,18 @@ def cmd_plan_status(args: argparse.Namespace) -> None:
         )
         print(
             json.dumps(
-                compact_plan_status(runtime_doc, scheduler=scheduler),
+                compact_plan_status(root, runtime_doc, scheduler=scheduler),
                 separators=(",", ":"),
                 sort_keys=True,
             )
         )
         return
+    scheduler = (
+        v5_state
+        if v5_state is not None
+        else load_scheduler_state(root, str(doc.frontmatter["plan_id"]))
+    )
+    compact = compact_plan_status(root, runtime_doc, scheduler=scheduler)
     summary = {
         "authority_state": report.state,
         "authority_candidates": [candidate_to_dict(item) for item in report.candidates],
@@ -11662,6 +12537,15 @@ def cmd_plan_status(args: argparse.Namespace) -> None:
         "legacy_unknown_ids": legacy_ids,
         "intake_blockers": intake_blockers(doc.frontmatter),
         "goal": doc.frontmatter.get("goal", {}),
+        "scheduler": {
+            "current_task": compact["current_task"],
+            "ready": compact["ready"],
+            "parallel_ready": compact["parallel_ready"],
+            "blocked": compact["blocked"],
+            "blocked_details": compact["blocked_details"],
+            "confirmation_gates": compact["confirmation_gates"],
+            "next_suggestion": compact["next_suggestion"],
+        },
         "contract": doc.frontmatter.get("contract", {}),
         "unknowns": doc.frontmatter.get("unknowns", []),
         "revision_history": doc.frontmatter.get("revision_history", []),
@@ -11697,10 +12581,10 @@ def cmd_plan_queue(args: argparse.Namespace) -> None:
     if doc.frontmatter.get("schema_version") == 5:
         state = load_v5_state(root, doc.frontmatter)
         runtime = v5_runtime_frontmatter(root, doc.frontmatter, state)
-        compact = compact_plan_status(runtime, scheduler=state)
+        compact = compact_plan_status(root, runtime, scheduler=state)
     else:
         scheduler = load_scheduler_state(root, str(doc.frontmatter["plan_id"]))
-        compact = compact_plan_status(doc.frontmatter, scheduler=scheduler)
+        compact = compact_plan_status(root, doc.frontmatter, scheduler=scheduler)
     if args.queue_action == "ready":
         payload: object = compact["ready"]
     elif args.queue_action == "blocked":
@@ -11708,6 +12592,8 @@ def cmd_plan_queue(args: argparse.Namespace) -> None:
     else:
         payload = {
             "current_task": compact["current_task"],
+            "parallel_ready": compact["parallel_ready"],
+            "blocked_details": compact["blocked_details"],
             "next_suggestion": compact["next_suggestion"],
         }
     print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
@@ -11746,8 +12632,7 @@ def cmd_task_reprioritize(args: argparse.Namespace) -> None:
         expected = args.expected_state_sequence
         if state["state_sequence"] != expected:
             raise WorkctlError(
-                "STATE_SEQUENCE_MISMATCH: "
-                f"expected {expected}, found {state['state_sequence']}"
+                f"STATE_SEQUENCE_MISMATCH: expected {expected}, found {state['state_sequence']}"
             )
         priorities = cast(dict[str, int], state["priorities"])
         priorities[args.task_id] = args.priority
@@ -11767,6 +12652,7 @@ def cmd_workflow_help(args: argparse.Namespace) -> None:
     workflows: dict[str, dict[str, object]] = {
         "plan": {
             "commands": [
+                "goal show",
                 "plan create",
                 "plan show [--full]",
                 "plan edit",
@@ -11789,24 +12675,904 @@ def cmd_workflow_help(args: argparse.Namespace) -> None:
             ],
             "note": "Task transitions remain receipt-bound and dependency-checked.",
         },
+        "gate": {
+            "commands": [
+                "gate list",
+                "gate check --gate-id C-001",
+                "gate open",
+                "gate satisfy",
+                "gate waive",
+            ],
+            "note": "Gate writes are aliases over strict Plan confirmation transactions.",
+        },
+        "truth": {
+            "commands": ["truth list", "truth conflicts", "truth add --manifest PATH"],
+            "note": "Truth writes are aliases over the confirmed contract revision path.",
+        },
+        "review": {
+            "commands": [
+                "review status",
+                "review request",
+                "review attach --manifest PATH",
+                "review acquisition check",
+                "review acquisition record-failure",
+                "review acquisition status",
+            ],
+            "note": (
+                "Review attachment uses the independent-review recorder and its trust rules; "
+                "reviewer acquisition caches exact and environment-level same-mechanism "
+                "validator-unavailable failures in runtime."
+            ),
+        },
         "evidence": {
             "commands": [
+                "evidence capture --task T-001 --kind command-output --summary TEXT",
                 "evidence record --stdin",
                 "plan evidence record --manifest PATH|--stdin",
             ],
-            "note": "Evidence is bounded, canonical, content-addressed, and redaction-safe.",
+            "note": (
+                "Direct capture writes redacted blobs and an append-only ledger; "
+                "Plan evidence records remain the bounded canonical compatibility path."
+            ),
+        },
+        "action": {
+            "commands": [
+                "action authorize",
+                "action consume",
+                "action status",
+                "action lease prepare",
+                "action lease issue",
+                "action lease authorize",
+                "action lease status",
+                "action lease revoke",
+            ],
+            "note": (
+                "High-impact actions still consume single-use capabilities; a route "
+                "lease only mints those capabilities inside a confirmed bounded scope; "
+                "use a new idempotency key for a consumed same-action retry."
+            ),
         },
         "migration": {
-            "commands": ["migrate inspect", "migrate apply", "migrate recover"],
+            "commands": [
+                "migrate inspect",
+                "migrate apply [--dry-run]",
+                "migrate recover",
+                "migrate rollback-info",
+                "doctor",
+            ],
             "note": "Migration is explicit, backed up, and recovery-bound.",
         },
+        "doctor": {
+            "commands": ["doctor", "doctor --clean-stale-transactions"],
+            "note": (
+                "Doctor is read-only by default; cleanup only removes stale generic "
+                "runtime transaction directories with no journal."
+            ),
+        },
+    }
+    workflow_aliases: dict[str, str] = {
+        "migrate": "migration",
     }
     if isinstance(MODULE_WORKFLOW_HELP, dict):
         workflows = MODULE_WORKFLOW_HELP
+    if isinstance(MODULE_WORKFLOW_HELP_ALIASES, dict):
+        workflow_aliases = MODULE_WORKFLOW_HELP_ALIASES
     workflow = args.workflow or "plan"
+    workflow = workflow_aliases.get(workflow, workflow)
     if workflow not in workflows:
         raise WorkctlError(f"UNKNOWN_WORKFLOW: {workflow}")
     print(json.dumps(workflows[workflow], indent=2, sort_keys=True))
+
+
+def cmd_goal_show(_args: argparse.Namespace) -> None:
+    """Show the active Goal Contract projection."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    contract = doc.frontmatter.get("contract", {})
+    goal = doc.frontmatter.get("goal")
+    payload = {
+        "plan_id": doc.frontmatter.get("plan_id"),
+        "schema_version": doc.frontmatter.get("schema_version"),
+        "goal": goal,
+        "success_criteria": doc.frontmatter.get(
+            "success_criteria",
+            goal.get("success_conditions", []) if isinstance(goal, dict) else [],
+        ),
+        "contract_revision": doc.frontmatter.get(
+            "contract_revision",
+            contract.get("revision") if isinstance(contract, dict) else None,
+        ),
+        "truth_refs": doc.frontmatter.get("truth_refs", []),
+        "confirmation_gates": [
+            item.get("id")
+            for item in confirmations(doc.frontmatter).values()
+            if item.get("status") == "pending"
+        ],
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_gate_list(_args: argparse.Namespace) -> None:
+    """List the active Plan's confirmation gates."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    payload = {
+        "plan_id": doc.frontmatter.get("plan_id"),
+        "gates": list(confirmations(doc.frontmatter).values()),
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_gate_check(args: argparse.Namespace) -> None:
+    """Show one confirmation gate by ID."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    gate = confirmations(doc.frontmatter).get(args.gate_id)
+    if gate is None:
+        raise WorkctlError(f"UNKNOWN_GATE: {args.gate_id}")
+    print(json.dumps(gate, indent=2, sort_keys=True))
+
+
+def cmd_gate_satisfy(args: argparse.Namespace) -> None:
+    """Resolve one gate as accepted through the existing confirmation command."""
+    args.decision = "accepted"
+    cmd_plan_confirm(args)
+
+
+def cmd_gate_waive(args: argparse.Namespace) -> None:
+    """Resolve one gate as declined through the existing confirmation command."""
+    args.decision = "declined"
+    cmd_plan_confirm(args)
+
+
+def cmd_truth_list(_args: argparse.Namespace) -> None:
+    """List durable truth references recorded in the active contract."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    truth_refs = doc.frontmatter.get("truth_refs", [])
+    print(
+        json.dumps(
+            {
+                "plan_id": doc.frontmatter.get("plan_id"),
+                "truth_refs": truth_refs if isinstance(truth_refs, list) else [],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def cmd_truth_conflicts(_args: argparse.Namespace) -> None:
+    """Report duplicate truth references for the active contract."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    truth_refs = doc.frontmatter.get("truth_refs", [])
+    values = (
+        [item for item in truth_refs if isinstance(item, str)]
+        if isinstance(truth_refs, list)
+        else []
+    )
+    counts = {item: values.count(item) for item in values}
+    print(
+        json.dumps(
+            {
+                "plan_id": doc.frontmatter.get("plan_id"),
+                "conflicts": sorted(item for item, count in counts.items() if count > 1),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def reviewer_acquisition_directory(root: Path) -> Path:
+    """Return the runtime cache for reviewer-acquisition attempts."""
+    path = runtime_dir(root) / "reviewer-acquisition"
+    reject_symlink_components(root, path)
+    return path
+
+
+def reviewer_acquisition_id(
+    *,
+    plan_id: str,
+    target_ref: str,
+    mechanism: str,
+    review_input_sha256: str,
+) -> str:
+    """Derive the stable cache key for one reviewer acquisition route."""
+    binding = {
+        "plan_id": plan_id,
+        "target_ref": target_ref,
+        "mechanism": mechanism,
+        "review_input_sha256": review_input_sha256,
+    }
+    digest = sha256_bytes(
+        json.dumps(binding, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    return f"RA-{digest[:32]}"
+
+
+def reviewer_acquisition_path(root: Path, acquisition_id: str) -> Path:
+    """Return the runtime record path for one acquisition cache entry."""
+    if REVIEWER_ACQUISITION_ID_RE.fullmatch(acquisition_id) is None:
+        raise WorkctlError("REVIEWER_ACQUISITION_ID_INVALID")
+    path = reviewer_acquisition_directory(root) / f"{acquisition_id}.json"
+    reject_symlink_components(root, path)
+    return path
+
+
+def reviewer_acquisition_digest(record: Mapping[str, object]) -> str:
+    """Hash a reviewer-acquisition record without its self-authenticating digest."""
+    projection = {key: value for key, value in record.items() if key != "record_sha256"}
+    return sha256_bytes(
+        json.dumps(
+            projection,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    )
+
+
+def validate_reviewer_acquisition_scope(args: argparse.Namespace, plan_id: str) -> str:
+    """Validate and return the stable reviewer-acquisition runtime key."""
+    if not valid_target_ref(args.target_ref):
+        raise WorkctlError("REVIEWER_ACQUISITION_TARGET_INVALID")
+    if REVIEWER_ACQUISITION_MECHANISM_RE.fullmatch(args.mechanism) is None:
+        raise WorkctlError("REVIEWER_ACQUISITION_MECHANISM_INVALID")
+    if SHA256_RE.fullmatch(args.review_input_sha256) is None:
+        raise WorkctlError("REVIEWER_ACQUISITION_INPUT_SHA256_INVALID")
+    return reviewer_acquisition_id(
+        plan_id=plan_id,
+        target_ref=args.target_ref,
+        mechanism=args.mechanism,
+        review_input_sha256=args.review_input_sha256,
+    )
+
+
+def load_reviewer_acquisition_record(root: Path, acquisition_id: str) -> dict[str, Any]:
+    """Load and validate one reviewer-acquisition runtime record."""
+    path = reviewer_acquisition_path(root, acquisition_id)
+    if path.is_symlink() or not path.is_file():
+        raise WorkctlError("REVIEWER_ACQUISITION_NOT_FOUND")
+    try:
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WorkctlError("REVIEWER_ACQUISITION_INVALID") from exc
+    if not isinstance(payload, dict):
+        raise WorkctlError("REVIEWER_ACQUISITION_INVALID")
+    record = cast(dict[str, Any], payload)
+    required = {
+        "schema_version",
+        "kind",
+        "acquisition_id",
+        "plan_id",
+        "target_ref",
+        "mechanism",
+        "review_input_sha256",
+        "state",
+        "created_at",
+        "updated_at",
+        "cooldown_until",
+        "latest_attempt_index",
+        "attempts",
+        "record_sha256",
+    }
+    attempts = record.get("attempts")
+    invalid = (
+        set(record) != required
+        or record.get("schema_version") != 1
+        or record.get("kind") != "work-governance-reviewer-acquisition"
+        or record.get("acquisition_id") != acquisition_id
+        or not isinstance(record.get("plan_id"), str)
+        or PLAN_ID_RE.fullmatch(str(record["plan_id"])) is None
+        or not valid_target_ref(record.get("target_ref"))
+        or not isinstance(record.get("mechanism"), str)
+        or REVIEWER_ACQUISITION_MECHANISM_RE.fullmatch(str(record["mechanism"])) is None
+        or not isinstance(record.get("review_input_sha256"), str)
+        or SHA256_RE.fullmatch(str(record["review_input_sha256"])) is None
+        or record.get("state") != "validator_unavailable"
+        or not isinstance(record.get("cooldown_until"), str)
+        or type(record.get("latest_attempt_index")) is not int
+        or not isinstance(attempts, list)
+        or not attempts
+        or len(attempts) > REVIEWER_ACQUISITION_MAX_ATTEMPTS
+        or not isinstance(record.get("record_sha256"), str)
+        or SHA256_RE.fullmatch(str(record["record_sha256"])) is None
+        or reviewer_acquisition_digest(record) != record.get("record_sha256")
+    )
+    if invalid:
+        raise WorkctlError("REVIEWER_ACQUISITION_INVALID")
+    parse_authorization_time(record["created_at"])
+    parse_authorization_time(record["updated_at"])
+    parse_authorization_time(record["cooldown_until"])
+    attempt_values = cast(list[object], attempts)
+    seen_keys: set[str] = set()
+    for index, item in enumerate(attempt_values, start=1):
+        if (
+            not isinstance(item, dict)
+            or type(item.get("index")) is not int
+            or item.get("index") != index
+            or not valid_reference(item.get("attempt_ref"))
+            or not isinstance(item.get("idempotency_key"), str)
+            or EVIDENCE_CAPTURE_IDEMPOTENCY_RE.fullmatch(str(item["idempotency_key"])) is None
+            or item["idempotency_key"] in seen_keys
+            or item.get("outcome") != "failed"
+            or item.get("failure_class") not in REVIEWER_FAILURE_CLASSES
+            or not isinstance(item.get("failure_fingerprint"), str)
+            or SHA256_RE.fullmatch(str(item["failure_fingerprint"])) is None
+            or not isinstance(item.get("failure_summary"), str)
+            or not item["failure_summary"]
+            or not isinstance(item.get("redacted_excerpt"), str)
+            or not isinstance(item.get("output_sha256"), str)
+            or SHA256_RE.fullmatch(str(item["output_sha256"])) is None
+            or type(item.get("output_size")) is not int
+            or int(cast(int, item["output_size"])) < 0
+            or type(item.get("exit_code")) is not int
+            or type(item.get("cooldown_seconds")) is not int
+            or not (
+                1
+                <= int(cast(int, item["cooldown_seconds"]))
+                <= REVIEWER_ACQUISITION_MAX_COOLDOWN_SECONDS
+            )
+            or not isinstance(item.get("cooldown_until"), str)
+            or not isinstance(item.get("recorded_at"), str)
+        ):
+            raise WorkctlError("REVIEWER_ACQUISITION_INVALID")
+        parse_authorization_time(item["cooldown_until"])
+        parse_authorization_time(item["recorded_at"])
+        seen_keys.add(str(item["idempotency_key"]))
+    latest_index = int(cast(int, record["latest_attempt_index"]))
+    if latest_index != len(attempt_values):
+        raise WorkctlError("REVIEWER_ACQUISITION_INVALID")
+    return record
+
+
+def try_load_reviewer_acquisition_record(
+    root: Path,
+    acquisition_id: str,
+) -> dict[str, Any] | None:
+    """Return a reviewer-acquisition record when it exists."""
+    path = reviewer_acquisition_path(root, acquisition_id)
+    if not path.exists() and not path.is_symlink():
+        return None
+    return load_reviewer_acquisition_record(root, acquisition_id)
+
+
+def load_reviewer_acquisition_records(root: Path, plan_id: str) -> list[dict[str, Any]]:
+    """Load every reviewer-acquisition record for one Plan."""
+    directory = reviewer_acquisition_directory(root)
+    if not directory.exists():
+        return []
+    if directory.is_symlink() or not directory.is_dir():
+        raise WorkctlError("REVIEWER_ACQUISITION_DIRECTORY_INVALID")
+    records: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("RA-*.json")):
+        record = load_reviewer_acquisition_record(root, path.stem)
+        if record.get("plan_id") == plan_id:
+            records.append(record)
+    return records
+
+
+def write_reviewer_acquisition_record(root: Path, record: dict[str, Any]) -> None:
+    """Persist one reviewer-acquisition runtime record with a fresh self digest."""
+    record["record_sha256"] = reviewer_acquisition_digest(record)
+    write_atomic(
+        reviewer_acquisition_path(root, str(record["acquisition_id"])),
+        json.dumps(record, indent=2, sort_keys=True) + "\n",
+    )
+
+
+def read_reviewer_failure_bytes(root: Path, args: argparse.Namespace) -> bytes:
+    """Read reviewer failure output from stdin or one project-local file."""
+    if args.failure_stdin and args.failure_from_file is not None:
+        raise WorkctlError("REVIEWER_ACQUISITION_FAILURE_SOURCE_CONFLICT")
+    if isinstance(args.failure_from_file, str):
+        input_path = checked_project_path(root, args.failure_from_file)
+        reject_symlink_components(root, input_path)
+        if input_path.is_symlink() or not input_path.is_file():
+            raise WorkctlError("REVIEWER_ACQUISITION_FAILURE_SOURCE_MISSING")
+        content = input_path.read_bytes()
+    else:
+        content = sys.stdin.buffer.read()
+    if len(content) > REVIEWER_ACQUISITION_MAX_BYTES:
+        raise WorkctlError("REVIEWER_ACQUISITION_FAILURE_TOO_LARGE")
+    return content
+
+
+def reviewer_failure_signals(text: str) -> list[str]:
+    """Extract stable, non-secret signals from reviewer acquisition failure text."""
+    lowered = text.lower()
+    signals: list[str] = []
+    if "proxy connection failed" in lowered or "http connect failed with status 403" in lowered:
+        signals.append("proxy-connect-403")
+    if "backend-api/codex/responses" in lowered:
+        signals.append("codex-responses-api")
+    if "backend-api/codex/models" in lowered:
+        signals.append("codex-models-api")
+    if "authentication" in lowered or "unauthorized" in lowered or "status 401" in lowered:
+        signals.append("auth-unavailable")
+    if "command not found" in lowered or "no such file or directory" in lowered:
+        signals.append("command-missing")
+    if "timed out" in lowered or "timeout" in lowered:
+        signals.append("timeout")
+    if "trusted_attestation" in lowered or "attestor" in lowered:
+        signals.append("attestor-untrusted")
+    if signals:
+        return sorted(set(signals))
+    normalized: list[str] = []
+    for line in text.splitlines():
+        stripped = re.sub(r"\d{4}-\d{2}-\d{2}T\S+", "<timestamp>", line.strip())
+        stripped = re.sub(r"[0-9a-f]{32,64}", "<hex>", stripped)
+        if stripped:
+            normalized.append(stripped[:160])
+        if len(normalized) >= 6:
+            break
+    return normalized or ["empty-output"]
+
+
+def classify_reviewer_failure(text: str, exit_code: int, requested: str) -> str:
+    """Classify a reviewer acquisition failure into a stable governance category."""
+    if requested != "auto":
+        if requested not in REVIEWER_FAILURE_CLASSES:
+            raise WorkctlError("REVIEWER_ACQUISITION_FAILURE_CLASS_INVALID")
+        return requested
+    lowered = text.lower()
+    if "proxy connection failed" in lowered or "http connect failed with status 403" in lowered:
+        return "network_proxy_blocked"
+    if "authentication" in lowered or "unauthorized" in lowered or "status 401" in lowered:
+        return "auth_unavailable"
+    if "command not found" in lowered or "no such file or directory" in lowered:
+        return "command_missing"
+    if "timed out" in lowered or "timeout" in lowered:
+        return "timeout"
+    if "trusted_attestation" in lowered or "attestor" in lowered:
+        return "attestor_untrusted"
+    if exit_code == 124:
+        return "timeout"
+    return "unknown_failure"
+
+
+def reviewer_failure_fingerprint(
+    *,
+    mechanism: str,
+    failure_class: str,
+    signals: Sequence[str],
+) -> str:
+    """Hash the stable failure classification and signals for cooldown matching."""
+    payload = {
+        "mechanism": mechanism,
+        "failure_class": failure_class,
+        "signals": list(signals),
+    }
+    return sha256_bytes(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+
+
+def reviewer_failure_summary(text: str, explicit_summary: str | None, failure_class: str) -> str:
+    """Return a redacted, bounded failure summary for the runtime record."""
+    if isinstance(explicit_summary, str) and explicit_summary.strip():
+        summary = redact_capture_text(explicit_summary.strip())
+    else:
+        summary = next((line.strip() for line in text.splitlines() if line.strip()), failure_class)
+    summary = summary[:512]
+    return summary or failure_class
+
+
+def reviewer_failure_components(root: Path, args: argparse.Namespace) -> dict[str, object]:
+    """Read and classify one reviewer-acquisition failure payload."""
+    raw_failure = read_reviewer_failure_bytes(root, args)
+    redacted_failure, _text_source = redact_capture_bytes(raw_failure)
+    text = redacted_failure.decode("utf-8")
+    summary = reviewer_failure_summary(text, args.summary, args.failure_class)
+    if not text.strip() and not summary.strip():
+        raise WorkctlError("REVIEWER_ACQUISITION_FAILURE_REQUIRED")
+    classification_text = f"{summary}\n{text}"
+    failure_class = classify_reviewer_failure(
+        classification_text,
+        args.exit_code,
+        args.failure_class,
+    )
+    signals = reviewer_failure_signals(classification_text)
+    return {
+        "text": text,
+        "summary": summary,
+        "failure_class": failure_class,
+        "failure_fingerprint": reviewer_failure_fingerprint(
+            mechanism=args.mechanism,
+            failure_class=failure_class,
+            signals=signals,
+        ),
+        "output_sha256": sha256_bytes(redacted_failure),
+        "output_size": len(redacted_failure),
+    }
+
+
+def reviewer_acquisition_latest(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the latest attempt from a validated reviewer-acquisition record."""
+    attempts = cast(list[dict[str, Any]], record["attempts"])
+    return attempts[int(cast(int, record["latest_attempt_index"])) - 1]
+
+
+def reviewer_acquisition_cooldown_active(record: Mapping[str, Any]) -> bool:
+    """Return whether a reviewer-acquisition cooldown is still active."""
+    return datetime.now(UTC) < parse_authorization_time(record["cooldown_until"])
+
+
+def reviewer_acquisition_mechanism_cache(
+    root: Path,
+    plan_id: str,
+    mechanism: str,
+    *,
+    exclude_acquisition_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Return the active mechanism-scoped cache entry for a reviewer route."""
+    candidates: list[dict[str, Any]] = []
+    for record in load_reviewer_acquisition_records(root, plan_id):
+        if record["acquisition_id"] == exclude_acquisition_id:
+            continue
+        if record["mechanism"] != mechanism:
+            continue
+        latest = reviewer_acquisition_latest(record)
+        if latest["failure_class"] not in MECHANISM_SCOPED_REVIEWER_FAILURE_CLASSES:
+            continue
+        if reviewer_acquisition_cooldown_active(record):
+            candidates.append(record)
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda record: (
+            parse_authorization_time(record["cooldown_until"]),
+            str(record["acquisition_id"]),
+        ),
+    )
+
+
+def reviewer_acquisition_projection(
+    record: Mapping[str, Any],
+    *,
+    cache_scope: str | None = None,
+    requested_acquisition_id: str | None = None,
+) -> dict[str, Any]:
+    """Project a reviewer-acquisition record into a compact status payload."""
+    latest = reviewer_acquisition_latest(record)
+    cached = reviewer_acquisition_cooldown_active(record)
+    payload = {
+        "acquisition_id": record["acquisition_id"],
+        "plan_id": record["plan_id"],
+        "target_ref": record["target_ref"],
+        "mechanism": record["mechanism"],
+        "review_input_sha256": record["review_input_sha256"],
+        "attempt_allowed": not cached,
+        "state": "VALIDATOR_UNAVAILABLE_CACHED" if cached else "cooldown_expired",
+        "failure_class": latest["failure_class"],
+        "failure_fingerprint": latest["failure_fingerprint"],
+        "failure_summary": latest["failure_summary"],
+        "attempt_count": len(cast(list[object], record["attempts"])),
+        "cooldown_until": record["cooldown_until"],
+        "latest_attempt_ref": latest["attempt_ref"],
+        "latest_recorded_at": latest["recorded_at"],
+        "fallback_boundary": (
+            "deterministic_self_challenge_for_reversible_local_only; "
+            "high_impact_targets_remain_fail_closed"
+        ),
+    }
+    if cache_scope is not None:
+        payload["cache_scope"] = cache_scope
+    if requested_acquisition_id is not None:
+        payload["requested_acquisition_id"] = requested_acquisition_id
+    return payload
+
+
+def cmd_review_acquisition_check(args: argparse.Namespace) -> None:
+    """Tell the caller whether a reviewer acquisition attempt should run."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    plan_id = str(doc.frontmatter["plan_id"])
+    acquisition_id = validate_reviewer_acquisition_scope(args, plan_id)
+    record = try_load_reviewer_acquisition_record(root, acquisition_id)
+    if record is not None:
+        payload = reviewer_acquisition_projection(record, cache_scope="exact")
+        if payload["attempt_allowed"]:
+            mechanism_cache = reviewer_acquisition_mechanism_cache(
+                root,
+                plan_id,
+                args.mechanism,
+                exclude_acquisition_id=acquisition_id,
+            )
+            if mechanism_cache is not None:
+                payload = reviewer_acquisition_projection(
+                    mechanism_cache,
+                    cache_scope="mechanism",
+                    requested_acquisition_id=acquisition_id,
+                )
+                payload["requested_target_ref"] = args.target_ref
+                payload["requested_review_input_sha256"] = args.review_input_sha256
+    else:
+        mechanism_cache = reviewer_acquisition_mechanism_cache(root, plan_id, args.mechanism)
+        if mechanism_cache is not None:
+            payload = reviewer_acquisition_projection(
+                mechanism_cache,
+                cache_scope="mechanism",
+                requested_acquisition_id=acquisition_id,
+            )
+            payload["requested_target_ref"] = args.target_ref
+            payload["requested_review_input_sha256"] = args.review_input_sha256
+        else:
+            payload = {
+                "plan_id": plan_id,
+                "target_ref": args.target_ref,
+                "mechanism": args.mechanism,
+                "review_input_sha256": args.review_input_sha256,
+                "acquisition_id": acquisition_id,
+                "attempt_allowed": True,
+                "state": "attempt_allowed",
+                "cache_scope": "none",
+            }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_review_acquisition_status(args: argparse.Namespace) -> None:
+    """Show reviewer-acquisition failure caches for the active Plan."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    plan_id = str(doc.frontmatter["plan_id"])
+    records = load_reviewer_acquisition_records(root, plan_id)
+    projections = [reviewer_acquisition_projection(record) for record in records]
+    if args.target_ref is not None:
+        if not valid_target_ref(args.target_ref):
+            raise WorkctlError("REVIEWER_ACQUISITION_TARGET_INVALID")
+        projections = [item for item in projections if item["target_ref"] == args.target_ref]
+    if args.mechanism is not None:
+        if REVIEWER_ACQUISITION_MECHANISM_RE.fullmatch(args.mechanism) is None:
+            raise WorkctlError("REVIEWER_ACQUISITION_MECHANISM_INVALID")
+        projections = [item for item in projections if item["mechanism"] == args.mechanism]
+    print(
+        json.dumps(
+            {
+                "plan_id": plan_id,
+                "reviewer_acquisition": projections,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def cmd_review_acquisition_record_failure(args: argparse.Namespace) -> None:
+    """Record a failed reviewer acquisition and install a bounded cooldown."""
+    root = project_root()
+    if args.exit_code < -9999 or args.exit_code > 9999:
+        raise WorkctlError("REVIEWER_ACQUISITION_EXIT_CODE_INVALID")
+    if not 1 <= args.cooldown_seconds <= REVIEWER_ACQUISITION_MAX_COOLDOWN_SECONDS:
+        raise WorkctlError("REVIEWER_ACQUISITION_COOLDOWN_INVALID")
+    if not valid_reference(args.attempt_ref):
+        raise WorkctlError("REVIEWER_ACQUISITION_ATTEMPT_REF_INVALID")
+    idempotency_key = args.idempotency_key or "default"
+    if EVIDENCE_CAPTURE_IDEMPOTENCY_RE.fullmatch(idempotency_key) is None:
+        raise WorkctlError("REVIEWER_ACQUISITION_IDEMPOTENCY_KEY_INVALID")
+    failure = reviewer_failure_components(root, args)
+    if args.dry_run:
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        require_plan_contract_ready(doc.frontmatter)
+        plan_id = str(doc.frontmatter["plan_id"])
+        acquisition_id = validate_reviewer_acquisition_scope(args, plan_id)
+        existing = try_load_reviewer_acquisition_record(root, acquisition_id)
+        if existing is not None and reviewer_acquisition_cooldown_active(existing):
+            payload = reviewer_acquisition_projection(existing, cache_scope="exact")
+            payload.update(
+                {
+                    "state": "would_reject_failure_record",
+                    "reason": "REVIEWER_ACQUISITION_COOLDOWN_ACTIVE",
+                    "proposed_failure_class": failure["failure_class"],
+                    "proposed_failure_fingerprint": failure["failure_fingerprint"],
+                    "proposed_failure_summary": failure["summary"],
+                    "write": False,
+                }
+            )
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return
+        mechanism_cache = reviewer_acquisition_mechanism_cache(
+            root,
+            plan_id,
+            args.mechanism,
+            exclude_acquisition_id=acquisition_id,
+        )
+        if mechanism_cache is not None:
+            payload = reviewer_acquisition_projection(
+                mechanism_cache,
+                cache_scope="mechanism",
+                requested_acquisition_id=acquisition_id,
+            )
+            payload["requested_target_ref"] = args.target_ref
+            payload["requested_review_input_sha256"] = args.review_input_sha256
+            payload.update(
+                {
+                    "state": "would_reject_failure_record",
+                    "reason": "REVIEWER_ACQUISITION_MECHANISM_COOLDOWN_ACTIVE",
+                    "proposed_failure_class": failure["failure_class"],
+                    "proposed_failure_fingerprint": failure["failure_fingerprint"],
+                    "proposed_failure_summary": failure["summary"],
+                    "write": False,
+                }
+            )
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return
+        recorded_at = utc_now()
+        cooldown_until = (
+            parse_authorization_time(recorded_at) + timedelta(seconds=args.cooldown_seconds)
+        ).isoformat()
+        payload = {
+            "plan_id": plan_id,
+            "target_ref": args.target_ref,
+            "mechanism": args.mechanism,
+            "review_input_sha256": args.review_input_sha256,
+            "acquisition_id": acquisition_id,
+            "attempt_allowed": False,
+            "state": "would_record_failure",
+            "failure_class": failure["failure_class"],
+            "failure_fingerprint": failure["failure_fingerprint"],
+            "failure_summary": failure["summary"],
+            "cooldown_until": cooldown_until,
+            "write": False,
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        require_plan_contract_ready(doc.frontmatter)
+        plan_id = str(doc.frontmatter["plan_id"])
+        acquisition_id = validate_reviewer_acquisition_scope(args, plan_id)
+        failure_class = str(failure["failure_class"])
+        failure_fingerprint = str(failure["failure_fingerprint"])
+        output_sha256 = str(failure["output_sha256"])
+        existing = try_load_reviewer_acquisition_record(root, acquisition_id)
+        if existing is not None:
+            attempts = cast(list[dict[str, Any]], existing["attempts"])
+            prior = next(
+                (
+                    attempt
+                    for attempt in attempts
+                    if attempt.get("idempotency_key") == idempotency_key
+                ),
+                None,
+            )
+            if prior is not None:
+                if (
+                    prior.get("attempt_ref") != args.attempt_ref
+                    or prior.get("failure_class") != failure_class
+                    or prior.get("failure_fingerprint") != failure_fingerprint
+                    or prior.get("output_sha256") != output_sha256
+                    or prior.get("exit_code") != args.exit_code
+                    or prior.get("cooldown_seconds") != args.cooldown_seconds
+                ):
+                    raise WorkctlError("REVIEWER_ACQUISITION_IDEMPOTENCY_CONFLICT")
+                payload = reviewer_acquisition_projection(existing)
+                payload["idempotent"] = True
+                payload["write"] = False
+                print(json.dumps(payload, indent=2, sort_keys=True))
+                return
+            if reviewer_acquisition_cooldown_active(existing):
+                raise WorkctlError("REVIEWER_ACQUISITION_COOLDOWN_ACTIVE")
+            if len(attempts) >= REVIEWER_ACQUISITION_MAX_ATTEMPTS:
+                raise WorkctlError("REVIEWER_ACQUISITION_ATTEMPTS_EXHAUSTED")
+        mechanism_cache = reviewer_acquisition_mechanism_cache(
+            root,
+            plan_id,
+            args.mechanism,
+            exclude_acquisition_id=acquisition_id,
+        )
+        if mechanism_cache is not None:
+            raise WorkctlError(
+                "REVIEWER_ACQUISITION_MECHANISM_COOLDOWN_ACTIVE: "
+                f"{mechanism_cache['acquisition_id']}"
+            )
+        if existing is not None:
+            attempts = cast(list[dict[str, Any]], existing["attempts"])
+            record = existing
+            created_at = str(existing["created_at"])
+            attempt_index = len(attempts) + 1
+        else:
+            record = {
+                "schema_version": 1,
+                "kind": "work-governance-reviewer-acquisition",
+                "acquisition_id": acquisition_id,
+                "plan_id": plan_id,
+                "target_ref": args.target_ref,
+                "mechanism": args.mechanism,
+                "review_input_sha256": args.review_input_sha256,
+                "state": "validator_unavailable",
+                "attempts": [],
+            }
+            created_at = utc_now()
+            attempt_index = 1
+        recorded_at = utc_now()
+        cooldown_until = (
+            parse_authorization_time(recorded_at) + timedelta(seconds=args.cooldown_seconds)
+        ).isoformat()
+        attempt = {
+            "index": attempt_index,
+            "attempt_ref": args.attempt_ref,
+            "idempotency_key": idempotency_key,
+            "outcome": "failed",
+            "failure_class": failure_class,
+            "failure_fingerprint": failure_fingerprint,
+            "failure_summary": failure["summary"],
+            "redacted_excerpt": str(failure["text"])[:2048],
+            "output_sha256": output_sha256,
+            "output_size": failure["output_size"],
+            "exit_code": args.exit_code,
+            "cooldown_seconds": args.cooldown_seconds,
+            "cooldown_until": cooldown_until,
+            "recorded_at": recorded_at,
+        }
+        attempts = cast(list[dict[str, Any]], record["attempts"])
+        attempts.append(attempt)
+        record["created_at"] = created_at
+        record["updated_at"] = recorded_at
+        record["cooldown_until"] = cooldown_until
+        record["latest_attempt_index"] = attempt_index
+        write_reviewer_acquisition_record(root, record)
+        payload = reviewer_acquisition_projection(record)
+        payload["idempotent"] = False
+        payload["write"] = True
+        print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_review_status(_args: argparse.Namespace) -> None:
+    """Show active independent-validation records."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    plan_id = str(doc.frontmatter["plan_id"])
+    print(
+        json.dumps(
+            {
+                "plan_id": plan_id,
+                "independent_validation": doc.frontmatter.get("independent_validation", {}),
+                "reviewer_acquisition": [
+                    reviewer_acquisition_projection(record)
+                    for record in load_reviewer_acquisition_records(root, plan_id)
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def cmd_review_request(_args: argparse.Namespace) -> None:
+    """Print the review modes expected by Work Governance."""
+    print(
+        json.dumps(
+            {
+                "review_modes": [
+                    "plan_challenge",
+                    "artifact_review",
+                    "evidence_audit",
+                ],
+                "record_command": "review attach --manifest PATH",
+                "acquisition_commands": [
+                    "review acquisition check",
+                    "review acquisition record-failure",
+                    "review acquisition status",
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 def cmd_migrate_inspect(_args: argparse.Namespace) -> None:
@@ -11839,11 +13605,15 @@ def v5_migration_base(root: Path) -> Path:
 def next_v5_migration_id(root: Path) -> str:
     date_part = datetime.now(UTC).strftime("%Y%m%d")
     base = v5_migration_base(root)
-    existing = {
-        path.name
-        for path in base.iterdir()
-        if base.is_dir() and path.is_dir() and MIGRATION_ID_RE.fullmatch(path.name)
-    } if base.exists() else set()
+    existing = (
+        {
+            path.name
+            for path in base.iterdir()
+            if base.is_dir() and path.is_dir() and MIGRATION_ID_RE.fullmatch(path.name)
+        }
+        if base.exists()
+        else set()
+    )
     for number in range(1, 1000):
         candidate = f"MIG-{date_part}-{number:03d}"
         if candidate not in existing:
@@ -11872,6 +13642,10 @@ def validate_v5_migration_confirmation(
     """Require an accepted explicit gate for a durable schema migration."""
     if not isinstance(supplied, str) or not supplied:
         raise WorkctlError("SCHEMA_V5_MIGRATION_CONFIRMATION_REQUIRED")
+    if not supplied.startswith("C-"):
+        raise WorkctlError("INVALID_CONFIRMATION_ID")
+    if supplied != "C-MIGRATION-SCHEMA-V5":
+        raise WorkctlError("SCHEMA_V5_MIGRATION_CONFIRMATION_SCOPE_INVALID")
     decision = confirmations(cast(dict[str, Any], frontmatter)).get(supplied)
     if (
         not isinstance(decision, dict)
@@ -11879,6 +13653,22 @@ def validate_v5_migration_confirmation(
         or not decision.get("ref")
     ):
         raise WorkctlError(f"CONFIRMATION_REQUIRED: {supplied}")
+    intervention = decision.get("intervention")
+    if intervention is None:
+        return decision
+    if not isinstance(intervention, dict):
+        raise WorkctlError("SCHEMA_V5_MIGRATION_CONFIRMATION_SCOPE_INVALID")
+    plan_id = str(frontmatter.get("plan_id", ""))
+    blocks = intervention.get("blocks")
+    if (
+        intervention.get("kind") != "plan_contract"
+        or not isinstance(blocks, list)
+        or ("route" not in blocks and f"plan:{plan_id}" not in blocks)
+    ):
+        raise WorkctlError("SCHEMA_V5_MIGRATION_CONFIRMATION_SCOPE_INVALID")
+    basis_sha256 = intervention.get("basis_sha256")
+    if not isinstance(basis_sha256, str) or SHA256_RE.fullmatch(basis_sha256) is None:
+        raise WorkctlError("SCHEMA_V5_MIGRATION_CONFIRMATION_BASIS_INVALID")
     return decision
 
 
@@ -11982,9 +13772,20 @@ def finish_v5_migration(root: Path, journal_path: Path) -> None:
     if journal_path.resolve() != paths["journal"].resolve():
         raise WorkctlError("SCHEMA_V5_MIGRATION_JOURNAL_INVALID")
     required = {
-        "schema_version", "kind", "migration_id", "status", "plan_id", "source_path",
-        "source_sha256", "target_sha256", "state_sha256", "events_sha256",
-        "contract_revision", "confirmation_id", "created_at", "updated_at",
+        "schema_version",
+        "kind",
+        "migration_id",
+        "status",
+        "plan_id",
+        "source_path",
+        "source_sha256",
+        "target_sha256",
+        "state_sha256",
+        "events_sha256",
+        "contract_revision",
+        "confirmation_id",
+        "created_at",
+        "updated_at",
     }
     if (
         set(journal) != required
@@ -12037,6 +13838,72 @@ def finish_v5_migration(root: Path, journal_path: Path) -> None:
 def cmd_migrate_apply(args: argparse.Namespace) -> None:
     """Apply an explicit, backed-up, atomically recoverable v4-to-v5 migration."""
     root = project_root()
+    if args.dry_run:
+        require_governed_authority(root)
+        source = load_plan(active_plan_path(root))
+        if source.frontmatter.get("schema_version") == 5:
+            print(
+                json.dumps(
+                    {"status": "already_v5", "plan_id": source.frontmatter.get("plan_id")},
+                    sort_keys=True,
+                )
+            )
+            return
+        contract = source.frontmatter.get("contract")
+        current_revision = (
+            contract.get("revision")
+            if isinstance(contract, dict)
+            else source.frontmatter.get("revision")
+        )
+        if (
+            args.expected_contract_revision is not None
+            and current_revision != args.expected_contract_revision
+        ):
+            raise WorkctlError(
+                "CONTRACT_REVISION_MISMATCH: "
+                f"expected {args.expected_contract_revision}, found {current_revision}"
+            )
+        journal, state, _event, target_bytes = prepare_v5_migration(
+            root,
+            source,
+            migration_id="MIG-DRY-RUN-001",
+            confirmation_id=str(args.confirmation or "C-MIGRATION-SCHEMA-V5"),
+        )
+        target_sha256 = sha256_bytes(target_bytes)
+        decision: dict[str, Any] | None = None
+        confirmations_required = ["C-MIGRATION-SCHEMA-V5"]
+        if isinstance(args.confirmation, str):
+            candidate = confirmations(source.frontmatter).get(args.confirmation)
+            if (
+                isinstance(candidate, dict)
+                and candidate.get("status") == "accepted"
+                and candidate.get("ref")
+            ):
+                decision = validate_v5_migration_confirmation(
+                    source.frontmatter,
+                    args.confirmation,
+                )
+                confirmations_required = []
+            else:
+                if not args.confirmation.startswith("C-"):
+                    raise WorkctlError("INVALID_CONFIRMATION_ID")
+                confirmations_required = [args.confirmation]
+        payload = migration_projection(source.frontmatter) if callable(migration_projection) else {}
+        payload.update(
+            {
+                "status": "dry_run",
+                "plan_id": source.frontmatter.get("plan_id"),
+                "source_sha256": sha256_file(source.path),
+                "target_sha256": target_sha256,
+                "state_sequence": state.get("state_sequence"),
+                "contract_revision": journal.get("contract_revision"),
+                "confirmation_ref": decision.get("ref") if decision else None,
+                "confirmations_required": confirmations_required,
+                "writes": [],
+            }
+        )
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
     with lock(root):
         require_governed_authority(root)
         source = load_plan(active_plan_path(root))
@@ -12048,7 +13915,6 @@ def cmd_migrate_apply(args: argparse.Namespace) -> None:
                 )
             )
             return
-        decision = validate_v5_migration_confirmation(source.frontmatter, args.confirmation)
         expected = args.expected_contract_revision
         contract = source.frontmatter.get("contract")
         current_revision = (
@@ -12062,38 +13928,16 @@ def cmd_migrate_apply(args: argparse.Namespace) -> None:
             raise WorkctlError(
                 f"CONTRACT_REVISION_MISMATCH: expected {expected}, found {current_revision}"
             )
-        if args.dry_run:
-            journal, state, _event, target_bytes = prepare_v5_migration(
-                root,
-                source,
-                migration_id="MIG-DRY-RUN-001",
-                confirmation_id=str(args.confirmation),
-            )
-            payload = (
-                migration_projection(source.frontmatter)
-                if callable(migration_projection)
-                else {}
-            )
-            payload.update(
-                {
-                    "status": "dry_run",
-                    "plan_id": source.frontmatter.get("plan_id"),
-                    "source_sha256": sha256_file(source.path),
-                    "target_sha256": sha256_bytes(target_bytes),
-                    "state_sequence": state.get("state_sequence"),
-                    "contract_revision": journal.get("contract_revision"),
-                    "confirmation_ref": decision.get("ref"),
-                    "writes": [],
-                }
-            )
-            print(json.dumps(payload, indent=2, sort_keys=True))
-            return
         migration_id = next_v5_migration_id(root)
         journal, state, event, target_bytes = prepare_v5_migration(
             root,
             source,
             migration_id=migration_id,
             confirmation_id=str(args.confirmation),
+        )
+        validate_v5_migration_confirmation(
+            source.frontmatter,
+            args.confirmation,
         )
         paths = v5_migration_paths(root, migration_id)
         source_bytes = source.path.read_bytes()
@@ -12106,6 +13950,204 @@ def cmd_migrate_apply(args: argparse.Namespace) -> None:
         write_atomic(paths["journal"], json.dumps(journal, indent=2, sort_keys=True) + "\n")
         finish_v5_migration(root, paths["journal"])
     print(f"SCHEMA_V5_MIGRATION_COMMITTED {migration_id} plan={source.frontmatter['plan_id']}")
+
+
+def migration_rollback_entry(root: Path, journal_path: Path) -> dict[str, Any]:
+    """Build a read-only rollback/recovery entry from one schema-v5 migration journal."""
+    journal = load_yaml_file(journal_path)
+    migration_id = journal.get("migration_id")
+    if not isinstance(migration_id, str):
+        raise WorkctlError("SCHEMA_V5_MIGRATION_JOURNAL_INVALID")
+    paths = v5_migration_paths(root, migration_id)
+    backup_sha256 = sha256_file(paths["backup"]) if paths["backup"].is_file() else None
+    staging_sha256 = sha256_file(paths["staging"]) if paths["staging"].is_file() else None
+    return {
+        "migration_id": migration_id,
+        "status": journal.get("status"),
+        "plan_id": journal.get("plan_id"),
+        "source_path": journal.get("source_path"),
+        "source_sha256": journal.get("source_sha256"),
+        "target_sha256": journal.get("target_sha256"),
+        "backup_path": (
+            relative_project_path(root, paths["backup"]) if paths["backup"].exists() else None
+        ),
+        "backup_sha256": backup_sha256,
+        "staging_path": (
+            relative_project_path(root, paths["staging"]) if paths["staging"].exists() else None
+        ),
+        "staging_sha256": staging_sha256,
+        "recovery_command": f"migrate recover --migration-id {migration_id}",
+        "rollback_boundary": (
+            "No automatic rollback command is exposed. The original bytes are preserved "
+            "in backup_path for audit and manually confirmed recovery planning."
+        ),
+    }
+
+
+def migration_rollback_report_entry(root: Path, journal_path: Path) -> dict[str, Any]:
+    """Build a doctor-safe migration journal report entry."""
+    try:
+        return migration_rollback_entry(root, journal_path)
+    except WorkctlError as exc:
+        return {
+            "journal_path": relative_project_path(root, journal_path),
+            "status": "invalid",
+            "error": str(exc),
+            "recovery_command": None,
+            "rollback_boundary": (
+                "Invalid migration journal was preserved for investigation; "
+                "doctor does not delete schema-v5 migration bundles."
+            ),
+        }
+
+
+def cmd_migrate_rollback_info(args: argparse.Namespace) -> None:
+    """Show schema-v5 migration backup and recovery information without mutating state."""
+    root = project_root()
+    base = v5_migration_base(root)
+    if args.migration_id:
+        journals = [v5_migration_paths(root, args.migration_id)["journal"]]
+    elif base.is_dir():
+        journals = sorted(base.glob("MIG-*/journal.json"))
+    else:
+        journals = []
+    entries = [migration_rollback_entry(root, journal) for journal in journals if journal.is_file()]
+    if args.migration_id and not entries:
+        raise WorkctlError(f"SCHEMA_V5_MIGRATION_NOT_FOUND: {args.migration_id}")
+    print(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "schema-v5-migration-rollback-info",
+                "write": False,
+                "entries": entries,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def runtime_transactions_root(root: Path) -> Path:
+    """Return the generic ignored transaction directory used by doctor."""
+    path = governance_root(root) / "runtime" / "transactions"
+    reject_symlink_components(root, path)
+    return path
+
+
+def stale_runtime_transaction_entries(
+    root: Path,
+    *,
+    older_than_hours: int,
+) -> list[dict[str, Any]]:
+    """Return generic runtime transaction directories old enough for operator review."""
+    transaction_root = runtime_transactions_root(root)
+    if not transaction_root.exists():
+        return []
+    if transaction_root.is_symlink() or not transaction_root.is_dir():
+        raise WorkctlError("RUNTIME_TRANSACTIONS_INVALID")
+    threshold = time.time() - older_than_hours * 3600
+    entries: list[dict[str, Any]] = []
+    for path in sorted(transaction_root.iterdir()):
+        if path.is_symlink() or not path.is_dir():
+            entries.append(
+                {
+                    "path": relative_project_path(root, path),
+                    "state": "invalid",
+                    "reason": "transaction entry is not a plain directory",
+                    "cleanable": False,
+                }
+            )
+            continue
+        modified_at = path.stat().st_mtime
+        journal_paths = [path / "journal.json", path / "journal.yaml", path / "journal.yml"]
+        has_journal = any(candidate.is_file() for candidate in journal_paths)
+        stale = modified_at < threshold
+        entries.append(
+            {
+                "path": relative_project_path(root, path),
+                "state": "stale" if stale else "recent",
+                "reason": "missing journal" if not has_journal else "journal present",
+                "cleanable": bool(stale and not has_journal),
+                "age_seconds": int(max(0.0, time.time() - modified_at)),
+            }
+        )
+    return entries
+
+
+def clean_stale_runtime_transactions(root: Path, entries: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Remove only stale generic transaction directories that have no journal."""
+    cleaned: list[str] = []
+    transaction_root = runtime_transactions_root(root).resolve()
+    for entry in entries:
+        if entry.get("cleanable") is not True:
+            continue
+        relative = entry.get("path")
+        if not isinstance(relative, str):
+            continue
+        path = checked_project_path(root, relative)
+        if path.is_symlink() or not path.is_dir() or path.parent.resolve() != transaction_root:
+            raise WorkctlError("RUNTIME_TRANSACTION_CLEANUP_UNSAFE")
+        if any((path / name).is_file() for name in ("journal.json", "journal.yaml", "journal.yml")):
+            raise WorkctlError("RUNTIME_TRANSACTION_CLEANUP_JOURNAL_PRESENT")
+        shutil.rmtree(path)
+        cleaned.append(relative)
+    return cleaned
+
+
+def cmd_doctor(args: argparse.Namespace) -> None:
+    """Inspect or safely clean local runtime transaction health."""
+    root = project_root()
+    if args.older_than_hours < 1:
+        raise WorkctlError("DOCTOR_OLDER_THAN_HOURS_INVALID")
+    stale_entries = stale_runtime_transaction_entries(
+        root,
+        older_than_hours=args.older_than_hours,
+    )
+    cleaned: list[str] = []
+    if args.clean_stale_transactions:
+        with lock(root):
+            stale_entries = stale_runtime_transaction_entries(
+                root,
+                older_than_hours=args.older_than_hours,
+            )
+            cleaned = clean_stale_runtime_transactions(root, stale_entries)
+            stale_entries = stale_runtime_transaction_entries(
+                root,
+                older_than_hours=args.older_than_hours,
+            )
+    report = inspect_authority(root)
+    migration_base = v5_migration_base(root)
+    migration_journals = (
+        [
+            migration_rollback_report_entry(root, path)
+            for path in sorted(migration_base.glob("MIG-*/journal.json"))
+        ]
+        if migration_base.is_dir()
+        else []
+    )
+    print(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "kind": "work-governance-doctor-report",
+                "write": bool(args.clean_stale_transactions),
+                "layout_state": inspect_layout(root).state,
+                "authority_state": report.state,
+                "blocking_reasons": report.blockers,
+                "schema_v5_migrations": migration_journals,
+                "runtime_transactions": stale_entries,
+                "cleaned": cleaned,
+                "next_action": (
+                    "Run migrate recover for incomplete schema-v5 journals before ordinary work."
+                    if any(entry.get("status") != "committed" for entry in migration_journals)
+                    else "No schema-v5 migration recovery action is required."
+                ),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 def cmd_migrate_recover(args: argparse.Namespace) -> None:
@@ -12528,7 +14570,7 @@ def cmd_plan_confirmation_add(args: argparse.Namespace) -> None:
             raise WorkctlError("INVALID_PLAN: confirmations.required must be a list")
         if args.confirmation_id in confirmations(doc.frontmatter):
             raise WorkctlError(f"CONFIRMATION_EXISTS: {args.confirmation_id}")
-        if doc.frontmatter.get("schema_version") == 4 and args.status == "accepted":
+        if doc.frontmatter.get("schema_version") in {4, 5} and args.status == "accepted":
             raise WorkctlError("CONFIRMATION_ACCEPTED_REQUIRES_PLAN_CONFIRM")
         item: dict[str, Any] = {
             "id": args.confirmation_id,
@@ -12593,8 +14635,7 @@ def load_confirmation_classification_manifest(path: Path) -> dict[str, Any]:
         or not isinstance(manifest.get("confirmation_id"), str)
         or not str(manifest["confirmation_id"]).startswith("C-")
         or not isinstance(intervention, dict)
-        or set(intervention)
-        - {"kind", "blocks", "basis_ref", "basis_sha256", "action_kind"}
+        or set(intervention) - {"kind", "blocks", "basis_ref", "basis_sha256", "action_kind"}
         or (
             "supersedes_basis_sha256" in manifest
             and (
@@ -13959,13 +16000,433 @@ def evidence_payload_from_args(args: argparse.Namespace) -> dict[str, Any] | Non
     """Read an optional evidence object from a manifest path or standard input."""
     if getattr(args, "evidence_stdin", False) or getattr(args, "stdin", False):
         return parse_evidence_content(sys.stdin.buffer.read())
-    input_path_value = getattr(args, "manifest", None)
+    input_path_value = getattr(args, "evidence_manifest", None)
+    if not isinstance(input_path_value, str):
+        input_path_value = getattr(args, "manifest", None)
     if not isinstance(input_path_value, str):
         return None
     input_path = Path(input_path_value)
     if input_path.is_symlink() or not input_path.is_file():
         raise WorkctlError("EVIDENCE_INPUT_MISSING")
     return parse_evidence_content(input_path.read_bytes())
+
+
+def evidence_capture_root(root: Path) -> Path:
+    """Return the project-local direct evidence store root."""
+    path = governance_root(root) / "evidence"
+    reject_symlink_components(root, path)
+    return path
+
+
+def evidence_capture_blob_path(root: Path, digest: str) -> Path:
+    """Return the content-addressed blob path for direct evidence capture."""
+    if SHA256_RE.fullmatch(digest) is None:
+        raise WorkctlError("EVIDENCE_CAPTURE_BLOB_DIGEST_INVALID")
+    return evidence_capture_root(root) / "blobs" / digest
+
+
+def evidence_capture_record_path(root: Path, digest: str) -> Path:
+    """Return the content-addressed metadata record path for direct evidence capture."""
+    if SHA256_RE.fullmatch(digest) is None:
+        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_DIGEST_INVALID")
+    return evidence_capture_root(root) / "records" / f"{digest}.json"
+
+
+def evidence_capture_ledger_path(root: Path) -> Path:
+    """Return the append-only direct evidence ledger path."""
+    return evidence_capture_root(root) / "ledger.ndjson"
+
+
+def normalize_capture_task(task_value: str | None) -> str | None:
+    """Normalize an optional task reference to a task ID."""
+    if task_value is None:
+        return None
+    normalized = task_value.removeprefix("task:")
+    if ENTRY_ID_PATTERNS["tasks"].fullmatch(normalized) is None:
+        raise WorkctlError("EVIDENCE_CAPTURE_TASK_INVALID")
+    return normalized
+
+
+def redact_capture_text(value: str) -> str:
+    """Apply conservative text redaction before evidence bytes are persisted."""
+    redacted = value
+    redacted = re.sub(
+        r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+",
+        "Bearer [REDACTED]",
+        redacted,
+    )
+    redacted = re.sub(r"\bsk-[A-Za-z0-9._-]+", "sk-[REDACTED]", redacted)
+    redacted = re.sub(r"\bAKIA[0-9A-Z]{16}\b", "AKIA[REDACTED]", redacted)
+    redacted = re.sub(
+        r"(?i)\b(api[_-]?key|authorization|password|secret|token)\s*[:=]\s*[^\s,;]+",
+        lambda match: f"{match.group(1)}=[REDACTED]",
+        redacted,
+    )
+    return redacted
+
+
+def redact_capture_bytes(content: bytes) -> tuple[bytes, bool]:
+    """Return persistable evidence bytes and whether the source was textual."""
+    if len(content) > EVIDENCE_CAPTURE_MAX_BYTES:
+        raise WorkctlError("EVIDENCE_CAPTURE_TOO_LARGE")
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        placeholder = {
+            "schema_version": 1,
+            "kind": "work-governance-binary-evidence-placeholder",
+            "source_sha256": sha256_bytes(content),
+            "source_size": len(content),
+            "redaction_note": "binary source was not persisted verbatim",
+        }
+        return (
+            json.dumps(placeholder, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n",
+            False,
+        )
+    return redact_capture_text(text).encode("utf-8"), True
+
+
+def read_capture_source(root: Path, args: argparse.Namespace) -> tuple[bytes, str, str | None]:
+    """Read direct evidence bytes from stdin or a project-local explicit file."""
+    raw_from_file = getattr(args, "from_file", None)
+    if isinstance(raw_from_file, str):
+        input_path = Path(raw_from_file)
+        candidate = input_path if input_path.is_absolute() else root / input_path
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise WorkctlError(f"PATH_OUTSIDE_PROJECT: {raw_from_file}") from exc
+        reject_symlink_components(root, candidate)
+        if candidate.is_symlink() or not candidate.is_file():
+            raise WorkctlError("EVIDENCE_CAPTURE_SOURCE_MISSING")
+        return candidate.read_bytes(), "file", relative_project_path(root, candidate)
+    return sys.stdin.buffer.read(), "stdin", None
+
+
+def capture_record_id(created_at: str) -> str:
+    """Create a collision-resistant evidence ID from time and a random suffix."""
+    compact_time = (
+        datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        .astimezone(UTC)
+        .strftime("%Y%m%dT%H%M%SZ")
+    )
+    return f"E-{compact_time}-{secrets.token_hex(6)}"
+
+
+def load_capture_records(root: Path) -> list[dict[str, Any]]:
+    """Load the direct evidence ledger for idempotency checks."""
+    path = evidence_capture_ledger_path(root)
+    if not path.exists():
+        return []
+    if path.is_symlink() or not path.is_file():
+        raise WorkctlError("EVIDENCE_CAPTURE_LEDGER_INVALID")
+    records: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            value: object = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise WorkctlError("EVIDENCE_CAPTURE_LEDGER_INVALID") from exc
+        if not isinstance(value, dict):
+            raise WorkctlError("EVIDENCE_CAPTURE_LEDGER_INVALID")
+        records.append(cast(dict[str, Any], value))
+    return records
+
+
+def append_capture_record(root: Path, record: Mapping[str, Any]) -> None:
+    """Append one canonical direct evidence record to the ledger."""
+    ledger = evidence_capture_ledger_path(root)
+    ensure_directory_durable(ledger.parent)
+    encoded = (
+        json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
+    ).encode("utf-8")
+    with ledger.open("ab") as handle:
+        handle.write(encoded)
+        handle.flush()
+        os.fsync(handle.fileno())
+    fsync_directory(ledger.parent)
+
+
+def verify_capture_record_file(root: Path, record: Mapping[str, Any]) -> tuple[str, str]:
+    """Verify the content-addressed metadata file named by a ledger record."""
+    ref = record.get("evidence_ref")
+    digest = record.get("evidence_sha256")
+    if not isinstance(ref, str) or not ref.startswith("evidence:"):
+        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_INVALID")
+    if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
+        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_INVALID")
+    expected_ref = f"evidence:{GOVERNANCE_DIR_NAME}/evidence/records/{digest}.json"
+    if ref != expected_ref:
+        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_INVALID")
+    record_path = evidence_capture_record_path(root, digest)
+    if record_path.is_symlink() or not record_path.is_file():
+        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_MISSING")
+    if sha256_file(record_path) != digest:
+        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_HASH_MISMATCH")
+    return ref, digest
+
+
+def find_capture_record_by_idempotency_key(
+    root: Path,
+    *,
+    plan_id: str,
+    key: str,
+) -> dict[str, Any] | None:
+    """Return the existing record for one idempotency key, if any."""
+    for record in load_capture_records(root):
+        if record.get("plan_id") == plan_id and record.get("idempotency_key") == key:
+            return record
+    return None
+
+
+def validate_capture_args(args: argparse.Namespace) -> str | None:
+    """Validate direct evidence capture arguments and return the normalized task."""
+    if getattr(args, "stdin", False) and getattr(args, "from_file", None) is not None:
+        raise WorkctlError("EVIDENCE_CAPTURE_SOURCE_CONFLICT")
+    if EVIDENCE_CAPTURE_KIND_RE.fullmatch(args.kind) is None:
+        raise WorkctlError("EVIDENCE_CAPTURE_KIND_INVALID")
+    if not isinstance(args.summary, str) or not args.summary.strip():
+        raise WorkctlError("EVIDENCE_CAPTURE_SUMMARY_REQUIRED")
+    if len(args.summary) > 512:
+        raise WorkctlError("EVIDENCE_CAPTURE_SUMMARY_TOO_LONG")
+    idempotency_key = getattr(args, "idempotency_key", None)
+    if (
+        idempotency_key is not None
+        and EVIDENCE_CAPTURE_IDEMPOTENCY_RE.fullmatch(idempotency_key) is None
+    ):
+        raise WorkctlError("EVIDENCE_CAPTURE_IDEMPOTENCY_KEY_INVALID")
+    return normalize_capture_task(args.task)
+
+
+def persist_capture_blob(root: Path, content: bytes) -> tuple[str, str, int]:
+    """Persist redacted direct evidence bytes as a content-addressed blob."""
+    digest = sha256_bytes(content)
+    blob = evidence_capture_blob_path(root, digest)
+    if blob.exists():
+        if blob.is_symlink() or blob.read_bytes() != content:
+            raise WorkctlError("EVIDENCE_CAPTURE_BLOB_CONFLICT")
+    else:
+        write_atomic_bytes(blob, content)
+    return f"evidence:{GOVERNANCE_DIR_NAME}/evidence/blobs/{digest}", digest, len(content)
+
+
+def persist_capture_metadata(root: Path, record: Mapping[str, Any]) -> tuple[str, str]:
+    """Persist direct evidence metadata as a content-addressed record."""
+    canonical = canonical_evidence_bytes(record)
+    digest = sha256_bytes(canonical)
+    target = evidence_capture_record_path(root, digest)
+    if target.exists():
+        if target.is_symlink() or target.read_bytes() != canonical:
+            raise WorkctlError("EVIDENCE_CAPTURE_RECORD_CONFLICT")
+    else:
+        write_atomic_bytes(target, canonical)
+    return f"evidence:{GOVERNANCE_DIR_NAME}/evidence/records/{digest}.json", digest
+
+
+def preflight_v5_capture_binding(
+    root: Path,
+    doc: PlanDocument,
+    *,
+    task_id: str,
+    expected_state_sequence: int | None,
+) -> None:
+    """Validate v5 task binding guards before durable evidence is written."""
+    v5_recover_pending_event(root, doc.frontmatter)
+    state = load_v5_state(root, doc.frontmatter)
+    if expected_state_sequence is not None and state["state_sequence"] != expected_state_sequence:
+        raise WorkctlError(
+            "STATE_SEQUENCE_MISMATCH: "
+            f"expected {expected_state_sequence}, found {state['state_sequence']}"
+        )
+    task_for(v5_runtime_frontmatter(root, doc.frontmatter, state), task_id)
+    state_tasks = state.get("tasks")
+    if not isinstance(state_tasks, dict):
+        raise WorkctlError("SCHEMA_V5_STATE_INVALID")
+    if not isinstance(state_tasks.get(task_id), dict):
+        raise WorkctlError("SCHEMA_V5_STATE_TASK_MISSING")
+
+
+def bind_v5_capture_record(
+    root: Path,
+    doc: PlanDocument,
+    *,
+    task_id: str,
+    record_ref: str,
+    record_id: str,
+    record_sha256: str,
+    blob_ref: str,
+    expected_state_sequence: int | None,
+) -> int:
+    """Bind direct evidence to a v5 task runtime state without touching the contract."""
+    v5_recover_pending_event(root, doc.frontmatter)
+    state = load_v5_state(root, doc.frontmatter)
+    if expected_state_sequence is not None and state["state_sequence"] != expected_state_sequence:
+        raise WorkctlError(
+            "STATE_SEQUENCE_MISMATCH: "
+            f"expected {expected_state_sequence}, found {state['state_sequence']}"
+        )
+    task_for(v5_runtime_frontmatter(root, doc.frontmatter, state), task_id)
+    state_tasks = state.get("tasks")
+    if not isinstance(state_tasks, dict):
+        raise WorkctlError("SCHEMA_V5_STATE_INVALID")
+    state_task = state_tasks.get(task_id)
+    if not isinstance(state_task, dict):
+        raise WorkctlError("SCHEMA_V5_STATE_TASK_MISSING")
+    evidence_refs = state_task.get("evidence_refs")
+    if not isinstance(evidence_refs, list) or not all(
+        isinstance(item, str) for item in evidence_refs
+    ):
+        evidence_refs = []
+        state_task["evidence_refs"] = evidence_refs
+    if record_ref in evidence_refs:
+        return int(state["state_sequence"])
+    evidence_sha256s = state_task.get("evidence_sha256s")
+    if not isinstance(evidence_sha256s, list) or not all(
+        isinstance(item, str) and SHA256_RE.fullmatch(item) is not None for item in evidence_sha256s
+    ):
+        evidence_sha256s = []
+        state_task["evidence_sha256s"] = evidence_sha256s
+    evidence_refs.append(record_ref)
+    evidence_sha256s.append(record_sha256)
+    v5_persist_state_transition(
+        root,
+        doc.frontmatter,
+        state,
+        event="evidence.captured",
+        subject=f"task:{task_id}",
+        payload={
+            "evidence_record_id": record_id,
+            "evidence_ref": record_ref,
+            "evidence_sha256": record_sha256,
+            "blob_ref": blob_ref,
+        },
+    )
+    return int(state["state_sequence"])
+
+
+def cmd_evidence_capture(args: argparse.Namespace) -> None:
+    """Directly capture command output or a project file into the evidence store."""
+    root = project_root()
+    task_id = validate_capture_args(args)
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        plan_id = str(doc.frontmatter["plan_id"])
+        if task_id is not None:
+            if doc.frontmatter.get("schema_version") == 5:
+                preflight_v5_capture_binding(
+                    root,
+                    doc,
+                    task_id=task_id,
+                    expected_state_sequence=args.expected_state_sequence,
+                )
+            else:
+                task_for(doc.frontmatter, task_id)
+        raw_content, source_type, source_ref = read_capture_source(root, args)
+        redacted_content, text_source = redact_capture_bytes(raw_content)
+        source_digest = sha256_bytes(redacted_content)
+        idempotency_key = getattr(args, "idempotency_key", None)
+        existing = (
+            find_capture_record_by_idempotency_key(
+                root,
+                plan_id=plan_id,
+                key=idempotency_key,
+            )
+            if isinstance(idempotency_key, str)
+            else None
+        )
+        state_sequence: int | None = None
+        if existing is not None:
+            if (
+                existing.get("source_digest") != source_digest
+                or existing.get("evidence_kind") != args.kind
+                or existing.get("summary") != redact_capture_text(args.summary.strip())
+                or existing.get("redaction_policy") != args.redaction_policy
+                or existing.get("task_ref") != (f"task:{task_id}" if task_id is not None else None)
+            ):
+                raise WorkctlError("EVIDENCE_CAPTURE_IDEMPOTENCY_CONFLICT")
+            existing_record = existing
+            record_ref, record_sha256 = verify_capture_record_file(root, existing_record)
+            if doc.frontmatter.get("schema_version") == 5 and task_id is not None:
+                state_sequence = bind_v5_capture_record(
+                    root,
+                    doc,
+                    task_id=task_id,
+                    record_ref=record_ref,
+                    record_id=str(existing_record["id"]),
+                    record_sha256=record_sha256,
+                    blob_ref=str(existing_record["blob_ref"]),
+                    expected_state_sequence=args.expected_state_sequence,
+                )
+            output = {
+                "id": existing_record["id"],
+                "evidence_ref": record_ref,
+                "evidence_sha256": record_sha256,
+                "blob_ref": existing_record["blob_ref"],
+                "source_digest": existing_record["source_digest"],
+                "plan_id": plan_id,
+                "idempotent": True,
+            }
+            if state_sequence is not None:
+                output["state_sequence"] = state_sequence
+            print(json.dumps(output, sort_keys=True))
+            return
+        blob_ref, blob_sha256, blob_size = persist_capture_blob(root, redacted_content)
+        created_at = utc_now()
+        record_id = capture_record_id(created_at)
+        if EVIDENCE_CAPTURE_ID_RE.fullmatch(record_id) is None:
+            raise WorkctlError("EVIDENCE_CAPTURE_ID_INVALID")
+        task_ref = f"task:{task_id}" if task_id is not None else None
+        new_record: dict[str, Any] = {
+            "schema_version": 1,
+            "kind": "work-governance-evidence-record",
+            "id": record_id,
+            "plan_id": plan_id,
+            "goal_ref": f"plan:{plan_id}",
+            "task_ref": task_ref,
+            "evidence_kind": args.kind,
+            "summary": redact_capture_text(args.summary.strip()),
+            "source_type": source_type,
+            "source_ref": source_ref,
+            "source_digest": source_digest,
+            "source_size": len(redacted_content),
+            "text_source": text_source,
+            "redaction_policy": args.redaction_policy,
+            "blob_ref": blob_ref,
+            "blob_sha256": blob_sha256,
+            "blob_size": blob_size,
+            "validator": "workctl:evidence.capture",
+            "result": "captured",
+            "created_at": created_at,
+        }
+        if isinstance(idempotency_key, str):
+            new_record["idempotency_key"] = idempotency_key
+        record_ref, record_sha256 = persist_capture_metadata(root, new_record)
+        ledger_record = {**new_record, "evidence_ref": record_ref, "evidence_sha256": record_sha256}
+        append_capture_record(root, ledger_record)
+        if doc.frontmatter.get("schema_version") == 5 and task_id is not None:
+            state_sequence = bind_v5_capture_record(
+                root,
+                doc,
+                task_id=task_id,
+                record_ref=record_ref,
+                record_id=record_id,
+                record_sha256=record_sha256,
+                blob_ref=blob_ref,
+                expected_state_sequence=args.expected_state_sequence,
+            )
+        output = {
+            "id": record_id,
+            "evidence_ref": record_ref,
+            "evidence_sha256": record_sha256,
+            "blob_ref": blob_ref,
+            "source_digest": source_digest,
+            "plan_id": plan_id,
+            "idempotent": False,
+        }
+        if state_sequence is not None:
+            output["state_sequence"] = state_sequence
+        print(json.dumps(output, sort_keys=True))
 
 
 def record_evidence_payload(
@@ -14465,17 +16926,18 @@ def cmd_plan_activation_repair(args: argparse.Namespace) -> None:
         if task.get("completion_scope", "local") != "route":
             raise WorkctlError("ACTIVATION_REPAIR_ROUTE_TASK_REQUIRED")
         raw_tasks = doc.frontmatter.get("tasks")
-        route_gate_tasks = [
-            candidate
-            for candidate in raw_tasks
-            if isinstance(candidate, dict)
-            and candidate.get("completion_scope", "local") == "route"
-            and candidate.get("requires_confirmation") == old_confirmation_id
-        ] if isinstance(raw_tasks, list) else []
-        if (
-            len(route_gate_tasks) != 1
-            or route_gate_tasks[0].get("id") != args.task_id
-        ):
+        route_gate_tasks = (
+            [
+                candidate
+                for candidate in raw_tasks
+                if isinstance(candidate, dict)
+                and candidate.get("completion_scope", "local") == "route"
+                and candidate.get("requires_confirmation") == old_confirmation_id
+            ]
+            if isinstance(raw_tasks, list)
+            else []
+        )
+        if len(route_gate_tasks) != 1 or route_gate_tasks[0].get("id") != args.task_id:
             raise WorkctlError("ACTIVATION_REPAIR_ROUTE_TASK_AMBIGUOUS")
         route = doc.frontmatter.get("route")
         if (
@@ -17514,12 +19976,153 @@ def build_parser() -> argparse.ArgumentParser:
     help_command.add_argument(
         "workflow",
         nargs="?",
-        choices=["plan", "task", "evidence", "action", "migration"],
+        choices=[
+            "plan",
+            "task",
+            "evidence",
+            "action",
+            "migrate",
+            "migration",
+            "goal",
+            "gate",
+            "truth",
+            "review",
+            "doctor",
+        ],
     )
     help_command.set_defaults(func=cmd_workflow_help)
 
+    doctor = sub.add_parser("doctor")
+    doctor.add_argument("--older-than-hours", type=int, default=24)
+    doctor.add_argument("--clean-stale-transactions", action="store_true")
+    doctor.set_defaults(func=cmd_doctor)
+
+    goal_command = sub.add_parser("goal")
+    goal_sub = goal_command.add_subparsers(dest="goal_action", required=True)
+    goal_init = goal_sub.add_parser("init")
+    goal_init.add_argument("--plan-id", required=True)
+    goal_init.add_argument("--title", required=True)
+    goal_init.add_argument("--mode", choices=["autonomous", "strict"], default="autonomous")
+    goal_init.set_defaults(func=cmd_plan_init)
+    goal_show = goal_sub.add_parser("show")
+    goal_show.set_defaults(func=cmd_goal_show)
+    goal_revise = goal_sub.add_parser("revise")
+    goal_revise.add_argument("--manifest", required=True)
+    goal_revise.set_defaults(func=cmd_plan_contract_revise)
+    goal_close = goal_sub.add_parser("close")
+    goal_close.add_argument("--expected-revision", type=int, required=True)
+    goal_close.add_argument("--evidence-manifest")
+    goal_close.add_argument("--finalize-route", action="store_true")
+    goal_close.add_argument("--confirmation")
+    add_current_intake_args(goal_close)
+    goal_close.set_defaults(func=cmd_plan_complete)
+
+    gate_command = sub.add_parser("gate")
+    gate_sub = gate_command.add_subparsers(dest="gate_action", required=True)
+    gate_list = gate_sub.add_parser("list")
+    gate_list.set_defaults(func=cmd_gate_list)
+    gate_check = gate_sub.add_parser("check")
+    gate_check.add_argument("--gate-id", required=True)
+    gate_check.set_defaults(func=cmd_gate_check)
+    gate_open = gate_sub.add_parser("open")
+    gate_open.add_argument("--confirmation-id", required=True)
+    gate_open.add_argument("--description", required=True)
+    gate_open.add_argument("--status", default="pending")
+    gate_open.add_argument("--ref")
+    gate_open.add_argument("--intervention-kind", choices=sorted(INTERVENTION_KINDS), required=True)
+    gate_open.add_argument("--blocks", action="append", required=True)
+    gate_open.add_argument("--basis-ref", required=True)
+    gate_open.add_argument("--basis-sha256")
+    gate_open.add_argument("--action-kind", choices=sorted(HIGH_IMPACT_ACTION_KINDS))
+    gate_open.add_argument("--expected-revision", type=int, required=True)
+    gate_open.set_defaults(func=cmd_plan_confirmation_add)
+    for gate_action, decision in (("satisfy", "accepted"), ("waive", "declined")):
+        gate_decide = gate_sub.add_parser(gate_action)
+        gate_decide.add_argument("--confirmation-id", required=True)
+        gate_decide.add_argument("--ref", required=True)
+        gate_decide.add_argument("--evidence-sha256")
+        gate_decide.add_argument("--expected-revision", type=int, required=True)
+        add_current_intake_args(gate_decide)
+        gate_decide.set_defaults(
+            func=cmd_gate_satisfy if decision == "accepted" else cmd_gate_waive
+        )
+
+    truth_command = sub.add_parser("truth")
+    truth_sub = truth_command.add_subparsers(dest="truth_action", required=True)
+    truth_list = truth_sub.add_parser("list")
+    truth_list.set_defaults(func=cmd_truth_list)
+    truth_conflicts = truth_sub.add_parser("conflicts")
+    truth_conflicts.set_defaults(func=cmd_truth_conflicts)
+    for truth_action in ("add", "resolve"):
+        truth_edit = truth_sub.add_parser(truth_action)
+        truth_edit.add_argument("--manifest", required=True)
+        truth_edit.set_defaults(func=cmd_plan_contract_revise)
+
+    review_command = sub.add_parser("review")
+    review_sub = review_command.add_subparsers(dest="review_action", required=True)
+    review_request = review_sub.add_parser("request")
+    review_request.set_defaults(func=cmd_review_request)
+    review_status = review_sub.add_parser("status")
+    review_status.set_defaults(func=cmd_review_status)
+    review_acquisition = review_sub.add_parser("acquisition")
+    review_acquisition_sub = review_acquisition.add_subparsers(
+        dest="review_acquisition_action",
+        required=True,
+    )
+
+    def add_review_acquisition_scope_args(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("--target-ref", required=True)
+        parser.add_argument("--mechanism", required=True)
+        parser.add_argument("--review-input-sha256", required=True)
+
+    review_acquisition_check = review_acquisition_sub.add_parser("check")
+    add_review_acquisition_scope_args(review_acquisition_check)
+    review_acquisition_check.set_defaults(func=cmd_review_acquisition_check)
+    review_acquisition_status = review_acquisition_sub.add_parser("status")
+    review_acquisition_status.add_argument("--target-ref")
+    review_acquisition_status.add_argument("--mechanism")
+    review_acquisition_status.set_defaults(func=cmd_review_acquisition_status)
+    review_acquisition_record = review_acquisition_sub.add_parser("record-failure")
+    add_review_acquisition_scope_args(review_acquisition_record)
+    review_acquisition_record.add_argument("--attempt-ref", required=True)
+    review_acquisition_record.add_argument("--exit-code", type=int, required=True)
+    review_acquisition_record.add_argument(
+        "--failure-class",
+        choices=["auto", *sorted(REVIEWER_FAILURE_CLASSES)],
+        default="auto",
+    )
+    review_acquisition_record.add_argument("--summary")
+    review_acquisition_record.add_argument("--failure-stdin", action="store_true")
+    review_acquisition_record.add_argument("--failure-from-file")
+    review_acquisition_record.add_argument("--cooldown-seconds", type=int, default=900)
+    review_acquisition_record.add_argument("--idempotency-key")
+    review_acquisition_record.add_argument("--dry-run", action="store_true")
+    review_acquisition_record.set_defaults(func=cmd_review_acquisition_record_failure)
+    review_attach = review_sub.add_parser("attach")
+    review_attach.add_argument("--manifest", required=True)
+    review_attach.add_argument("--expected-revision", type=int, required=True)
+    add_current_intake_args(review_attach)
+    review_attach.set_defaults(func=cmd_plan_independent_review_record)
+
     evidence_command = sub.add_parser("evidence")
     evidence_sub = evidence_command.add_subparsers(dest="evidence_action", required=True)
+    evidence_capture = evidence_sub.add_parser("capture")
+    evidence_capture.add_argument("--task")
+    evidence_capture.add_argument("--kind", required=True)
+    evidence_capture.add_argument("--summary", required=True)
+    evidence_capture.add_argument("--from-file")
+    evidence_capture.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read evidence bytes from standard input; stdin is also the default source.",
+    )
+    evidence_capture.add_argument(
+        "--redaction-policy",
+        default="default-secret-patterns-v1",
+    )
+    evidence_capture.add_argument("--idempotency-key")
+    evidence_capture.add_argument("--expected-state-sequence", type=int)
+    evidence_capture.set_defaults(func=cmd_evidence_capture)
     evidence_record = evidence_sub.add_parser("record")
     evidence_source = evidence_record.add_mutually_exclusive_group(required=True)
     evidence_source.add_argument("--manifest")
@@ -17553,12 +20156,69 @@ def build_parser() -> argparse.ArgumentParser:
     )
     action_consume.add_argument("--target-ref", required=True)
     action_consume.add_argument("--action-sha256", required=True)
-    action_consume.add_argument("--turn-receipt-sha256", required=True)
+    action_consume.add_argument("--turn-receipt-sha256")
     action_consume.add_argument("--consumer-ref", required=True)
     action_consume.set_defaults(func=cmd_action_consume)
     action_status = action_sub.add_parser("status")
     action_status.add_argument("--authorization-id", required=True)
     action_status.set_defaults(func=cmd_action_status)
+    action_lease = action_sub.add_parser("lease")
+    action_lease_sub = action_lease.add_subparsers(dest="action_lease_action", required=True)
+
+    def add_action_lease_scope_args(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "--action-kind",
+            choices=sorted(HIGH_IMPACT_ACTION_KINDS),
+            required=True,
+        )
+        parser.add_argument("--target-ref", action="append", default=[])
+        parser.add_argument("--target-prefix", action="append", default=[])
+        parser.add_argument(
+            "--action-digest-policy",
+            choices=sorted(ACTION_DIGEST_POLICIES),
+            default="exact-list",
+        )
+        parser.add_argument("--allowed-action-sha256", action="append", default=[])
+        parser.add_argument("--blocks", action="append", default=[])
+        parser.add_argument("--lease-ttl-seconds", type=int, default=3600)
+        parser.add_argument("--authorization-ttl-seconds", type=int, default=300)
+        parser.add_argument("--max-authorizations", type=int, default=10)
+        parser.add_argument(
+            "--freeze-on-review-blocker",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+        )
+        parser.add_argument("--pilot-evidence-ref")
+
+    action_lease_prepare = action_lease_sub.add_parser("prepare")
+    add_action_lease_scope_args(action_lease_prepare)
+    action_lease_prepare.set_defaults(func=cmd_action_lease_prepare)
+    action_lease_issue = action_lease_sub.add_parser("issue")
+    add_action_lease_scope_args(action_lease_issue)
+    action_lease_issue.add_argument("--confirmation-id", required=True)
+    action_lease_issue.add_argument("--basis-sha256", required=True)
+    action_lease_issue.add_argument("--ref", required=True)
+    action_lease_issue.add_argument("--turn-receipt-sha256", required=True)
+    action_lease_issue.set_defaults(func=cmd_action_lease_issue)
+    action_lease_authorize = action_lease_sub.add_parser("authorize")
+    action_lease_authorize.add_argument("--lease-id", required=True)
+    action_lease_authorize.add_argument(
+        "--action-kind",
+        choices=sorted(HIGH_IMPACT_ACTION_KINDS),
+        required=True,
+    )
+    action_lease_authorize.add_argument("--target-ref", required=True)
+    action_lease_authorize.add_argument("--action-sha256", required=True)
+    action_lease_authorize.add_argument("--idempotency-key")
+    action_lease_authorize.add_argument("--ttl-seconds", type=int)
+    action_lease_authorize.set_defaults(func=cmd_action_lease_authorize)
+    action_lease_status = action_lease_sub.add_parser("status")
+    action_lease_status.add_argument("--lease-id", required=True)
+    action_lease_status.set_defaults(func=cmd_action_lease_status)
+    action_lease_revoke = action_lease_sub.add_parser("revoke")
+    action_lease_revoke.add_argument("--lease-id", required=True)
+    action_lease_revoke.add_argument("--ref", required=True)
+    action_lease_revoke.set_defaults(func=cmd_action_lease_revoke)
 
     migrate = sub.add_parser("migrate")
     migrate_sub = migrate.add_subparsers(dest="migration_action", required=True)
@@ -17572,6 +20232,9 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_recover = migrate_sub.add_parser("recover")
     migrate_recover.add_argument("--migration-id")
     migrate_recover.set_defaults(func=cmd_migrate_recover)
+    migrate_rollback = migrate_sub.add_parser("rollback-info")
+    migrate_rollback.add_argument("--migration-id")
+    migrate_rollback.set_defaults(func=cmd_migrate_rollback_info)
 
     intake = sub.add_parser("intake")
     intake_sub = intake.add_subparsers(dest="intake_action", required=True)
@@ -17836,7 +20499,6 @@ def build_parser() -> argparse.ArgumentParser:
     confirmation_add.add_argument("--description", required=True)
     confirmation_add.add_argument(
         "--status",
-        choices=["pending", "accepted"],
         default="pending",
     )
     confirmation_add.add_argument("--ref")
@@ -17984,13 +20646,31 @@ def command_mutates_state(args: argparse.Namespace) -> bool:
     if args.domain == "evidence":
         return True
     if args.domain == "action":
+        if args.action_authorization_action == "lease":
+            return cast(str, args.action_lease_action) not in {"prepare", "status"}
         return cast(str, args.action_authorization_action) != "status"
     if args.domain == "migrate":
-        return bool(args.migration_action == "apply")
+        return args.migration_action == "recover" or (
+            args.migration_action == "apply" and not bool(args.dry_run)
+        )
+    if args.domain == "doctor":
+        return bool(args.clean_stale_transactions)
     if args.domain == "layout":
         return args.action not in {"status", "validate"}
     if args.domain in {"task", "log"}:
         return True
+    if args.domain == "goal":
+        return cast(str, args.goal_action) != "show"
+    if args.domain == "gate":
+        return cast(str, args.gate_action) not in {"list", "check"}
+    if args.domain == "truth":
+        return cast(str, args.truth_action) not in {"list", "conflicts"}
+    if args.domain == "review":
+        if args.review_action == "acquisition":
+            if args.review_acquisition_action in {"check", "status"}:
+                return False
+            return not bool(args.dry_run)
+        return cast(str, args.review_action) not in {"status", "request"}
     if args.domain != "plan":
         return False
     if args.action in {
@@ -18032,6 +20712,8 @@ def enforce_active_contract_gate(args: argparse.Namespace, root: Path) -> None:
             and args.contract_upgrade_action in {"apply", "recover"}
         )
     )
+    if args.domain == "gate" and args.gate_action in {"open", "satisfy", "waive"}:
+        allowed = True
     if args.domain == "migrate" and args.migration_action in {"apply", "recover"}:
         allowed = True
     if not allowed:

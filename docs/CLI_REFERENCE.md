@@ -10,7 +10,7 @@ Use the exact receipt-bound controller emitted by SessionStart. The placeholder 
 <receipt-bound-workctl> <domain> <command> [options]
 ```
 
-Mutable schema-v4 Plan commands and high-impact authorization require the current turn receipt. Ordinary schema-v5 runtime commands use the expected state guard without turn intake. `plan status`, `plan show`, queue views, `help`, and `migrate inspect` are read-only views.
+Mutable schema-v4 Plan commands and high-impact authorization require the current turn receipt. Ordinary schema-v5 runtime commands use the expected state guard without turn intake. `plan status`, `plan show`, queue views, `help`, `migrate inspect`, `migrate apply --dry-run`, `migrate rollback-info`, and default `doctor` are read-only views.
 
 ## Stable workflow aliases
 
@@ -19,26 +19,52 @@ Mutable schema-v4 Plan commands and high-impact authorization require the curren
 - `action authorize`
 - `action consume`
 - `action status`
+- `action lease prepare`
+- `action lease issue`
+- `action lease authorize`
+- `action lease status`
+- `action lease revoke`
 
-High-impact authority is current-turn, target, digest, expiry, and single-consumption bound.
+High-impact actions still consume single-use capabilities; a route lease only mints those capabilities inside a confirmed bounded scope; use a new idempotency key for a consumed same-action retry.
+
+### `doctor`
+
+- `doctor`
+- `doctor --clean-stale-transactions`
+
+Doctor is read-only by default; cleanup only removes stale generic runtime transaction directories with no journal.
 
 ### `evidence`
 
+- `evidence capture --task T-001 --kind command-output --summary TEXT`
 - `evidence record --stdin`
 - `plan evidence record --manifest PATH|--stdin`
 
-Evidence is bounded, canonical, content-addressed, and redaction-safe.
+Direct capture writes redacted blobs and an append-only ledger; Plan evidence records remain the bounded canonical compatibility path.
+
+### `gate`
+
+- `gate list`
+- `gate check --gate-id C-001`
+- `gate open`
+- `gate satisfy`
+- `gate waive`
+
+Gate writes are aliases over strict Plan confirmation transactions.
 
 ### `migration`
 
 - `migrate inspect`
-- `migrate apply`
+- `migrate apply [--dry-run]`
 - `migrate recover`
+- `migrate rollback-info`
+- `doctor`
 
 Migration is explicit, backed up, and recovery-bound.
 
 ### `plan`
 
+- `goal show`
 - `plan create`
 - `plan show [--full]`
 - `plan edit`
@@ -51,6 +77,17 @@ Migration is explicit, backed up, and recovery-bound.
 
 Contract edits require their existing confirmation and revision guards.
 
+### `review`
+
+- `review status`
+- `review request`
+- `review attach --manifest PATH`
+- `review acquisition check`
+- `review acquisition record-failure`
+- `review acquisition status`
+
+Review attachment uses the independent-review recorder and its trust rules; reviewer acquisition caches exact and environment-level same-mechanism validator-unavailable failures in runtime.
+
 ### `task`
 
 - `task start`
@@ -60,6 +97,14 @@ Contract edits require their existing confirmation and revision guards.
 - `task reprioritize`
 
 Schema-v5 runtime transitions use state_sequence and task gates without current-turn intake; mutable v4 transitions retain their turn binding.
+
+### `truth`
+
+- `truth list`
+- `truth conflicts`
+- `truth add --manifest PATH`
+
+Truth writes are aliases over the confirmed contract revision path.
 
 ## Parser command reference
 
@@ -92,7 +137,7 @@ usage: workctl action consume [-h] --authorization-id AUTHORIZATION_ID
                               --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
                               --target-ref TARGET_REF
                               --action-sha256 ACTION_SHA256
-                              --turn-receipt-sha256 TURN_RECEIPT_SHA256
+                              [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
                               --consumer-ref CONSUMER_REF
 
 options:
@@ -105,6 +150,116 @@ options:
   --consumer-ref CONSUMER_REF
 ```
 
+### `action lease authorize`
+
+```text
+usage: workctl action lease authorize [-h] --lease-id LEASE_ID
+                                      --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+                                      --target-ref TARGET_REF
+                                      --action-sha256 ACTION_SHA256
+                                      [--idempotency-key IDEMPOTENCY_KEY]
+                                      [--ttl-seconds TTL_SECONDS]
+
+options:
+  -h, --help            show this help message and exit
+  --lease-id LEASE_ID
+  --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+  --target-ref TARGET_REF
+  --action-sha256 ACTION_SHA256
+  --idempotency-key IDEMPOTENCY_KEY
+  --ttl-seconds TTL_SECONDS
+```
+
+### `action lease issue`
+
+```text
+usage: workctl action lease issue [-h]
+                                  --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+                                  [--target-ref TARGET_REF]
+                                  [--target-prefix TARGET_PREFIX]
+                                  [--action-digest-policy {dynamic,exact-list}]
+                                  [--allowed-action-sha256 ALLOWED_ACTION_SHA256]
+                                  [--blocks BLOCKS]
+                                  [--lease-ttl-seconds LEASE_TTL_SECONDS]
+                                  [--authorization-ttl-seconds AUTHORIZATION_TTL_SECONDS]
+                                  [--max-authorizations MAX_AUTHORIZATIONS]
+                                  [--freeze-on-review-blocker | --no-freeze-on-review-blocker]
+                                  [--pilot-evidence-ref PILOT_EVIDENCE_REF]
+                                  --confirmation-id CONFIRMATION_ID
+                                  --basis-sha256 BASIS_SHA256 --ref REF
+                                  --turn-receipt-sha256 TURN_RECEIPT_SHA256
+
+options:
+  -h, --help            show this help message and exit
+  --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+  --target-ref TARGET_REF
+  --target-prefix TARGET_PREFIX
+  --action-digest-policy {dynamic,exact-list}
+  --allowed-action-sha256 ALLOWED_ACTION_SHA256
+  --blocks BLOCKS
+  --lease-ttl-seconds LEASE_TTL_SECONDS
+  --authorization-ttl-seconds AUTHORIZATION_TTL_SECONDS
+  --max-authorizations MAX_AUTHORIZATIONS
+  --freeze-on-review-blocker, --no-freeze-on-review-blocker
+  --pilot-evidence-ref PILOT_EVIDENCE_REF
+  --confirmation-id CONFIRMATION_ID
+  --basis-sha256 BASIS_SHA256
+  --ref REF
+  --turn-receipt-sha256 TURN_RECEIPT_SHA256
+```
+
+### `action lease prepare`
+
+```text
+usage: workctl action lease prepare [-h]
+                                    --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+                                    [--target-ref TARGET_REF]
+                                    [--target-prefix TARGET_PREFIX]
+                                    [--action-digest-policy {dynamic,exact-list}]
+                                    [--allowed-action-sha256 ALLOWED_ACTION_SHA256]
+                                    [--blocks BLOCKS]
+                                    [--lease-ttl-seconds LEASE_TTL_SECONDS]
+                                    [--authorization-ttl-seconds AUTHORIZATION_TTL_SECONDS]
+                                    [--max-authorizations MAX_AUTHORIZATIONS]
+                                    [--freeze-on-review-blocker | --no-freeze-on-review-blocker]
+                                    [--pilot-evidence-ref PILOT_EVIDENCE_REF]
+
+options:
+  -h, --help            show this help message and exit
+  --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+  --target-ref TARGET_REF
+  --target-prefix TARGET_PREFIX
+  --action-digest-policy {dynamic,exact-list}
+  --allowed-action-sha256 ALLOWED_ACTION_SHA256
+  --blocks BLOCKS
+  --lease-ttl-seconds LEASE_TTL_SECONDS
+  --authorization-ttl-seconds AUTHORIZATION_TTL_SECONDS
+  --max-authorizations MAX_AUTHORIZATIONS
+  --freeze-on-review-blocker, --no-freeze-on-review-blocker
+  --pilot-evidence-ref PILOT_EVIDENCE_REF
+```
+
+### `action lease revoke`
+
+```text
+usage: workctl action lease revoke [-h] --lease-id LEASE_ID --ref REF
+
+options:
+  -h, --help           show this help message and exit
+  --lease-id LEASE_ID
+  --ref REF
+```
+
+### `action lease status`
+
+```text
+usage: workctl action lease status [-h] --lease-id LEASE_ID
+
+options:
+  -h, --help           show this help message and exit
+  --lease-id LEASE_ID
+```
+
 ### `action status`
 
 ```text
@@ -113,6 +268,41 @@ usage: workctl action status [-h] --authorization-id AUTHORIZATION_ID
 options:
   -h, --help            show this help message and exit
   --authorization-id AUTHORIZATION_ID
+```
+
+### `doctor`
+
+```text
+usage: workctl doctor [-h] [--older-than-hours OLDER_THAN_HOURS]
+                      [--clean-stale-transactions]
+
+options:
+  -h, --help            show this help message and exit
+  --older-than-hours OLDER_THAN_HOURS
+  --clean-stale-transactions
+```
+
+### `evidence capture`
+
+```text
+usage: workctl evidence capture [-h] [--task TASK] --kind KIND
+                                --summary SUMMARY [--from-file FROM_FILE]
+                                [--stdin]
+                                [--redaction-policy REDACTION_POLICY]
+                                [--idempotency-key IDEMPOTENCY_KEY]
+                                [--expected-state-sequence EXPECTED_STATE_SEQUENCE]
+
+options:
+  -h, --help            show this help message and exit
+  --task TASK
+  --kind KIND
+  --summary SUMMARY
+  --from-file FROM_FILE
+  --stdin               Read evidence bytes from standard input; stdin is also
+                        the default source.
+  --redaction-policy REDACTION_POLICY
+  --idempotency-key IDEMPOTENCY_KEY
+  --expected-state-sequence EXPECTED_STATE_SEQUENCE
 ```
 
 ### `evidence record`
@@ -126,13 +316,148 @@ options:
   --stdin
 ```
 
+### `gate check`
+
+```text
+usage: workctl gate check [-h] --gate-id GATE_ID
+
+options:
+  -h, --help         show this help message and exit
+  --gate-id GATE_ID
+```
+
+### `gate list`
+
+```text
+usage: workctl gate list [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
+### `gate open`
+
+```text
+usage: workctl gate open [-h] --confirmation-id CONFIRMATION_ID
+                         --description DESCRIPTION [--status STATUS]
+                         [--ref REF]
+                         --intervention-kind {deviation_recovery,external_authority,plan_contract}
+                         --blocks BLOCKS --basis-ref BASIS_REF
+                         [--basis-sha256 BASIS_SHA256]
+                         [--action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}]
+                         --expected-revision EXPECTED_REVISION
+
+options:
+  -h, --help            show this help message and exit
+  --confirmation-id CONFIRMATION_ID
+  --description DESCRIPTION
+  --status STATUS
+  --ref REF
+  --intervention-kind {deviation_recovery,external_authority,plan_contract}
+  --blocks BLOCKS
+  --basis-ref BASIS_REF
+  --basis-sha256 BASIS_SHA256
+  --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+  --expected-revision EXPECTED_REVISION
+```
+
+### `gate satisfy`
+
+```text
+usage: workctl gate satisfy [-h] --confirmation-id CONFIRMATION_ID --ref REF
+                            [--evidence-sha256 EVIDENCE_SHA256]
+                            --expected-revision EXPECTED_REVISION
+                            [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
+                            [--expected-intake-sha256 EXPECTED_INTAKE_SHA256]
+
+options:
+  -h, --help            show this help message and exit
+  --confirmation-id CONFIRMATION_ID
+  --ref REF
+  --evidence-sha256 EVIDENCE_SHA256
+  --expected-revision EXPECTED_REVISION
+  --turn-receipt-sha256 TURN_RECEIPT_SHA256
+  --expected-intake-sha256 EXPECTED_INTAKE_SHA256
+```
+
+### `gate waive`
+
+```text
+usage: workctl gate waive [-h] --confirmation-id CONFIRMATION_ID --ref REF
+                          [--evidence-sha256 EVIDENCE_SHA256]
+                          --expected-revision EXPECTED_REVISION
+                          [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
+                          [--expected-intake-sha256 EXPECTED_INTAKE_SHA256]
+
+options:
+  -h, --help            show this help message and exit
+  --confirmation-id CONFIRMATION_ID
+  --ref REF
+  --evidence-sha256 EVIDENCE_SHA256
+  --expected-revision EXPECTED_REVISION
+  --turn-receipt-sha256 TURN_RECEIPT_SHA256
+  --expected-intake-sha256 EXPECTED_INTAKE_SHA256
+```
+
+### `goal close`
+
+```text
+usage: workctl goal close [-h] --expected-revision EXPECTED_REVISION
+                          [--evidence-manifest EVIDENCE_MANIFEST]
+                          [--finalize-route] [--confirmation CONFIRMATION]
+                          [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
+                          [--expected-intake-sha256 EXPECTED_INTAKE_SHA256]
+
+options:
+  -h, --help            show this help message and exit
+  --expected-revision EXPECTED_REVISION
+  --evidence-manifest EVIDENCE_MANIFEST
+  --finalize-route
+  --confirmation CONFIRMATION
+  --turn-receipt-sha256 TURN_RECEIPT_SHA256
+  --expected-intake-sha256 EXPECTED_INTAKE_SHA256
+```
+
+### `goal init`
+
+```text
+usage: workctl goal init [-h] --plan-id PLAN_ID --title TITLE
+                         [--mode {autonomous,strict}]
+
+options:
+  -h, --help            show this help message and exit
+  --plan-id PLAN_ID
+  --title TITLE
+  --mode {autonomous,strict}
+```
+
+### `goal revise`
+
+```text
+usage: workctl goal revise [-h] --manifest MANIFEST
+
+options:
+  -h, --help           show this help message and exit
+  --manifest MANIFEST
+```
+
+### `goal show`
+
+```text
+usage: workctl goal show [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
 ### `help`
 
 ```text
-usage: workctl help [-h] [{plan,task,evidence,action,migration}]
+usage: workctl help [-h]
+                    [{plan,task,evidence,action,migrate,migration,goal,gate,truth,review,doctor}]
 
 positional arguments:
-  {plan,task,evidence,action,migration}
+  {plan,task,evidence,action,migrate,migration,goal,gate,truth,review,doctor}
 
 options:
   -h, --help            show this help message and exit
@@ -259,6 +584,16 @@ options:
 
 ```text
 usage: workctl migrate recover [-h] [--migration-id MIGRATION_ID]
+
+options:
+  -h, --help            show this help message and exit
+  --migration-id MIGRATION_ID
+```
+
+### `migrate rollback-info`
+
+```text
+usage: workctl migrate rollback-info [-h] [--migration-id MIGRATION_ID]
 
 options:
   -h, --help            show this help message and exit
@@ -454,7 +789,7 @@ options:
 ```text
 usage: workctl plan confirmation add [-h] --confirmation-id CONFIRMATION_ID
                                      --description DESCRIPTION
-                                     [--status {pending,accepted}] [--ref REF]
+                                     [--status STATUS] [--ref REF]
                                      --intervention-kind {deviation_recovery,external_authority,plan_contract}
                                      --blocks BLOCKS --basis-ref BASIS_REF
                                      [--basis-sha256 BASIS_SHA256]
@@ -465,7 +800,7 @@ options:
   -h, --help            show this help message and exit
   --confirmation-id CONFIRMATION_ID
   --description DESCRIPTION
-  --status {pending,accepted}
+  --status STATUS
   --ref REF
   --intervention-kind {deviation_recovery,external_authority,plan_contract}
   --blocks BLOCKS
@@ -941,6 +1276,98 @@ options:
   --expected-intake-sha256 EXPECTED_INTAKE_SHA256
 ```
 
+### `review acquisition check`
+
+```text
+usage: workctl review acquisition check [-h] --target-ref TARGET_REF
+                                        --mechanism MECHANISM
+                                        --review-input-sha256 REVIEW_INPUT_SHA256
+
+options:
+  -h, --help            show this help message and exit
+  --target-ref TARGET_REF
+  --mechanism MECHANISM
+  --review-input-sha256 REVIEW_INPUT_SHA256
+```
+
+### `review acquisition record-failure`
+
+```text
+usage: workctl review acquisition record-failure [-h] --target-ref TARGET_REF
+                                                 --mechanism MECHANISM
+                                                 --review-input-sha256 REVIEW_INPUT_SHA256
+                                                 --attempt-ref ATTEMPT_REF
+                                                 --exit-code EXIT_CODE
+                                                 [--failure-class {auto,attestor_untrusted,auth_unavailable,command_missing,network_proxy_blocked,timeout,unknown_failure}]
+                                                 [--summary SUMMARY]
+                                                 [--failure-stdin]
+                                                 [--failure-from-file FAILURE_FROM_FILE]
+                                                 [--cooldown-seconds COOLDOWN_SECONDS]
+                                                 [--idempotency-key IDEMPOTENCY_KEY]
+                                                 [--dry-run]
+
+options:
+  -h, --help            show this help message and exit
+  --target-ref TARGET_REF
+  --mechanism MECHANISM
+  --review-input-sha256 REVIEW_INPUT_SHA256
+  --attempt-ref ATTEMPT_REF
+  --exit-code EXIT_CODE
+  --failure-class {auto,attestor_untrusted,auth_unavailable,command_missing,network_proxy_blocked,timeout,unknown_failure}
+  --summary SUMMARY
+  --failure-stdin
+  --failure-from-file FAILURE_FROM_FILE
+  --cooldown-seconds COOLDOWN_SECONDS
+  --idempotency-key IDEMPOTENCY_KEY
+  --dry-run
+```
+
+### `review acquisition status`
+
+```text
+usage: workctl review acquisition status [-h] [--target-ref TARGET_REF]
+                                         [--mechanism MECHANISM]
+
+options:
+  -h, --help            show this help message and exit
+  --target-ref TARGET_REF
+  --mechanism MECHANISM
+```
+
+### `review attach`
+
+```text
+usage: workctl review attach [-h] --manifest MANIFEST
+                             --expected-revision EXPECTED_REVISION
+                             [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
+                             [--expected-intake-sha256 EXPECTED_INTAKE_SHA256]
+
+options:
+  -h, --help            show this help message and exit
+  --manifest MANIFEST
+  --expected-revision EXPECTED_REVISION
+  --turn-receipt-sha256 TURN_RECEIPT_SHA256
+  --expected-intake-sha256 EXPECTED_INTAKE_SHA256
+```
+
+### `review request`
+
+```text
+usage: workctl review request [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
+### `review status`
+
+```text
+usage: workctl review status [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
 ### `task block`
 
 ```text
@@ -1053,4 +1480,42 @@ options:
                         with verification.
   --turn-receipt-sha256 TURN_RECEIPT_SHA256
   --expected-intake-sha256 EXPECTED_INTAKE_SHA256
+```
+
+### `truth add`
+
+```text
+usage: workctl truth add [-h] --manifest MANIFEST
+
+options:
+  -h, --help           show this help message and exit
+  --manifest MANIFEST
+```
+
+### `truth conflicts`
+
+```text
+usage: workctl truth conflicts [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
+### `truth list`
+
+```text
+usage: workctl truth list [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
+### `truth resolve`
+
+```text
+usage: workctl truth resolve [-h] --manifest MANIFEST
+
+options:
+  -h, --help           show this help message and exit
+  --manifest MANIFEST
 ```

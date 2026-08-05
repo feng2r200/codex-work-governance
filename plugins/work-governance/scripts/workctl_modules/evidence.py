@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 
-import yaml
-
+from . import yaml_compat as yaml
 from .storage import canonical_json_bytes
 
 

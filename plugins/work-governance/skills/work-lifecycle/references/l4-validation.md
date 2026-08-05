@@ -11,6 +11,12 @@ Validation roles:
   missing behavior, hidden side effects, or untracked generated files.
 - Evidence audit: confirm that checks prove the obligations rather than nearby
   facts.
+- Weak-link audit: confirm that docs, templates, public help, migration notes,
+  rollback information, activation instructions, and handoff wording were
+  checked when the route touched those surfaces.
+- Claim-boundary audit: confirm that candidate or release notes name only the
+  implemented executable surface and current evidence, not the broader target
+  architecture as if it were already complete.
 - Reality audit: confirm that a safe real-boundary probe was run when the target
   depends on runtime or integration behavior, or that a concrete reason makes
   it infeasible.
@@ -36,10 +42,18 @@ evidence reference and SHA256 for later challenge.
 If role isolation is unavailable:
 
 - disclose the downgrade;
+- check `review acquisition status` and do not repeat a matching
+  `VALIDATOR_UNAVAILABLE_CACHED` target, mechanism, and reviewed input digest
+  during cooldown; for proxy, auth, missing-command, timeout, and attestor
+  failures, a fresh cache for the same reviewer mechanism also counts as
+  matching even when the reviewed input digest changed;
+- after a failed reviewer acquisition attempt, record the redacted failure
+  through `review acquisition record-failure` instead of keeping only terminal
+  scrollback;
 - strengthen deterministic checks where possible;
 - lower conclusion strength for high-impact work unless the user accepts the
   downgrade.
 
 Validation standard: every completion claim names the obligation, check, and
-fresh evidence; every material test has provenance; reality-bound gaps are
-reported as gaps.
+fresh evidence; every material test has provenance; weak links have freshness
+evidence when they are in scope; reality-bound gaps are reported as gaps.

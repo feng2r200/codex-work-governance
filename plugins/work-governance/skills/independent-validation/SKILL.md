@@ -52,10 +52,24 @@ request. Validation challenges claims; it does not own the parent Plan.
   self-challenge may support only ordinary reversible local tasks; delivery,
   activation, route closeout, external actions, and any task with a confirmation
   gate remain blocked, as do all targets covered by an open blocker or high
-  finding.
+  finding. Use `review acquisition check` before retrying the same target,
+  mechanism, and reviewed input digest. Treat a fresh same-mechanism cache as
+  matching for proxy, auth, missing-command, timeout, and attestor failures even
+  when the reviewed input digest changed. When acquisition fails, pipe the
+  redacted command output to `review acquisition record-failure`; the resulting
+  runtime cooldown is availability evidence only, not an independent review.
 - For layout/bootstrap claims, inspect the exact Plugin build, READY receipt,
   version contract, local evidence record, offline command evidence, and both
   layout and Plan-authority axes. A hook's self-report is not sufficient.
+- For candidate release, migration, activation, or governance-framework claims,
+  inspect the executable surface named by `workctl help <workflow>` and
+  generated `docs/CLI_REFERENCE.md`, then compare it with the proposed wording.
+  Flag any wording that treats target architecture, historical plans, replay
+  summaries, or adjacent tests as proof of unimplemented capability.
+- For evidence audits, check obligation-to-anchor coverage, command freshness,
+  artifact digests, changed-file scope, skipped/flaky tests, absence of
+  `FAIL`/`ERROR` indicators in cited logs, and whether manual or degraded
+  evidence is labeled with its residual risk.
 - Prefer evidence from the cheapest safe real boundary that determines the user
   result. Treat synthetic tests as support, not a substitute, and require an
   explicit infeasibility reason when the real boundary was not probed.
@@ -101,7 +115,7 @@ the exact `risk_acceptance_confirmation_id`; that ID must not exist when the
 review is recorded. Create the pending confirmation after the review and decide
 that exact ID through
 `plan confirm`. The controller never scans for or adopts another accepted
-confirmation. Schema-v4 `plan confirmation add` cannot pre-accept the decision.
+confirmation. Schema-v4/v5 `plan confirmation add` cannot pre-accept the decision.
 
 For a bootstrap Plan created by a controller that predates the review command,
 only exact canonical V/T evidence whose subject equals every declared mapped

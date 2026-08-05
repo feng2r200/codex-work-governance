@@ -84,7 +84,13 @@ component, and the recovery condition.
   materially changed retry, a deterministic self-challenge may release only
   ordinary reversible local tasks; concrete blocker/high findings and delivery,
   activation, route, confirmation-bound, or other high-impact targets remain
-  fail-closed.
+  fail-closed. Before trying the same external reviewer path again, use
+  `review acquisition check`; after a failed attempt, record the redacted failure
+  with `review acquisition record-failure` so the runtime cooldown can return
+  `VALIDATOR_UNAVAILABLE_CACHED` instead of repeating an unavailable path. For
+  proxy, auth, missing-command, timeout, and attestor failures, treat a fresh
+  cache for the same reviewer mechanism as matching even when the reviewed input
+  digest changed.
 - Keep a goal anchor before repeating an action or expanding validation: restate
   the user-visible target, the unresolved fact, and the next action expected to
   change evidence. Tests and coverage are support tools, not the target.
@@ -151,9 +157,10 @@ Explore first when the missing fact is discoverable within the Agent's safe
 boundary. Promote the result to a Plan unknown only when it blocks a named
 target or proves a material contract decision is needed. Use the bounded
 `plan status` view for routine progress; pass `--full` only when history or
-closeout detail is needed. Use `plan evidence record --stdin` and
-`task verify --evidence-stdin` for small structured evidence objects so a
-temporary manifest is not required.
+closeout detail is needed. Use `evidence capture --task T-001 --kind ...`
+for command output or project-local artifact capture, and use
+`plan evidence record --stdin` or `task verify --evidence-stdin` for small
+structured compatibility evidence objects.
 
 The public command aliases are generated from the controller parser. Use
 `docs/CLI_REFERENCE.md` in the repository for the complete option surface and
@@ -199,9 +206,11 @@ unexpected or drifted partial staging fails closed. Any incomplete parent or
 contract-upgrade journal makes authority recovery-only and blocks ordinary
 Plan or task writes plus fresh structural Plan transactions; only the bound
 workflow may resume. Use `plan adapt`, `plan contract revise`, and `plan unknown
-add|resolve` for their separate responsibilities. Terminal
-evidence must be recorded under `.work-governance/_Plan/.evidence/` and passed
-by `--evidence-manifest`; `.work-governance/logs/` is local process detail only.
+add|resolve` for their separate responsibilities. For schema-v5 runtime work,
+prefer direct `evidence capture` for command output and project-local artifacts;
+small structured compatibility evidence can still be recorded under
+`.work-governance/_Plan/.evidence/` and passed by `--evidence-manifest`.
+`.work-governance/logs/` is local process detail only.
 All mutations still use the stable `.work-governance/workctl.lock`, expected
 revision checks, candidate validation, bounded lock acquisition with holder
 diagnostics, and atomic writes.
@@ -223,7 +232,15 @@ Before remote write, production change, destructive work, secret handling, or
 substantive rollback, use `action authorize` and consume the returned capability for
 the exact kind, typed target, and action digest. Issuance also requires an accepted
 same-turn Plan confirmation with an exactly matching intervention action kind and basis.
-The capability expires quickly and is single-use.
+The capability expires quickly and is single-use. When a route has already been
+explicitly confirmed for repeated same-kind external work, use `action lease prepare`
+to compute the bounded lease basis, confirm that basis once, then `action lease issue`
+and `action lease authorize` to mint per-action single-use capabilities inside the
+confirmed scope. Authorization is idempotent by default; retrying the same target and
+action digest after consumption requires a new `--idempotency-key` and consumes
+another lease slot. A lease waives only repeated prompts; it does not waive pilot
+evidence, review/artifact blockers, Plan contract drift checks, action consumption,
+or success evidence.
 
 The Plan keeps one bounded `intake.current` anchor and a digest/count summary.
 Complete canonical records live in ignored, project-local, content-addressed
