@@ -226,7 +226,15 @@ Before remote write, production change, destructive work, secret handling, or
 substantive rollback, use `action authorize` and consume the returned capability for
 the exact kind, typed target, and action digest. Issuance also requires an accepted
 same-turn Plan confirmation with an exactly matching intervention action kind and basis.
-The capability expires quickly and is single-use.
+The capability expires quickly and is single-use. When a route has already been
+explicitly confirmed for repeated same-kind external work, use `action lease prepare`
+to compute the bounded lease basis, confirm that basis once, then `action lease issue`
+and `action lease authorize` to mint per-action single-use capabilities inside the
+confirmed scope. Authorization is idempotent by default; retrying the same target and
+action digest after consumption requires a new `--idempotency-key` and consumes
+another lease slot. A lease waives only repeated prompts; it does not waive pilot
+evidence, review/artifact blockers, Plan contract drift checks, action consumption,
+or success evidence.
 
 The Plan keeps one bounded `intake.current` anchor and a digest/count summary.
 Complete canonical records live in ignored, project-local, content-addressed

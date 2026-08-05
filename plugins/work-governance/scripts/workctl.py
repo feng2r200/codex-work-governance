@@ -67,6 +67,7 @@ CONTRACT_UPGRADE_ID_RE = re.compile(r"^UPG-\d{8}-\d{3}$")
 RECONCILE_UPGRADE_ID_RE = re.compile(r"^RCU-\d{8}-\d{3}$")
 STRUCTURAL_REBASE_ID_RE = re.compile(r"^SRB-\d{8}-\d{3}$")
 ACTION_AUTHORIZATION_ID_RE = re.compile(r"^AUTH-[0-9a-f]{32}$")
+ACTION_AUTHORITY_LEASE_ID_RE = re.compile(r"^LEASE-[0-9a-f]{32}$")
 ROLLOVER_CONFIRMATION_PAYLOAD_VERSION = 2
 UNKNOWN_ID_RE = re.compile(r"^U-\d{3}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -156,6 +157,9 @@ HIGH_IMPACT_ACTION_KINDS = {
     "substantive_rollback",
 }
 MAX_ACTION_AUTHORIZATION_TTL_SECONDS = 900
+MAX_ACTION_LEASE_TTL_SECONDS = 86400
+MAX_ACTION_LEASE_AUTHORIZATIONS = 100
+ACTION_DIGEST_POLICIES = {"exact-list", "dynamic"}
 INTERVENTION_CONTRACT_STATES = {
     "STRICT_READY",
     "LEGACY_CLASSIFICATION_REQUIRED",
@@ -11371,6 +11375,13 @@ def action_authorization_directory(root: Path) -> Path:
     return path
 
 
+def action_authority_lease_directory(root: Path) -> Path:
+    """Return the private runtime directory for bounded route action leases."""
+    path = governance_root(root) / "runtime" / "action-authority-leases"
+    reject_symlink_components(root, path)
+    return path
+
+
 def action_authorization_path(root: Path, authorization_id: str) -> Path:
     """Resolve one action authorization after validating its content-derived ID."""
     if ACTION_AUTHORIZATION_ID_RE.fullmatch(authorization_id) is None:
@@ -11380,8 +11391,30 @@ def action_authorization_path(root: Path, authorization_id: str) -> Path:
     return path
 
 
+def action_authority_lease_path(root: Path, lease_id: str) -> Path:
+    """Resolve one route authority lease after validating its content-derived ID."""
+    if ACTION_AUTHORITY_LEASE_ID_RE.fullmatch(lease_id) is None:
+        raise WorkctlError("ACTION_LEASE_ID_INVALID")
+    path = action_authority_lease_directory(root) / f"{lease_id}.json"
+    reject_symlink_components(root, path)
+    return path
+
+
 def action_authorization_digest(record: Mapping[str, object]) -> str:
     """Hash an action authorization without its self-authenticating digest."""
+    projection = {key: value for key, value in record.items() if key != "record_sha256"}
+    return sha256_bytes(
+        json.dumps(
+            projection,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    )
+
+
+def action_authority_lease_digest(record: Mapping[str, object]) -> str:
+    """Hash a route authority lease without its self-authenticating digest."""
     projection = {key: value for key, value in record.items() if key != "record_sha256"}
     return sha256_bytes(
         json.dumps(
@@ -11440,9 +11473,19 @@ def load_action_authorization(root: Path, authorization_id: str) -> dict[str, ob
     if not isinstance(payload, dict):
         raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
     record = cast(dict[str, object], payload)
+    schema_version = record.get("schema_version")
+    lease_fields = {
+        "authority_source",
+        "lease_id",
+        "lease_basis_sha256",
+        "lease_authorization_index",
+        "idempotency_key",
+    }
+    required_fields = required if schema_version == 1 else required | lease_fields
+    if set(record) != required_fields:
+        raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
     if (
-        set(record) != required
-        or record.get("schema_version") != 1
+        schema_version not in {1, 2}
         or record.get("kind") != "work-governance-action-authorization"
         or record.get("authorization_id") != authorization_id
         or not isinstance(record.get("plan_id"), str)
@@ -11468,6 +11511,18 @@ def load_action_authorization(root: Path, authorization_id: str) -> dict[str, ob
         or not isinstance(record.get("record_sha256"), str)
         or SHA256_RE.fullmatch(str(record["record_sha256"])) is None
         or action_authorization_digest(record) != record.get("record_sha256")
+    ):
+        raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
+    if schema_version == 2 and (
+        record.get("authority_source") != "lease"
+        or not isinstance(record.get("lease_id"), str)
+        or ACTION_AUTHORITY_LEASE_ID_RE.fullmatch(str(record["lease_id"])) is None
+        or not isinstance(record.get("lease_basis_sha256"), str)
+        or SHA256_RE.fullmatch(str(record["lease_basis_sha256"])) is None
+        or type(record.get("lease_authorization_index")) is not int
+        or int(cast(int, record["lease_authorization_index"])) < 1
+        or not isinstance(record.get("idempotency_key"), str)
+        or EVIDENCE_CAPTURE_IDEMPOTENCY_RE.fullmatch(str(record["idempotency_key"])) is None
     ):
         raise WorkctlError("ACTION_AUTHORIZATION_INVALID")
     issued_at = parse_authorization_time(record.get("issued_at"))
@@ -11510,6 +11565,338 @@ def action_authorization_id(binding: Mapping[str, str]) -> str:
         json.dumps(binding, sort_keys=True, separators=(",", ":")).encode("utf-8")
     )
     return f"AUTH-{digest[:32]}"
+
+
+def action_lease_authorization_binding(
+    *,
+    lease_id: str,
+    action_kind: str,
+    target_ref: str,
+    action_sha256: str,
+    idempotency_key: str,
+) -> dict[str, str]:
+    """Return the immutable fields for one lease-derived action capability."""
+    return {
+        "lease_id": lease_id,
+        "action_kind": action_kind,
+        "target_ref": target_ref,
+        "action_sha256": action_sha256,
+        "idempotency_key": idempotency_key,
+    }
+
+
+def action_lease_authorization_id(binding: Mapping[str, str]) -> str:
+    """Derive an idempotent ID so a lease cannot mint replay aliases."""
+    digest = sha256_bytes(
+        json.dumps(binding, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    return f"AUTH-{digest[:32]}"
+
+
+def action_lease_basis_ref(basis_sha256: str) -> str:
+    """Return the typed confirmation basis reference for one lease scope digest."""
+    if SHA256_RE.fullmatch(basis_sha256) is None:
+        raise WorkctlError("ACTION_LEASE_BASIS_SHA256_INVALID")
+    return f"runtime:action-lease/{basis_sha256}"
+
+
+def valid_target_prefix(value: object) -> bool:
+    """Return whether a route lease target prefix is typed and path-bounded."""
+    if not isinstance(value, str) or REFERENCE_RE.fullmatch(value) is None:
+        return False
+    if "*" in value or not value.endswith("/"):
+        return False
+    _scheme, rest = value.split(":", 1)
+    return bool(rest.strip("/"))
+
+
+def normalize_unique_strings(values: Sequence[str], *, field: str) -> list[str]:
+    """Return sorted unique strings or raise a field-specific validation error."""
+    if any(not isinstance(value, str) for value in values):
+        raise WorkctlError(f"{field}_INVALID")
+    result = sorted(set(values))
+    if len(result) != len(values):
+        raise WorkctlError(f"{field}_DUPLICATE")
+    return result
+
+
+def action_lease_scope_from_args(args: argparse.Namespace) -> dict[str, object]:
+    """Build the canonical, confirmed scope payload for a route authority lease."""
+    target_refs = normalize_unique_strings(args.target_ref or [], field="ACTION_LEASE_TARGET_REF")
+    target_prefixes = normalize_unique_strings(
+        args.target_prefix or [],
+        field="ACTION_LEASE_TARGET_PREFIX",
+    )
+    allowed_digests = normalize_unique_strings(
+        args.allowed_action_sha256 or [],
+        field="ACTION_LEASE_ALLOWED_ACTION_SHA256",
+    )
+    blocks = normalize_unique_strings(args.blocks or ["route"], field="ACTION_LEASE_BLOCKS")
+    if args.action_kind not in HIGH_IMPACT_ACTION_KINDS:
+        raise WorkctlError("ACTION_KIND_INVALID")
+    if not target_refs and not target_prefixes:
+        raise WorkctlError("ACTION_LEASE_TARGET_SCOPE_REQUIRED")
+    for target_ref in target_refs:
+        if not valid_reference(target_ref):
+            raise WorkctlError("ACTION_LEASE_TARGET_REF_INVALID")
+    for prefix in target_prefixes:
+        if not valid_target_prefix(prefix):
+            raise WorkctlError("ACTION_LEASE_TARGET_PREFIX_INVALID")
+    for digest in allowed_digests:
+        if SHA256_RE.fullmatch(digest) is None:
+            raise WorkctlError("ACTION_LEASE_ALLOWED_ACTION_SHA256_INVALID")
+    if args.action_digest_policy not in ACTION_DIGEST_POLICIES:
+        raise WorkctlError("ACTION_LEASE_DIGEST_POLICY_INVALID")
+    if args.action_digest_policy == "exact-list" and not allowed_digests:
+        raise WorkctlError("ACTION_LEASE_ALLOWED_ACTION_SHA256_REQUIRED")
+    if not 1 <= args.lease_ttl_seconds <= MAX_ACTION_LEASE_TTL_SECONDS:
+        raise WorkctlError("ACTION_LEASE_TTL_INVALID")
+    if not 1 <= args.authorization_ttl_seconds <= MAX_ACTION_AUTHORIZATION_TTL_SECONDS:
+        raise WorkctlError("ACTION_AUTHORIZATION_TTL_INVALID")
+    if not 1 <= args.max_authorizations <= MAX_ACTION_LEASE_AUTHORIZATIONS:
+        raise WorkctlError("ACTION_LEASE_MAX_AUTHORIZATIONS_INVALID")
+    for block in blocks:
+        if not valid_target_ref(block):
+            raise WorkctlError("ACTION_LEASE_BLOCK_TARGET_INVALID")
+    pilot_evidence_ref = args.pilot_evidence_ref
+    if pilot_evidence_ref is not None and not valid_reference(pilot_evidence_ref):
+        raise WorkctlError("ACTION_LEASE_PILOT_EVIDENCE_REF_INVALID")
+    return {
+        "schema_version": 1,
+        "kind": "work-governance-action-lease-basis",
+        "action_kind": args.action_kind,
+        "target_refs": target_refs,
+        "target_prefixes": target_prefixes,
+        "action_digest_policy": args.action_digest_policy,
+        "allowed_action_sha256s": allowed_digests,
+        "blocks": blocks,
+        "lease_ttl_seconds": args.lease_ttl_seconds,
+        "authorization_ttl_seconds": args.authorization_ttl_seconds,
+        "max_authorizations": args.max_authorizations,
+        "freeze_on_review_blocker": bool(args.freeze_on_review_blocker),
+        "pilot_evidence_ref": pilot_evidence_ref,
+    }
+
+
+def action_lease_basis_sha256(scope: Mapping[str, object]) -> str:
+    """Hash a canonical route authority lease scope."""
+    return sha256_bytes(
+        json.dumps(scope, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+            "utf-8"
+        )
+    )
+
+
+def target_ref_allowed_by_lease(lease: Mapping[str, object], target_ref: str) -> bool:
+    """Return whether a concrete action target falls within a confirmed lease scope."""
+    target_refs = lease.get("target_refs", [])
+    if isinstance(target_refs, list) and target_ref in target_refs:
+        return True
+    target_prefixes = lease.get("target_prefixes", [])
+    return isinstance(target_prefixes, list) and any(
+        isinstance(prefix, str) and target_ref.startswith(prefix) for prefix in target_prefixes
+    )
+
+
+def load_action_authority_lease(root: Path, lease_id: str) -> dict[str, object]:
+    """Load and fully validate one persisted route authority lease."""
+    path = action_authority_lease_path(root, lease_id)
+    if path.is_symlink() or not path.is_file():
+        raise WorkctlError("ACTION_LEASE_NOT_FOUND")
+    try:
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WorkctlError("ACTION_LEASE_INVALID") from exc
+    if not isinstance(payload, dict):
+        raise WorkctlError("ACTION_LEASE_INVALID")
+    lease = cast(dict[str, object], payload)
+    required = {
+        "schema_version",
+        "kind",
+        "lease_id",
+        "plan_id",
+        "contract_revision",
+        "contract_sha256",
+        "confirmation_id",
+        "action_kind",
+        "target_refs",
+        "target_prefixes",
+        "action_digest_policy",
+        "allowed_action_sha256s",
+        "blocks",
+        "basis_ref",
+        "basis_sha256",
+        "request_ref",
+        "turn_receipt_sha256",
+        "session_id",
+        "session_start_receipt_sha256",
+        "issued_at",
+        "expires_at",
+        "authorization_ttl_seconds",
+        "max_authorizations",
+        "freeze_on_review_blocker",
+        "pilot_evidence_ref",
+        "state",
+        "issued_authorizations",
+        "frozen_at",
+        "freeze_reason",
+        "revoked_at",
+        "revoke_ref",
+        "record_sha256",
+    }
+    target_refs = lease.get("target_refs")
+    target_prefixes = lease.get("target_prefixes")
+    allowed_digests = lease.get("allowed_action_sha256s")
+    blocks = lease.get("blocks")
+    issued = lease.get("issued_authorizations")
+    invalid = (
+        set(lease) != required
+        or lease.get("schema_version") != 1
+        or lease.get("kind") != "work-governance-action-authority-lease"
+        or lease.get("lease_id") != lease_id
+        or not isinstance(lease.get("plan_id"), str)
+        or PLAN_ID_RE.fullmatch(str(lease["plan_id"])) is None
+        or type(lease.get("contract_revision")) is not int
+        or int(cast(int, lease["contract_revision"])) < 1
+        or not isinstance(lease.get("contract_sha256"), str)
+        or SHA256_RE.fullmatch(str(lease["contract_sha256"])) is None
+        or not isinstance(lease.get("confirmation_id"), str)
+        or not str(lease["confirmation_id"]).startswith("C-")
+        or lease.get("action_kind") not in HIGH_IMPACT_ACTION_KINDS
+        or not isinstance(target_refs, list)
+        or (not target_refs and not target_prefixes)
+        or not isinstance(target_prefixes, list)
+        or not isinstance(allowed_digests, list)
+        or lease.get("action_digest_policy") not in ACTION_DIGEST_POLICIES
+        or (lease.get("action_digest_policy") == "exact-list" and not allowed_digests)
+        or not isinstance(blocks, list)
+        or not isinstance(lease.get("basis_ref"), str)
+        or not valid_reference(lease.get("basis_ref"))
+        or not isinstance(lease.get("basis_sha256"), str)
+        or SHA256_RE.fullmatch(str(lease["basis_sha256"])) is None
+        or lease.get("basis_ref") != action_lease_basis_ref(str(lease["basis_sha256"]))
+        or not valid_reference(lease.get("request_ref"))
+        or not isinstance(lease.get("turn_receipt_sha256"), str)
+        or SHA256_RE.fullmatch(str(lease["turn_receipt_sha256"])) is None
+        or not isinstance(lease.get("session_id"), str)
+        or SESSION_ID_RE.fullmatch(str(lease["session_id"])) is None
+        or not isinstance(lease.get("session_start_receipt_sha256"), str)
+        or SHA256_RE.fullmatch(str(lease["session_start_receipt_sha256"])) is None
+        or type(lease.get("authorization_ttl_seconds")) is not int
+        or not (
+            1
+            <= int(cast(int, lease["authorization_ttl_seconds"]))
+            <= MAX_ACTION_AUTHORIZATION_TTL_SECONDS
+        )
+        or type(lease.get("max_authorizations")) is not int
+        or not (1 <= int(cast(int, lease["max_authorizations"])) <= MAX_ACTION_LEASE_AUTHORIZATIONS)
+        or type(lease.get("freeze_on_review_blocker")) is not bool
+        or (
+            lease.get("pilot_evidence_ref") is not None
+            and not valid_reference(lease.get("pilot_evidence_ref"))
+        )
+        or lease.get("state") not in {"active", "frozen", "revoked"}
+        or not isinstance(issued, list)
+        or len(issued) > int(cast(int, lease["max_authorizations"]))
+        or not isinstance(lease.get("record_sha256"), str)
+        or SHA256_RE.fullmatch(str(lease["record_sha256"])) is None
+        or action_authority_lease_digest(lease) != lease.get("record_sha256")
+    )
+    if invalid:
+        raise WorkctlError("ACTION_LEASE_INVALID")
+    target_ref_values = cast(list[object], target_refs)
+    target_prefix_values = cast(list[object], target_prefixes)
+    allowed_digest_values = cast(list[object], allowed_digests)
+    block_values = cast(list[object], blocks)
+    issued_values = cast(list[object], issued)
+    if any(not isinstance(item, str) or not valid_reference(item) for item in target_ref_values):
+        raise WorkctlError("ACTION_LEASE_INVALID")
+    if any(
+        not isinstance(item, str) or not valid_target_prefix(item) for item in target_prefix_values
+    ):
+        raise WorkctlError("ACTION_LEASE_INVALID")
+    if any(
+        not isinstance(item, str) or SHA256_RE.fullmatch(item) is None
+        for item in allowed_digest_values
+    ):
+        raise WorkctlError("ACTION_LEASE_INVALID")
+    if any(not isinstance(item, str) or not valid_target_ref(item) for item in block_values):
+        raise WorkctlError("ACTION_LEASE_INVALID")
+    seen_authorizations: set[str] = set()
+    for index, item in enumerate(issued_values, start=1):
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("authorization_id"), str)
+            or ACTION_AUTHORIZATION_ID_RE.fullmatch(str(item["authorization_id"])) is None
+            or item["authorization_id"] in seen_authorizations
+            or not isinstance(item.get("target_ref"), str)
+            or not valid_reference(item.get("target_ref"))
+            or not isinstance(item.get("action_sha256"), str)
+            or SHA256_RE.fullmatch(str(item["action_sha256"])) is None
+            or not isinstance(item.get("idempotency_key"), str)
+            or EVIDENCE_CAPTURE_IDEMPOTENCY_RE.fullmatch(str(item["idempotency_key"])) is None
+            or type(item.get("index")) is not int
+            or item.get("index") != index
+            or not isinstance(item.get("authorized_at"), str)
+        ):
+            raise WorkctlError("ACTION_LEASE_INVALID")
+        parse_authorization_time(item["authorized_at"])
+        seen_authorizations.add(str(item["authorization_id"]))
+    issued_at = parse_authorization_time(lease.get("issued_at"))
+    expires_at = parse_authorization_time(lease.get("expires_at"))
+    if expires_at <= issued_at or expires_at - issued_at > timedelta(
+        seconds=MAX_ACTION_LEASE_TTL_SECONDS
+    ):
+        raise WorkctlError("ACTION_LEASE_INVALID")
+    if lease["state"] == "active":
+        if lease.get("frozen_at") is not None or lease.get("freeze_reason") is not None:
+            raise WorkctlError("ACTION_LEASE_INVALID")
+        if lease.get("revoked_at") is not None or lease.get("revoke_ref") is not None:
+            raise WorkctlError("ACTION_LEASE_INVALID")
+    elif lease["state"] == "frozen":
+        if not isinstance(lease.get("freeze_reason"), str) or not lease["freeze_reason"]:
+            raise WorkctlError("ACTION_LEASE_INVALID")
+        parse_authorization_time(lease.get("frozen_at"))
+        if lease.get("revoked_at") is not None or lease.get("revoke_ref") is not None:
+            raise WorkctlError("ACTION_LEASE_INVALID")
+    elif (
+        parse_authorization_time(lease.get("revoked_at")) < issued_at
+        or not valid_reference(lease.get("revoke_ref"))
+    ):
+        raise WorkctlError("ACTION_LEASE_INVALID")
+    return lease
+
+
+def action_authority_lease_id(binding: Mapping[str, object]) -> str:
+    """Derive an idempotent lease ID from the confirmed turn and scope."""
+    digest = sha256_bytes(
+        json.dumps(binding, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+            "utf-8"
+        )
+    )
+    return f"LEASE-{digest[:32]}"
+
+
+def write_action_authority_lease(root: Path, lease: dict[str, object]) -> None:
+    """Persist one validated lease record with a fresh self digest."""
+    lease["record_sha256"] = action_authority_lease_digest(lease)
+    write_atomic(
+        action_authority_lease_path(root, str(lease["lease_id"])),
+        json.dumps(lease, indent=2, sort_keys=True) + "\n",
+    )
+
+
+def freeze_action_authority_lease(
+    root: Path,
+    lease: dict[str, object],
+    reason: str,
+) -> None:
+    """Fail closed by freezing a lease that no longer matches its route guard."""
+    if lease.get("state") == "active":
+        lease["state"] = "frozen"
+        lease["frozen_at"] = utc_now()
+        lease["freeze_reason"] = reason
+        write_action_authority_lease(root, lease)
 
 
 def validate_action_binding(args: argparse.Namespace) -> None:
@@ -11557,6 +11944,300 @@ def require_action_confirmation(
     if not isinstance(plan_id, str) or type(revision) is not int:
         raise WorkctlError("ACTION_CONFIRMATION_BINDING_MISMATCH")
     return plan_id, revision, sha256_file(doc.path)
+
+
+def require_action_lease_confirmation(
+    root: Path,
+    *,
+    confirmation_id: str,
+    action_kind: str,
+    basis_sha256: str,
+    turn: Mapping[str, object],
+) -> tuple[str, int, str]:
+    """Require one same-turn Plan gate bound to a route authority lease scope."""
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    require_plan_contract_ready(doc.frontmatter)
+    decision = confirmations(doc.frontmatter).get(confirmation_id)
+    basis_ref = action_lease_basis_ref(basis_sha256)
+    if not isinstance(decision, dict) or decision.get("status") != "accepted":
+        raise WorkctlError("ACTION_LEASE_CONFIRMATION_NOT_ACCEPTED")
+    intervention = decision.get("intervention")
+    if (
+        decision.get("ref") != turn.get("request_ref")
+        or decision.get("evidence_sha256") != basis_sha256
+        or not isinstance(intervention, dict)
+        or intervention.get("kind") != "external_authority"
+        or intervention.get("action_kind") != action_kind
+        or intervention.get("basis_ref") != basis_ref
+        or intervention.get("basis_sha256") != basis_sha256
+    ):
+        raise WorkctlError("ACTION_LEASE_CONFIRMATION_BINDING_MISMATCH")
+    revision = doc.frontmatter.get("contract_revision", doc.frontmatter.get("revision"))
+    plan_id = doc.frontmatter.get("plan_id")
+    if not isinstance(plan_id, str) or type(revision) is not int:
+        raise WorkctlError("ACTION_LEASE_CONFIRMATION_BINDING_MISMATCH")
+    return plan_id, revision, sha256_file(doc.path)
+
+
+def cmd_action_lease_prepare(args: argparse.Namespace) -> None:
+    """Print the exact route authority lease basis to confirm through Plan gates."""
+    scope = action_lease_scope_from_args(args)
+    basis_sha256 = action_lease_basis_sha256(scope)
+    basis_ref = action_lease_basis_ref(basis_sha256)
+    payload = {
+        "basis_ref": basis_ref,
+        "basis_sha256": basis_sha256,
+        "scope": scope,
+        "confirmation": {
+            "intervention_kind": "external_authority",
+            "action_kind": args.action_kind,
+            "basis_ref": basis_ref,
+            "basis_sha256": basis_sha256,
+        },
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_action_lease_issue(args: argparse.Namespace) -> None:
+    """Create one bounded route-level authority lease after same-turn confirmation."""
+    root = project_root()
+    scope = action_lease_scope_from_args(args)
+    basis_sha256 = action_lease_basis_sha256(scope)
+    if args.basis_sha256 != basis_sha256:
+        raise WorkctlError("ACTION_LEASE_BASIS_SHA256_MISMATCH")
+    with lock(root):
+        turn = require_confirmation_turn_ref(
+            root,
+            ref=args.ref,
+            turn_receipt_sha256=args.turn_receipt_sha256,
+        )
+        plan_id, contract_revision, contract_sha256 = require_action_lease_confirmation(
+            root,
+            confirmation_id=args.confirmation_id,
+            action_kind=args.action_kind,
+            basis_sha256=basis_sha256,
+            turn=turn,
+        )
+        issued_at = parse_authorization_time(turn.get("issued_at"))
+        expires_at = issued_at + timedelta(seconds=args.lease_ttl_seconds)
+        if datetime.now(UTC) >= expires_at:
+            raise WorkctlError("ACTION_LEASE_EXPIRED")
+        session_id = turn.get("session_id")
+        session_start_digest = turn.get("session_start_receipt_sha256")
+        if not isinstance(session_id, str) or not isinstance(session_start_digest, str):
+            raise WorkctlError("TURN_RECEIPT_INVALID")
+        binding = {
+            "turn_receipt_sha256": args.turn_receipt_sha256,
+            "confirmation_id": args.confirmation_id,
+            "basis_sha256": basis_sha256,
+        }
+        lease_id = action_authority_lease_id(binding)
+        path = action_authority_lease_path(root, lease_id)
+        if path.exists() or path.is_symlink():
+            existing = load_action_authority_lease(root, lease_id)
+            if (
+                existing.get("plan_id") != plan_id
+                or existing.get("contract_revision") != contract_revision
+                or existing.get("contract_sha256") != contract_sha256
+            ):
+                raise WorkctlError("ACTION_LEASE_CONTRACT_DRIFT")
+            print(json.dumps(existing, indent=2, sort_keys=True))
+            return
+        lease: dict[str, object] = {
+            "schema_version": 1,
+            "kind": "work-governance-action-authority-lease",
+            "lease_id": lease_id,
+            "plan_id": plan_id,
+            "contract_revision": contract_revision,
+            "contract_sha256": contract_sha256,
+            "confirmation_id": args.confirmation_id,
+            "action_kind": args.action_kind,
+            "target_refs": scope["target_refs"],
+            "target_prefixes": scope["target_prefixes"],
+            "action_digest_policy": scope["action_digest_policy"],
+            "allowed_action_sha256s": scope["allowed_action_sha256s"],
+            "blocks": scope["blocks"],
+            "basis_ref": action_lease_basis_ref(basis_sha256),
+            "basis_sha256": basis_sha256,
+            "request_ref": args.ref,
+            "turn_receipt_sha256": args.turn_receipt_sha256,
+            "session_id": session_id,
+            "session_start_receipt_sha256": session_start_digest,
+            "issued_at": issued_at.isoformat(),
+            "expires_at": expires_at.isoformat(),
+            "authorization_ttl_seconds": scope["authorization_ttl_seconds"],
+            "max_authorizations": scope["max_authorizations"],
+            "freeze_on_review_blocker": scope["freeze_on_review_blocker"],
+            "pilot_evidence_ref": scope["pilot_evidence_ref"],
+            "state": "active",
+            "issued_authorizations": [],
+            "frozen_at": None,
+            "freeze_reason": None,
+            "revoked_at": None,
+            "revoke_ref": None,
+        }
+        write_action_authority_lease(root, lease)
+        print(json.dumps(lease, indent=2, sort_keys=True))
+
+
+def require_lease_route_still_clear(
+    root: Path,
+    lease: dict[str, object],
+    doc: PlanDocument,
+) -> None:
+    """Freeze a lease when route-level blockers appear after it was issued."""
+    if (
+        lease.get("plan_id") != doc.frontmatter.get("plan_id")
+        or lease.get("contract_revision")
+        != doc.frontmatter.get("contract_revision", doc.frontmatter.get("revision"))
+        or lease.get("contract_sha256") != sha256_file(doc.path)
+    ):
+        freeze_action_authority_lease(root, lease, "contract-drift")
+        raise WorkctlError("ACTION_LEASE_CONTRACT_DRIFT")
+    if lease.get("freeze_on_review_blocker") is not True:
+        return
+    try:
+        require_no_blocking_artifacts(doc.frontmatter)
+        blocks = lease.get("blocks", [])
+        for target in blocks if isinstance(blocks, list) else []:
+            require_independent_target(root, doc.frontmatter, str(target))
+    except WorkctlError as exc:
+        freeze_action_authority_lease(root, lease, str(exc).split(":", 1)[0])
+        raise
+
+
+def cmd_action_lease_authorize(args: argparse.Namespace) -> None:
+    """Mint one single-use action capability from an active route authority lease."""
+    root = project_root()
+    validate_action_binding(args)
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        require_plan_contract_ready(doc.frontmatter)
+        lease = load_action_authority_lease(root, args.lease_id)
+        if lease.get("state") != "active":
+            raise WorkctlError("ACTION_LEASE_NOT_ACTIVE")
+        if datetime.now(UTC) >= parse_authorization_time(lease.get("expires_at")):
+            freeze_action_authority_lease(root, lease, "expired")
+            raise WorkctlError("ACTION_LEASE_EXPIRED")
+        if lease.get("action_kind") != args.action_kind:
+            raise WorkctlError("ACTION_LEASE_ACTION_KIND_MISMATCH")
+        if not target_ref_allowed_by_lease(lease, args.target_ref):
+            raise WorkctlError("ACTION_LEASE_TARGET_MISMATCH")
+        allowed_digests = lease.get("allowed_action_sha256s", [])
+        if lease.get("action_digest_policy") == "exact-list" and (
+            not isinstance(allowed_digests, list) or args.action_sha256 not in allowed_digests
+        ):
+            raise WorkctlError("ACTION_LEASE_ACTION_SHA256_NOT_ALLOWED")
+        require_lease_route_still_clear(root, lease, doc)
+        issued = lease.get("issued_authorizations")
+        if not isinstance(issued, list):
+            raise WorkctlError("ACTION_LEASE_INVALID")
+        idempotency_key = args.idempotency_key or "default"
+        if EVIDENCE_CAPTURE_IDEMPOTENCY_RE.fullmatch(idempotency_key) is None:
+            raise WorkctlError("ACTION_LEASE_IDEMPOTENCY_KEY_INVALID")
+        binding = action_lease_authorization_binding(
+            lease_id=args.lease_id,
+            action_kind=args.action_kind,
+            target_ref=args.target_ref,
+            action_sha256=args.action_sha256,
+            idempotency_key=idempotency_key,
+        )
+        authorization_id = action_lease_authorization_id(binding)
+        path = action_authorization_path(root, authorization_id)
+        if path.exists() or path.is_symlink():
+            existing = load_action_authorization(root, authorization_id)
+            if existing.get("state") == "consumed":
+                raise WorkctlError("ACTION_AUTHORIZATION_REPLAYED")
+            if datetime.now(UTC) >= parse_authorization_time(existing.get("expires_at")):
+                raise WorkctlError("ACTION_AUTHORIZATION_EXPIRED")
+            print(json.dumps(existing, indent=2, sort_keys=True))
+            return
+        if len(issued) >= int(cast(int, lease["max_authorizations"])):
+            raise WorkctlError("ACTION_LEASE_EXHAUSTED")
+        issued_at = datetime.now(UTC).replace(microsecond=0)
+        requested_ttl = args.ttl_seconds or int(cast(int, lease["authorization_ttl_seconds"]))
+        if not 1 <= requested_ttl <= int(cast(int, lease["authorization_ttl_seconds"])):
+            raise WorkctlError("ACTION_AUTHORIZATION_TTL_INVALID")
+        expires_at = issued_at + timedelta(seconds=requested_ttl)
+        lease_expires_at = parse_authorization_time(lease.get("expires_at"))
+        if expires_at > lease_expires_at:
+            expires_at = lease_expires_at
+        if datetime.now(UTC) >= expires_at:
+            raise WorkctlError("ACTION_AUTHORIZATION_EXPIRED")
+        lease_index = len(issued) + 1
+        record: dict[str, object] = {
+            "schema_version": 2,
+            "kind": "work-governance-action-authorization",
+            "authorization_id": authorization_id,
+            "plan_id": lease["plan_id"],
+            "contract_revision": lease["contract_revision"],
+            "contract_sha256": lease["contract_sha256"],
+            "confirmation_id": lease["confirmation_id"],
+            "action_kind": args.action_kind,
+            "target_ref": args.target_ref,
+            "action_sha256": args.action_sha256,
+            "request_ref": lease["request_ref"],
+            "turn_receipt_sha256": lease["turn_receipt_sha256"],
+            "session_id": lease["session_id"],
+            "session_start_receipt_sha256": lease["session_start_receipt_sha256"],
+            "issued_at": issued_at.isoformat(),
+            "expires_at": expires_at.isoformat(),
+            "state": "authorized",
+            "consumed_at": None,
+            "consumer_ref": None,
+            "authority_source": "lease",
+            "lease_id": args.lease_id,
+            "lease_basis_sha256": lease["basis_sha256"],
+            "lease_authorization_index": lease_index,
+            "idempotency_key": idempotency_key,
+        }
+        record["record_sha256"] = action_authorization_digest(record)
+        issued.append(
+            {
+                "index": lease_index,
+                "authorization_id": authorization_id,
+                "target_ref": args.target_ref,
+                "action_sha256": args.action_sha256,
+                "idempotency_key": idempotency_key,
+                "authorized_at": issued_at.isoformat(),
+            }
+        )
+        write_action_authority_lease(root, lease)
+        write_atomic(path, json.dumps(record, indent=2, sort_keys=True) + "\n")
+        print(json.dumps(record, indent=2, sort_keys=True))
+
+
+def cmd_action_lease_status(args: argparse.Namespace) -> None:
+    """Show one route authority lease plus its effective state."""
+    lease = load_action_authority_lease(project_root(), args.lease_id)
+    payload = dict(lease)
+    if lease.get("state") == "active" and datetime.now(UTC) >= parse_authorization_time(
+        lease.get("expires_at")
+    ):
+        payload["effective_state"] = "expired"
+    else:
+        payload["effective_state"] = lease.get("state")
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_action_lease_revoke(args: argparse.Namespace) -> None:
+    """Revoke one route authority lease without touching already consumed evidence."""
+    if not valid_reference(args.ref):
+        raise WorkctlError("ACTION_LEASE_REVOKE_REF_INVALID")
+    root = project_root()
+    with lock(root):
+        lease = load_action_authority_lease(root, args.lease_id)
+        if lease.get("state") != "revoked":
+            lease["state"] = "revoked"
+            lease["revoked_at"] = utc_now()
+            lease["revoke_ref"] = args.ref
+            if lease.get("frozen_at") is not None:
+                lease["frozen_at"] = None
+                lease["freeze_reason"] = None
+            write_action_authority_lease(root, lease)
+        print(json.dumps(lease, indent=2, sort_keys=True))
 
 
 def cmd_action_authorize(args: argparse.Namespace) -> None:
@@ -11641,51 +12322,78 @@ def cmd_action_consume(args: argparse.Namespace) -> None:
     root = project_root()
     validate_action_binding(args)
     with lock(root):
-        session_receipt = session_receipt_for_turn(
-            root,
-            args.turn_receipt_sha256,
-            require_current_controller=True,
-        )
-        turn = load_current_turn_receipt(
-            root,
-            supplied_sha256=args.turn_receipt_sha256,
-            session_receipt=cast(Mapping[str, object], session_receipt),
-        )
         record = load_action_authorization(root, args.authorization_id)
         if record.get("state") != "authorized":
             raise WorkctlError("ACTION_AUTHORIZATION_REPLAYED")
         if datetime.now(UTC) >= parse_authorization_time(record.get("expires_at")):
             raise WorkctlError("ACTION_AUTHORIZATION_EXPIRED")
-        expected = action_authorization_binding(
-            turn_receipt_sha256=args.turn_receipt_sha256,
-            confirmation_id=str(record["confirmation_id"]),
-            action_kind=args.action_kind,
-            target_ref=args.target_ref,
-            action_sha256=args.action_sha256,
-        )
-        if any(record.get(key) != value for key, value in expected.items()):
-            raise WorkctlError("ACTION_AUTHORIZATION_TARGET_MISMATCH")
-        plan_id, contract_revision, contract_sha256 = require_action_confirmation(
-            root,
-            confirmation_id=str(record["confirmation_id"]),
-            action_kind=args.action_kind,
-            target_ref=args.target_ref,
-            action_sha256=args.action_sha256,
-            turn=turn,
-        )
-        if (
-            record.get("plan_id") != plan_id
-            or record.get("contract_revision") != contract_revision
-            or record.get("contract_sha256") != contract_sha256
-        ):
-            raise WorkctlError("ACTION_AUTHORIZATION_CONTRACT_DRIFT")
-        if (
-            record.get("request_ref") != turn.get("request_ref")
-            or record.get("session_id") != session_receipt.get("session_id")
-            or record.get("session_start_receipt_sha256")
-            != controller_receipt_digest(session_receipt)
-        ):
-            raise WorkctlError("ACTION_AUTHORIZATION_TURN_MISMATCH")
+        if record.get("schema_version") == 2:
+            lease = load_action_authority_lease(root, str(record["lease_id"]))
+            if lease.get("state") != "active":
+                raise WorkctlError("ACTION_LEASE_NOT_ACTIVE")
+            if datetime.now(UTC) >= parse_authorization_time(lease.get("expires_at")):
+                freeze_action_authority_lease(root, lease, "expired")
+                raise WorkctlError("ACTION_LEASE_EXPIRED")
+            if (
+                record.get("action_kind") != args.action_kind
+                or record.get("target_ref") != args.target_ref
+                or record.get("action_sha256") != args.action_sha256
+                or record.get("lease_basis_sha256") != lease.get("basis_sha256")
+                or record.get("confirmation_id") != lease.get("confirmation_id")
+            ):
+                raise WorkctlError("ACTION_AUTHORIZATION_TARGET_MISMATCH")
+            doc = load_plan(active_plan_path(root))
+            require_plan_contract_ready(doc.frontmatter)
+            require_lease_route_still_clear(root, lease, doc)
+            if (
+                record.get("plan_id") != lease.get("plan_id")
+                or record.get("contract_revision") != lease.get("contract_revision")
+                or record.get("contract_sha256") != lease.get("contract_sha256")
+            ):
+                raise WorkctlError("ACTION_AUTHORIZATION_CONTRACT_DRIFT")
+        else:
+            if args.turn_receipt_sha256 is None:
+                raise WorkctlError("TURN_RECEIPT_REQUIRED")
+            session_receipt = session_receipt_for_turn(
+                root,
+                args.turn_receipt_sha256,
+                require_current_controller=True,
+            )
+            turn = load_current_turn_receipt(
+                root,
+                supplied_sha256=args.turn_receipt_sha256,
+                session_receipt=cast(Mapping[str, object], session_receipt),
+            )
+            expected = action_authorization_binding(
+                turn_receipt_sha256=args.turn_receipt_sha256,
+                confirmation_id=str(record["confirmation_id"]),
+                action_kind=args.action_kind,
+                target_ref=args.target_ref,
+                action_sha256=args.action_sha256,
+            )
+            if any(record.get(key) != value for key, value in expected.items()):
+                raise WorkctlError("ACTION_AUTHORIZATION_TARGET_MISMATCH")
+            plan_id, contract_revision, contract_sha256 = require_action_confirmation(
+                root,
+                confirmation_id=str(record["confirmation_id"]),
+                action_kind=args.action_kind,
+                target_ref=args.target_ref,
+                action_sha256=args.action_sha256,
+                turn=turn,
+            )
+            if (
+                record.get("plan_id") != plan_id
+                or record.get("contract_revision") != contract_revision
+                or record.get("contract_sha256") != contract_sha256
+            ):
+                raise WorkctlError("ACTION_AUTHORIZATION_CONTRACT_DRIFT")
+            if (
+                record.get("request_ref") != turn.get("request_ref")
+                or record.get("session_id") != session_receipt.get("session_id")
+                or record.get("session_start_receipt_sha256")
+                != controller_receipt_digest(session_receipt)
+            ):
+                raise WorkctlError("ACTION_AUTHORIZATION_TURN_MISMATCH")
         if not valid_reference(args.consumer_ref):
             raise WorkctlError("ACTION_CONSUMER_REF_INVALID")
         record["state"] = "consumed"
@@ -11977,6 +12685,23 @@ def cmd_workflow_help(args: argparse.Namespace) -> None:
             "note": (
                 "Direct capture writes redacted blobs and an append-only ledger; "
                 "Plan evidence records remain the bounded canonical compatibility path."
+            ),
+        },
+        "action": {
+            "commands": [
+                "action authorize",
+                "action consume",
+                "action status",
+                "action lease prepare",
+                "action lease issue",
+                "action lease authorize",
+                "action lease status",
+                "action lease revoke",
+            ],
+            "note": (
+                "High-impact actions still consume single-use capabilities; a route "
+                "lease only mints those capabilities inside a confirmed bounded scope; "
+                "use a new idempotency key for a consumed same-action retry."
             ),
         },
         "migration": {
@@ -18699,12 +19424,69 @@ def build_parser() -> argparse.ArgumentParser:
     )
     action_consume.add_argument("--target-ref", required=True)
     action_consume.add_argument("--action-sha256", required=True)
-    action_consume.add_argument("--turn-receipt-sha256", required=True)
+    action_consume.add_argument("--turn-receipt-sha256")
     action_consume.add_argument("--consumer-ref", required=True)
     action_consume.set_defaults(func=cmd_action_consume)
     action_status = action_sub.add_parser("status")
     action_status.add_argument("--authorization-id", required=True)
     action_status.set_defaults(func=cmd_action_status)
+    action_lease = action_sub.add_parser("lease")
+    action_lease_sub = action_lease.add_subparsers(dest="action_lease_action", required=True)
+
+    def add_action_lease_scope_args(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "--action-kind",
+            choices=sorted(HIGH_IMPACT_ACTION_KINDS),
+            required=True,
+        )
+        parser.add_argument("--target-ref", action="append", default=[])
+        parser.add_argument("--target-prefix", action="append", default=[])
+        parser.add_argument(
+            "--action-digest-policy",
+            choices=sorted(ACTION_DIGEST_POLICIES),
+            default="exact-list",
+        )
+        parser.add_argument("--allowed-action-sha256", action="append", default=[])
+        parser.add_argument("--blocks", action="append", default=[])
+        parser.add_argument("--lease-ttl-seconds", type=int, default=3600)
+        parser.add_argument("--authorization-ttl-seconds", type=int, default=300)
+        parser.add_argument("--max-authorizations", type=int, default=10)
+        parser.add_argument(
+            "--freeze-on-review-blocker",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+        )
+        parser.add_argument("--pilot-evidence-ref")
+
+    action_lease_prepare = action_lease_sub.add_parser("prepare")
+    add_action_lease_scope_args(action_lease_prepare)
+    action_lease_prepare.set_defaults(func=cmd_action_lease_prepare)
+    action_lease_issue = action_lease_sub.add_parser("issue")
+    add_action_lease_scope_args(action_lease_issue)
+    action_lease_issue.add_argument("--confirmation-id", required=True)
+    action_lease_issue.add_argument("--basis-sha256", required=True)
+    action_lease_issue.add_argument("--ref", required=True)
+    action_lease_issue.add_argument("--turn-receipt-sha256", required=True)
+    action_lease_issue.set_defaults(func=cmd_action_lease_issue)
+    action_lease_authorize = action_lease_sub.add_parser("authorize")
+    action_lease_authorize.add_argument("--lease-id", required=True)
+    action_lease_authorize.add_argument(
+        "--action-kind",
+        choices=sorted(HIGH_IMPACT_ACTION_KINDS),
+        required=True,
+    )
+    action_lease_authorize.add_argument("--target-ref", required=True)
+    action_lease_authorize.add_argument("--action-sha256", required=True)
+    action_lease_authorize.add_argument("--idempotency-key")
+    action_lease_authorize.add_argument("--ttl-seconds", type=int)
+    action_lease_authorize.set_defaults(func=cmd_action_lease_authorize)
+    action_lease_status = action_lease_sub.add_parser("status")
+    action_lease_status.add_argument("--lease-id", required=True)
+    action_lease_status.set_defaults(func=cmd_action_lease_status)
+    action_lease_revoke = action_lease_sub.add_parser("revoke")
+    action_lease_revoke.add_argument("--lease-id", required=True)
+    action_lease_revoke.add_argument("--ref", required=True)
+    action_lease_revoke.set_defaults(func=cmd_action_lease_revoke)
 
     migrate = sub.add_parser("migrate")
     migrate_sub = migrate.add_subparsers(dest="migration_action", required=True)
@@ -19132,6 +19914,8 @@ def command_mutates_state(args: argparse.Namespace) -> bool:
     if args.domain == "evidence":
         return True
     if args.domain == "action":
+        if args.action_authorization_action == "lease":
+            return cast(str, args.action_lease_action) not in {"prepare", "status"}
         return cast(str, args.action_authorization_action) != "status"
     if args.domain == "migrate":
         return args.migration_action == "recover" or (

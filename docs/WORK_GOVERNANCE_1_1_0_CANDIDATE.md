@@ -73,6 +73,44 @@ The scheduler explains blockers but does not waive them. A task blocked by an
 artifact or independent review will not be advertised as ready only to fail on
 `task start`.
 
+## High-Impact Route Authority
+
+The candidate keeps `action authorize` and `action consume` as the exact,
+single-use envelope for one high-impact external action. It also adds an
+optional route authority lease for repeated same-kind actions after the user
+has already accepted a bounded route decision:
+
+```sh
+plugins/work-governance/scripts/workctl action lease prepare \
+  --action-kind production_change \
+  --target-prefix project:service/example-production/ \
+  --allowed-action-sha256 <sha256>
+
+plugins/work-governance/scripts/workctl action lease issue \
+  --confirmation-id C-ROUTE-ACTION-LEASE \
+  --basis-sha256 <lease-basis-sha256> \
+  --ref <current-request-ref> \
+  --turn-receipt-sha256 <current-turn-receipt> \
+  --action-kind production_change \
+  --target-prefix project:service/example-production/ \
+  --allowed-action-sha256 <sha256>
+
+plugins/work-governance/scripts/workctl action lease authorize \
+  --lease-id LEASE-... \
+  --action-kind production_change \
+  --target-ref project:service/example-production/deploy \
+  --action-sha256 <sha256> \
+  --idempotency-key deploy-attempt-1
+```
+
+The lease is runtime state, not a Plan contract revision. It is scoped by action
+kind, exact target refs or typed target prefixes, action digest policy, expiry,
+maximum authorization count, Plan contract SHA256, and review/artifact blockers.
+Authorization is idempotent by default; a retry of the same target and digest after
+consumption must use a new `--idempotency-key` and consumes another lease slot. It
+can reduce repeated confirmation prompts, but it does not waive action consumption,
+validation evidence, pilot evidence, activation evidence, or drift checks.
+
 ## Migration
 
 Use explicit schema-v5 migration commands:
@@ -126,6 +164,11 @@ The temporary pre-activation Codex evaluation is recorded in
 `docs/WORK_GOVERNANCE_1_1_0_TEMP_EVAL.md`. That report validates the isolated
 candidate controller and temporary Codex installation path, but it intentionally
 does not claim live activation.
+
+The historical 1.0.7 friction re-audit is recorded in
+`docs/WORK_GOVERNANCE_1_1_0_HISTORY_FRICTION_AUDIT.md`. It is a release-readiness
+mapping, not a claim that every item in the destructive redesign draft is
+implemented.
 
 ## Confirmation Gate
 

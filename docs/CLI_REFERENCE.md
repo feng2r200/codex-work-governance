@@ -19,8 +19,13 @@ Mutable schema-v4 Plan commands and high-impact authorization require the curren
 - `action authorize`
 - `action consume`
 - `action status`
+- `action lease prepare`
+- `action lease issue`
+- `action lease authorize`
+- `action lease status`
+- `action lease revoke`
 
-High-impact authority is current-turn, target, digest, expiry, and single-consumption bound.
+High-impact actions still consume single-use capabilities; a route lease only mints those capabilities inside a confirmed bounded scope; use a new idempotency key for a consumed same-action retry.
 
 ### `doctor`
 
@@ -129,7 +134,7 @@ usage: workctl action consume [-h] --authorization-id AUTHORIZATION_ID
                               --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
                               --target-ref TARGET_REF
                               --action-sha256 ACTION_SHA256
-                              --turn-receipt-sha256 TURN_RECEIPT_SHA256
+                              [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
                               --consumer-ref CONSUMER_REF
 
 options:
@@ -140,6 +145,116 @@ options:
   --action-sha256 ACTION_SHA256
   --turn-receipt-sha256 TURN_RECEIPT_SHA256
   --consumer-ref CONSUMER_REF
+```
+
+### `action lease authorize`
+
+```text
+usage: workctl action lease authorize [-h] --lease-id LEASE_ID
+                                      --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+                                      --target-ref TARGET_REF
+                                      --action-sha256 ACTION_SHA256
+                                      [--idempotency-key IDEMPOTENCY_KEY]
+                                      [--ttl-seconds TTL_SECONDS]
+
+options:
+  -h, --help            show this help message and exit
+  --lease-id LEASE_ID
+  --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+  --target-ref TARGET_REF
+  --action-sha256 ACTION_SHA256
+  --idempotency-key IDEMPOTENCY_KEY
+  --ttl-seconds TTL_SECONDS
+```
+
+### `action lease issue`
+
+```text
+usage: workctl action lease issue [-h]
+                                  --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+                                  [--target-ref TARGET_REF]
+                                  [--target-prefix TARGET_PREFIX]
+                                  [--action-digest-policy {dynamic,exact-list}]
+                                  [--allowed-action-sha256 ALLOWED_ACTION_SHA256]
+                                  [--blocks BLOCKS]
+                                  [--lease-ttl-seconds LEASE_TTL_SECONDS]
+                                  [--authorization-ttl-seconds AUTHORIZATION_TTL_SECONDS]
+                                  [--max-authorizations MAX_AUTHORIZATIONS]
+                                  [--freeze-on-review-blocker | --no-freeze-on-review-blocker]
+                                  [--pilot-evidence-ref PILOT_EVIDENCE_REF]
+                                  --confirmation-id CONFIRMATION_ID
+                                  --basis-sha256 BASIS_SHA256 --ref REF
+                                  --turn-receipt-sha256 TURN_RECEIPT_SHA256
+
+options:
+  -h, --help            show this help message and exit
+  --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+  --target-ref TARGET_REF
+  --target-prefix TARGET_PREFIX
+  --action-digest-policy {dynamic,exact-list}
+  --allowed-action-sha256 ALLOWED_ACTION_SHA256
+  --blocks BLOCKS
+  --lease-ttl-seconds LEASE_TTL_SECONDS
+  --authorization-ttl-seconds AUTHORIZATION_TTL_SECONDS
+  --max-authorizations MAX_AUTHORIZATIONS
+  --freeze-on-review-blocker, --no-freeze-on-review-blocker
+  --pilot-evidence-ref PILOT_EVIDENCE_REF
+  --confirmation-id CONFIRMATION_ID
+  --basis-sha256 BASIS_SHA256
+  --ref REF
+  --turn-receipt-sha256 TURN_RECEIPT_SHA256
+```
+
+### `action lease prepare`
+
+```text
+usage: workctl action lease prepare [-h]
+                                    --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+                                    [--target-ref TARGET_REF]
+                                    [--target-prefix TARGET_PREFIX]
+                                    [--action-digest-policy {dynamic,exact-list}]
+                                    [--allowed-action-sha256 ALLOWED_ACTION_SHA256]
+                                    [--blocks BLOCKS]
+                                    [--lease-ttl-seconds LEASE_TTL_SECONDS]
+                                    [--authorization-ttl-seconds AUTHORIZATION_TTL_SECONDS]
+                                    [--max-authorizations MAX_AUTHORIZATIONS]
+                                    [--freeze-on-review-blocker | --no-freeze-on-review-blocker]
+                                    [--pilot-evidence-ref PILOT_EVIDENCE_REF]
+
+options:
+  -h, --help            show this help message and exit
+  --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+  --target-ref TARGET_REF
+  --target-prefix TARGET_PREFIX
+  --action-digest-policy {dynamic,exact-list}
+  --allowed-action-sha256 ALLOWED_ACTION_SHA256
+  --blocks BLOCKS
+  --lease-ttl-seconds LEASE_TTL_SECONDS
+  --authorization-ttl-seconds AUTHORIZATION_TTL_SECONDS
+  --max-authorizations MAX_AUTHORIZATIONS
+  --freeze-on-review-blocker, --no-freeze-on-review-blocker
+  --pilot-evidence-ref PILOT_EVIDENCE_REF
+```
+
+### `action lease revoke`
+
+```text
+usage: workctl action lease revoke [-h] --lease-id LEASE_ID --ref REF
+
+options:
+  -h, --help           show this help message and exit
+  --lease-id LEASE_ID
+  --ref REF
+```
+
+### `action lease status`
+
+```text
+usage: workctl action lease status [-h] --lease-id LEASE_ID
+
+options:
+  -h, --help           show this help message and exit
+  --lease-id LEASE_ID
 ```
 
 ### `action status`

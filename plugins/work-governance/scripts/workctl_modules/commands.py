@@ -67,10 +67,20 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
         ),
     },
     "action": {
-        "commands": ["action authorize", "action consume", "action status"],
+        "commands": [
+            "action authorize",
+            "action consume",
+            "action status",
+            "action lease prepare",
+            "action lease issue",
+            "action lease authorize",
+            "action lease status",
+            "action lease revoke",
+        ],
         "note": (
-            "High-impact authority is current-turn, target, digest, expiry, and "
-            "single-consumption bound."
+            "High-impact actions still consume single-use capabilities; a route "
+            "lease only mints those capabilities inside a confirmed bounded scope; "
+            "use a new idempotency key for a consumed same-action retry."
         ),
     },
     "migration": {
