@@ -350,6 +350,32 @@ def write_plan(cwd: Path, frontmatter: dict[str, Any], body: str = "# Body\n") -
     plan_path(cwd).write_text(f"---\n{text}---\n{body}", encoding="utf-8")
 
 
+def rewrite_plan_with_pyyaml_escaped_continuation(path: Path) -> None:
+    """Inject the escaped quoted-scalar shape produced by PyYAML line wrapping."""
+    text = path.read_text(encoding="utf-8")
+    old = "  validation_standard: Every obligation has direct fresh evidence.\n"
+    new = "\n".join(
+        [
+            '  validation_standard: "Risk feature hit \\u5DF2\\',
+            "    \\u7531 fallback\\",
+            '    \\ text tied."',
+        ]
+    )
+    if old not in text:
+        raise AssertionError("validation_standard fixture line drifted")
+    path.write_text(text.replace(old, new + "\n", 1), encoding="utf-8")
+
+
+def rewrite_plan_with_invalid_double_quoted_escape(path: Path) -> None:
+    """Inject a genuinely invalid active Plan frontmatter syntax error."""
+    text = path.read_text(encoding="utf-8")
+    old = "  validation_standard: Every obligation has direct fresh evidence.\n"
+    new = '  validation_standard: "Bad \\q escape"\n'
+    if old not in text:
+        raise AssertionError("validation_standard fixture line drifted")
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
 def set_layout_action_revision(cwd: Path, revision: int) -> None:
     """Rewrite only the committed layout action revision in a test fixture."""
     version_path = cwd / ".work-governance" / "version.yaml"
@@ -1104,6 +1130,63 @@ def test_layout_not_applicable_commits_contract_without_plan(tmp_path: Path) -> 
         ).hexdigest()
     )
     assert run_workctl(tmp_path, "layout", "validate").stdout.strip() == "LAYOUT_VALID"
+
+
+def test_layout_validate_does_not_parse_active_plan_frontmatter(tmp_path: Path) -> None:
+    """Layout validation stays scoped to layout even when the active Plan is unreadable."""
+    run_workctl(tmp_path, "layout", "migrate")
+    write_legacy_plan_fixture(tmp_path, plan_id="PLAN-20260805-001")
+    rewrite_plan_with_invalid_double_quoted_escape(
+        tmp_path / ".work-governance" / "_Plan" / "PLAN-20260805-001.md"
+    )
+
+    layout = run_workctl(
+        tmp_path,
+        "layout",
+        "validate",
+        env={"WORK_GOVERNANCE_DISABLE_PYYAML": "1"},
+    )
+    status = json.loads(
+        run_workctl(
+            tmp_path,
+            "layout",
+            "status",
+            env={"WORK_GOVERNANCE_DISABLE_PYYAML": "1"},
+        ).stdout
+    )
+    plan = run_workctl(
+        tmp_path,
+        "plan",
+        "validate",
+        check=False,
+        env={"WORK_GOVERNANCE_DISABLE_PYYAML": "1"},
+    )
+
+    assert layout.stdout.strip() == "LAYOUT_VALID"
+    assert status["layout_state"] == "LAYOUT_READY"
+    assert status["plan_authority_state"] == "MIGRATION_RECOVERY_REQUIRED"
+    assert plan.returncode == 1
+    assert "INVALID_PLAN_FRONTMATTER_YAML" in plan.stderr
+    assert "Traceback" not in plan.stderr
+
+
+def test_pyyaml_escaped_continuation_plan_validates_without_pyyaml(
+    tmp_path: Path,
+) -> None:
+    """The fallback reader accepts the PyYAML continuation shape from the incident."""
+    run_workctl(tmp_path, "layout", "migrate")
+    write_legacy_plan_fixture(tmp_path, plan_id="PLAN-20260805-001")
+    active = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260805-001.md"
+    rewrite_plan_with_pyyaml_escaped_continuation(active)
+
+    validation = run_workctl(
+        tmp_path,
+        "plan",
+        "validate",
+        env={"WORK_GOVERNANCE_DISABLE_PYYAML": "1"},
+    )
+
+    assert validation.stdout.strip() == "PLAN_VALID"
 
 
 def test_layout_preserves_ordinary_business_plan_directory(tmp_path: Path) -> None:

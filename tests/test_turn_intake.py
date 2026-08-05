@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -65,11 +66,13 @@ def run_session_hook(
     *,
     source: str = "startup",
     plugin_root: Path = PLUGIN_ROOT,
+    environment_overrides: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """Run the real SessionStart hook for one temporary project."""
     environment = dict(os.environ)
     environment["PLUGIN_ROOT"] = str(plugin_root)
     environment["PATH"] = str(fake_bin) + os.pathsep + environment.get("PATH", "")
+    environment.update(environment_overrides or {})
     result = subprocess.run(
         [sys.executable, str(plugin_root / "hooks" / "session_start.py")],
         input=json.dumps(
@@ -97,6 +100,7 @@ def run_turn_hook(
     turn_id: str,
     prompt: str,
     plugin_root: Path = PLUGIN_ROOT,
+    environment_overrides: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """Run the real UserPromptSubmit hook against the current SessionStart receipt."""
     return run_raw_turn_hook(
@@ -108,6 +112,7 @@ def run_turn_hook(
             "prompt": prompt,
         },
         plugin_root=plugin_root,
+        environment_overrides=environment_overrides,
     )
 
 
@@ -115,10 +120,12 @@ def run_raw_turn_hook(
     payload: dict[str, object],
     *,
     plugin_root: Path = PLUGIN_ROOT,
+    environment_overrides: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """Run the prompt hook with one exact JSON input object."""
     environment = dict(os.environ)
     environment["PLUGIN_ROOT"] = str(plugin_root)
+    environment.update(environment_overrides or {})
     result = subprocess.run(
         [sys.executable, str(plugin_root / "hooks" / "user_prompt_submit.py")],
         input=json.dumps(payload, ensure_ascii=False),
@@ -169,6 +176,23 @@ def write_plan_frontmatter(
         f"---\n{yaml.safe_dump(frontmatter, sort_keys=False)}---\n{body}",
         encoding="utf-8",
     )
+
+
+def rewrite_plan_with_pyyaml_escaped_continuation(project: Path, plan_id: str) -> None:
+    """Inject the escaped quoted-scalar shape produced by PyYAML line wrapping."""
+    plan = project / ".work-governance" / "_Plan" / f"{plan_id}.md"
+    text = plan.read_text(encoding="utf-8")
+    old = "  validation_standard: Current intake covers the exact target.\n"
+    new = "\n".join(
+        [
+            '  validation_standard: "Risk feature hit \\u5DF2\\',
+            "    \\u7531 fallback\\",
+            '    \\ text tied."',
+        ]
+    )
+    if old not in text:
+        raise AssertionError("validation_standard fixture line drifted")
+    plan.write_text(text.replace(old, new + "\n", 1), encoding="utf-8")
 
 
 def runtime_controller(project: Path) -> tuple[Path, str]:
@@ -1098,6 +1122,53 @@ def test_turn_hook_hashes_exact_utf8_prompt_and_atomically_replaces(
     assert not list(turn_receipt.parent.glob(f".{turn_receipt.name}.*"))
 
 
+def test_turn_hook_stays_trusted_after_pyyaml_continuation_plan_resume(
+    tmp_path: Path,
+) -> None:
+    """A PyYAML-wrapped active Plan must not cause SESSION_RECEIPT_MISMATCH."""
+    project, session_id = prepare_admitted_project(tmp_path)
+    rewrite_plan_with_pyyaml_escaped_continuation(project, "PLAN-20260729-001")
+    fake_bin = tmp_path / "resume-bin"
+    fake_bin.mkdir()
+    install_fake_uv(fake_bin)
+
+    session_output = run_session_hook(
+        project,
+        fake_bin,
+        session_id,
+        source="resume",
+        environment_overrides={"WORK_GOVERNANCE_DISABLE_PYYAML": "1"},
+    )
+    turn_output = run_turn_hook(
+        project,
+        session_id=session_id,
+        turn_id="turn-after-pyyaml-continuation",
+        prompt="continue after fallback YAML continuation",
+        environment_overrides={"WORK_GOVERNANCE_DISABLE_PYYAML": "1"},
+    )
+    session_context = cast(dict[str, object], session_output["hookSpecificOutput"])[
+        "additionalContext"
+    ]
+    turn_context = cast(dict[str, object], turn_output["hookSpecificOutput"])[
+        "additionalContext"
+    ]
+    current_turn = read_json_object(
+        project
+        / ".work-governance"
+        / "runtime"
+        / "sessions"
+        / session_id
+        / "current-turn-receipt.json"
+    )
+
+    assert isinstance(session_context, str)
+    assert isinstance(turn_context, str)
+    assert "WORK_GOVERNANCE_BOOTSTRAP READY" in session_context
+    assert "WORK_GOVERNANCE_TURN_RECEIPT READY" in turn_context
+    assert "SESSION_RECEIPT_MISMATCH" not in turn_context
+    assert current_turn["kind"] == "work-governance-current-turn-receipt"
+
+
 def test_session_receipts_are_isolated_and_compaction_preserves_active_turn(
     tmp_path: Path,
 ) -> None:
@@ -1768,6 +1839,29 @@ def test_rollover_recovery_accepts_legacy_confirmation_payload_journal(
     journal_path = project / ".work-governance" / "_Plan" / ".rollovers" / "ROL-20260730-001.yaml"
     journal = yaml.safe_load(journal_path.read_text(encoding="utf-8"))
     journal.pop("confirmation_payload_version", None)
+    staged_plan = project / cast(str, journal["staged_plan"])
+    _, raw_frontmatter, body = staged_plan.read_text(encoding="utf-8").split(
+        "---\n",
+        2,
+    )
+    staged_frontmatter = yaml.safe_load(raw_frontmatter)
+    unsigned_frontmatter = copy.deepcopy(staged_frontmatter)
+    unsigned_confirmations = cast(
+        dict[str, object],
+        unsigned_frontmatter["confirmations"],
+    )
+    unsigned_confirmations["required"] = [
+        item
+        for item in cast(list[dict[str, object]], unsigned_confirmations["required"])
+        if item.get("id") != "C-PLAN-ROLLOVER"
+    ]
+    legacy_target_contract_sha256 = sha256_bytes(
+        (
+            f"---\n{yaml.safe_dump(unsigned_frontmatter, sort_keys=False)}---\n{body}"
+        ).encode()
+    )
+    assert legacy_target_contract_sha256 != journal["target_contract_sha256"]
+    journal["target_contract_sha256"] = legacy_target_contract_sha256
     legacy_payload = {
         "rollover_id": journal["rollover_id"],
         "source_plan": journal["source_plan"],
@@ -1777,7 +1871,7 @@ def test_rollover_recovery_accepts_legacy_confirmation_payload_journal(
             "plan_id": journal["target_plan_id"],
             "revision": 1,
             "prepared_plan_sha256": journal["prepared_plan_sha256"],
-            "target_contract_sha256": journal["target_contract_sha256"],
+            "target_contract_sha256": legacy_target_contract_sha256,
         },
         "intake_binding": journal["intake_binding"],
     }
@@ -1788,12 +1882,6 @@ def test_rollover_recovery_accepts_legacy_confirmation_payload_journal(
             separators=(",", ":"),
         ).encode("utf-8")
     )
-    staged_plan = project / cast(str, journal["staged_plan"])
-    _, raw_frontmatter, body = staged_plan.read_text(encoding="utf-8").split(
-        "---\n",
-        2,
-    )
-    staged_frontmatter = yaml.safe_load(raw_frontmatter)
     confirmations = cast(
         list[dict[str, object]],
         cast(dict[str, object], staged_frontmatter["confirmations"])["required"],

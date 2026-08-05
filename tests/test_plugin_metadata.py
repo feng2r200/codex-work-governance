@@ -239,6 +239,69 @@ plans:
     }
     dumped = safe_dump(payload, sort_keys=False, allow_unicode=False)
     assert safe_load(dumped) == payload
+    incident_payload = safe_load(
+        """checks:
+- "Risk feature hit \\u5DF2\\
+  \\u7531 fallback\\
+  \\ text tied."
+"""
+    )
+    assert incident_payload == {"checks": ["Risk feature hit 已由 fallback text tied."]}
+
+
+def test_yaml_compat_dump_is_fallback_readable_with_pyyaml_present() -> None:
+    """Controller writes must stay readable by the dependency-free cold-start path."""
+    namespace = runpy.run_path(
+        str(PLUGIN_ROOT / "scripts" / "workctl_modules" / "yaml_compat.py"),
+        run_name="yaml_compat_dump_test",
+    )
+    safe_dump = cast(Callable[..., str], namespace["safe_dump"])
+    safe_load = cast(Callable[[str], object], namespace["safe_load"])
+    payload = {
+        "checks": [
+            (
+                "Risk feature hit and check explanations no longer use the generic text "
+                '"\\u5DF2\\u7531\\u7EDF\\u4E00\\u89C4\\u5219\\u5F15\\u64CE\\u8BA1'
+                '\\u7B97\\u3002"; deterministic rule output carries meaningful Chinese '
+                "status text tied to the rule and data state."
+            )
+        ],
+        "scope": {"include": [], "exclude": []},
+        "created_at": "2026-08-05T15:53:30+00:00",
+        "numeric_text": "12345",
+        "ref": "user message 2026-07-23: continue",
+        "special_float_text": ".nan",
+        "hex_text": "0xFF",
+        "at_text": "@foo",
+        "dash_text": "- foo",
+        "sexagesimal_text": "1:20",
+        "trailing_space_text": "foo ",
+        "underscored_int_text": "1_000",
+        "truthy_text": "true",
+    }
+
+    dumped = safe_dump(payload, sort_keys=False, allow_unicode=False)
+    previous = os.environ.get("WORK_GOVERNANCE_DISABLE_PYYAML")
+    os.environ["WORK_GOVERNANCE_DISABLE_PYYAML"] = "1"
+    try:
+        fallback_namespace = runpy.run_path(
+            str(PLUGIN_ROOT / "scripts" / "workctl_modules" / "yaml_compat.py"),
+            run_name="yaml_compat_dump_fallback_test",
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("WORK_GOVERNANCE_DISABLE_PYYAML", None)
+        else:
+            os.environ["WORK_GOVERNANCE_DISABLE_PYYAML"] = previous
+    fallback_safe_load = cast(Callable[[str], object], fallback_namespace["safe_load"])
+
+    assert "\\\n" not in dumped
+    assert safe_load(dumped) == payload
+    assert fallback_safe_load(dumped) == payload
+    unicode_payload = {"line_break_text": ["foo\u0085bar", "foo\u2028bar", "foo\u2029bar"]}
+    unicode_dumped = safe_dump(unicode_payload, sort_keys=False, allow_unicode=True)
+    assert safe_load(unicode_dumped) == unicode_payload
+    assert fallback_safe_load(unicode_dumped) == unicode_payload
 
 
 def test_cli_reference_is_generated_from_the_current_parser() -> None:
