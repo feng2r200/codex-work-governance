@@ -73,6 +73,43 @@ The scheduler explains blockers but does not waive them. A task blocked by an
 artifact or independent review will not be advertised as ready only to fail on
 `task start`.
 
+## Reviewer Acquisition
+
+The candidate adds runtime-only reviewer acquisition caching so unavailable
+external reviewers do not consume repeated attempts:
+
+```sh
+plugins/work-governance/scripts/workctl review acquisition check \
+  --target-ref route \
+  --mechanism codex-exec-review \
+  --review-input-sha256 <sha256>
+
+codex exec review 2>&1 | \
+  plugins/work-governance/scripts/workctl review acquisition record-failure \
+    --target-ref route \
+    --mechanism codex-exec-review \
+    --review-input-sha256 <sha256> \
+    --attempt-ref runtime:reviewer/codex-exec/attempt-1 \
+    --exit-code 1
+
+plugins/work-governance/scripts/workctl review acquisition status
+```
+
+`record-failure` stores a redacted bounded excerpt, stable failure class,
+failure fingerprint, cooldown, and idempotency key under runtime state. It does
+not modify the Plan contract. `check` returns `VALIDATOR_UNAVAILABLE_CACHED`
+while the same target, mechanism, and input digest remain in cooldown. For
+environment-level classes (`network_proxy_blocked`, `auth_unavailable`,
+`command_missing`, `timeout`, and `attestor_untrusted`), `check` also suppresses
+fresh attempts for the same reviewer mechanism even when the reviewed input
+digest changes; callers must change the mechanism or wait out the cooldown.
+`record-failure --dry-run` reports the same rejection without writing runtime
+state, so a caller can classify a failure while still seeing an existing
+cooldown. This supports deterministic self-challenge only for ordinary
+reversible local tasks. Activation, route closeout, external actions, and
+confirmation-bound targets remain fail-closed without verified review or
+explicit risk acceptance.
+
 ## High-Impact Route Authority
 
 The candidate keeps `action authorize` and `action consume` as the exact,

@@ -52,8 +52,15 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
             "review status",
             "review request",
             "review attach --manifest PATH",
+            "review acquisition check",
+            "review acquisition record-failure",
+            "review acquisition status",
         ],
-        "note": "Review attachment uses the independent-review recorder and its trust rules.",
+        "note": (
+            "Review attachment uses the independent-review recorder and its trust rules; "
+            "reviewer acquisition caches exact and environment-level same-mechanism "
+            "validator-unavailable failures in runtime."
+        ),
     },
     "evidence": {
         "commands": [

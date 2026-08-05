@@ -284,7 +284,270 @@ def test_goal_gate_truth_and_review_public_views(tmp_path: Path) -> None:
     assert truth["truth_refs"] == []
     assert truth_conflicts["conflicts"] == []
     assert review["independent_validation"] == {}
+    assert review["reviewer_acquisition"] == []
     assert review_request["record_command"] == "review attach --manifest PATH"
+    assert "review acquisition check" in review_request["acquisition_commands"]
+    assert read_active_plan_bytes(tmp_path) == before
+
+
+def test_reviewer_acquisition_failure_cache_is_runtime_only(tmp_path: Path) -> None:
+    """Reviewer acquisition failures are cached without Plan churn or repeated retries."""
+    prepare_v4_plan(tmp_path)
+    before = read_active_plan_bytes(tmp_path)
+    review_input_sha256 = "f" * 64
+    scope_args = [
+        "--target-ref",
+        "route",
+        "--mechanism",
+        "codex-exec-review",
+        "--review-input-sha256",
+        review_input_sha256,
+    ]
+
+    initial = json.loads(
+        run_without_receipt(
+            tmp_path,
+            "review",
+            "acquisition",
+            "check",
+            *scope_args,
+        ).stdout
+    )
+    assert initial["attempt_allowed"] is True
+    assert initial["state"] == "attempt_allowed"
+    assert initial["cache_scope"] == "none"
+
+    dry_run = json.loads(
+        run_without_receipt(
+            tmp_path,
+            "review",
+            "acquisition",
+            "record-failure",
+            *scope_args,
+            "--attempt-ref",
+            "runtime:reviewer/codex-exec/dry-run",
+            "--exit-code",
+            "1",
+            "--summary",
+            "Proxy connection failed: HTTP CONNECT failed with status 403",
+            "--dry-run",
+        ).stdout
+    )
+    assert dry_run["state"] == "would_record_failure"
+    assert dry_run["write"] is False
+    assert not (tmp_path / ".work-governance" / "runtime" / "reviewer-acquisition").exists()
+
+    blocked_without_receipt = run_without_receipt(
+        tmp_path,
+        "review",
+        "acquisition",
+        "record-failure",
+        *scope_args,
+        "--attempt-ref",
+        "runtime:reviewer/codex-exec/attempt-1",
+        "--exit-code",
+        "1",
+        "--summary",
+        "Proxy connection failed: HTTP CONNECT failed with status 403",
+    )
+    assert blocked_without_receipt.returncode == 2
+    assert "BOOTSTRAP_RECEIPT_REQUIRED" in blocked_without_receipt.stderr
+
+    recorded = json.loads(
+        run_workctl(
+            tmp_path,
+            "review",
+            "acquisition",
+            "record-failure",
+            *scope_args,
+            "--attempt-ref",
+            "runtime:reviewer/codex-exec/attempt-1",
+            "--exit-code",
+            "1",
+            "--cooldown-seconds",
+            "3600",
+            "--idempotency-key",
+            "first",
+            input_text=(
+                "Authorization: Bearer sk-sensitive\n"
+                "Proxy connection failed: HTTP CONNECT failed with status 403\n"
+                "backend-api/codex/responses\n"
+            ),
+        ).stdout
+    )
+    assert recorded["attempt_allowed"] is False
+    assert recorded["state"] == "VALIDATOR_UNAVAILABLE_CACHED"
+    assert recorded["failure_class"] == "network_proxy_blocked"
+    assert recorded["attempt_count"] == 1
+    assert recorded["write"] is True
+    acquisition_record = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "reviewer-acquisition"
+        / f"{recorded['acquisition_id']}.json"
+    )
+    acquisition_payload = acquisition_record.read_text(encoding="utf-8")
+    assert "sk-sensitive" not in acquisition_payload
+    assert "[REDACTED]" in acquisition_payload
+    assert read_active_plan_bytes(tmp_path) == before
+
+    cached = json.loads(
+        run_without_receipt(
+            tmp_path,
+            "review",
+            "acquisition",
+            "check",
+            *scope_args,
+        ).stdout
+    )
+    assert cached["attempt_allowed"] is False
+    assert cached["state"] == "VALIDATOR_UNAVAILABLE_CACHED"
+    assert cached["cache_scope"] == "exact"
+    assert cached["failure_fingerprint"] == recorded["failure_fingerprint"]
+
+    idempotent = json.loads(
+        run_workctl(
+            tmp_path,
+            "review",
+            "acquisition",
+            "record-failure",
+            *scope_args,
+            "--attempt-ref",
+            "runtime:reviewer/codex-exec/attempt-1",
+            "--exit-code",
+            "1",
+            "--cooldown-seconds",
+            "3600",
+            "--idempotency-key",
+            "first",
+            input_text=(
+                "Authorization: Bearer sk-sensitive\n"
+                "Proxy connection failed: HTTP CONNECT failed with status 403\n"
+                "backend-api/codex/responses\n"
+            ),
+        ).stdout
+    )
+    assert idempotent["idempotent"] is True
+    assert idempotent["write"] is False
+    assert read_active_plan_bytes(tmp_path) == before
+
+    repeated_path = run_workctl(
+        tmp_path,
+        "review",
+        "acquisition",
+        "record-failure",
+        *scope_args,
+        "--attempt-ref",
+        "runtime:reviewer/codex-exec/attempt-2",
+        "--exit-code",
+        "1",
+        "--idempotency-key",
+        "second",
+        input_text="Proxy connection failed: HTTP CONNECT failed with status 403\n",
+        check=False,
+    )
+    assert repeated_path.returncode == 2
+    assert "REVIEWER_ACQUISITION_COOLDOWN_ACTIVE" in repeated_path.stderr
+
+    changed_input_args = [
+        "--target-ref",
+        "route",
+        "--mechanism",
+        "codex-exec-review",
+        "--review-input-sha256",
+        "e" * 64,
+    ]
+    mechanism_cached = json.loads(
+        run_without_receipt(
+            tmp_path,
+            "review",
+            "acquisition",
+            "check",
+            *changed_input_args,
+        ).stdout
+    )
+    assert mechanism_cached["attempt_allowed"] is False
+    assert mechanism_cached["state"] == "VALIDATOR_UNAVAILABLE_CACHED"
+    assert mechanism_cached["cache_scope"] == "mechanism"
+    assert mechanism_cached["acquisition_id"] == recorded["acquisition_id"]
+    assert mechanism_cached["requested_acquisition_id"] != recorded["acquisition_id"]
+    assert mechanism_cached["requested_target_ref"] == "route"
+    assert mechanism_cached["requested_review_input_sha256"] == "e" * 64
+
+    dry_run_suppressed = json.loads(
+        run_without_receipt(
+            tmp_path,
+            "review",
+            "acquisition",
+            "record-failure",
+            *changed_input_args,
+            "--attempt-ref",
+            "runtime:reviewer/codex-exec/dry-run-duplicate",
+            "--exit-code",
+            "1",
+            "--summary",
+            "Proxy connection failed: HTTP CONNECT failed with status 403",
+            "--dry-run",
+        ).stdout
+    )
+    assert dry_run_suppressed["state"] == "would_reject_failure_record"
+    assert dry_run_suppressed["reason"] == "REVIEWER_ACQUISITION_MECHANISM_COOLDOWN_ACTIVE"
+    assert dry_run_suppressed["cache_scope"] == "mechanism"
+    assert dry_run_suppressed["requested_review_input_sha256"] == "e" * 64
+    assert dry_run_suppressed["write"] is False
+
+    repeated_mechanism = run_workctl(
+        tmp_path,
+        "review",
+        "acquisition",
+        "record-failure",
+        *changed_input_args,
+        "--attempt-ref",
+        "runtime:reviewer/codex-exec/attempt-3",
+        "--exit-code",
+        "1",
+        "--idempotency-key",
+        "third",
+        input_text="Proxy connection failed: HTTP CONNECT failed with status 403\n",
+        check=False,
+    )
+    assert repeated_mechanism.returncode == 2
+    assert "REVIEWER_ACQUISITION_MECHANISM_COOLDOWN_ACTIVE" in repeated_mechanism.stderr
+
+    changed_mechanism_args = [
+        "--target-ref",
+        "route",
+        "--mechanism",
+        "codex-exec-review-alt",
+        "--review-input-sha256",
+        "e" * 64,
+    ]
+    changed_mechanism = json.loads(
+        run_without_receipt(
+            tmp_path,
+            "review",
+            "acquisition",
+            "check",
+            *changed_mechanism_args,
+        ).stdout
+    )
+    assert changed_mechanism["attempt_allowed"] is True
+    assert changed_mechanism["cache_scope"] == "none"
+
+    status = json.loads(
+        run_without_receipt(
+            tmp_path,
+            "review",
+            "acquisition",
+            "status",
+        ).stdout
+    )
+    assert len(status["reviewer_acquisition"]) == 1
+    assert status["reviewer_acquisition"][0]["failure_class"] == "network_proxy_blocked"
+
+    review_status = json.loads(run_without_receipt(tmp_path, "review", "status").stdout)
+    assert len(review_status["reviewer_acquisition"]) == 1
     assert read_active_plan_bytes(tmp_path) == before
 
 
@@ -294,6 +557,7 @@ def test_public_help_matches_candidate_boundaries(tmp_path: Path) -> None:
     migrate_help = json.loads(run_workctl(tmp_path, "help", "migrate").stdout)
     doctor_help = json.loads(run_workctl(tmp_path, "help", "doctor").stdout)
     action_help = json.loads(run_workctl(tmp_path, "help", "action").stdout)
+    review_help = json.loads(run_workctl(tmp_path, "help", "review").stdout)
     gate_help = subprocess.run(
         [sys.executable, str(SCRIPT), "gate", "open", "--help"],
         cwd=tmp_path,
@@ -308,6 +572,8 @@ def test_public_help_matches_candidate_boundaries(tmp_path: Path) -> None:
     assert doctor_help["commands"] == ["doctor", "doctor --clean-stale-transactions"]
     assert "action lease prepare" in action_help["commands"]
     assert "action lease authorize" in action_help["commands"]
+    assert "review acquisition check" in review_help["commands"]
+    assert "review acquisition record-failure" in review_help["commands"]
     assert gate_help.returncode == 0
     assert "--status {pending,accepted}" not in gate_help.stdout
 

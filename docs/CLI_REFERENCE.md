@@ -82,8 +82,11 @@ Contract edits require their existing confirmation and revision guards.
 - `review status`
 - `review request`
 - `review attach --manifest PATH`
+- `review acquisition check`
+- `review acquisition record-failure`
+- `review acquisition status`
 
-Review attachment uses the independent-review recorder and its trust rules.
+Review attachment uses the independent-review recorder and its trust rules; reviewer acquisition caches exact and environment-level same-mechanism validator-unavailable failures in runtime.
 
 ### `task`
 
@@ -1271,6 +1274,64 @@ options:
   --expected-revision EXPECTED_REVISION
   --turn-receipt-sha256 TURN_RECEIPT_SHA256
   --expected-intake-sha256 EXPECTED_INTAKE_SHA256
+```
+
+### `review acquisition check`
+
+```text
+usage: workctl review acquisition check [-h] --target-ref TARGET_REF
+                                        --mechanism MECHANISM
+                                        --review-input-sha256 REVIEW_INPUT_SHA256
+
+options:
+  -h, --help            show this help message and exit
+  --target-ref TARGET_REF
+  --mechanism MECHANISM
+  --review-input-sha256 REVIEW_INPUT_SHA256
+```
+
+### `review acquisition record-failure`
+
+```text
+usage: workctl review acquisition record-failure [-h] --target-ref TARGET_REF
+                                                 --mechanism MECHANISM
+                                                 --review-input-sha256 REVIEW_INPUT_SHA256
+                                                 --attempt-ref ATTEMPT_REF
+                                                 --exit-code EXIT_CODE
+                                                 [--failure-class {auto,attestor_untrusted,auth_unavailable,command_missing,network_proxy_blocked,timeout,unknown_failure}]
+                                                 [--summary SUMMARY]
+                                                 [--failure-stdin]
+                                                 [--failure-from-file FAILURE_FROM_FILE]
+                                                 [--cooldown-seconds COOLDOWN_SECONDS]
+                                                 [--idempotency-key IDEMPOTENCY_KEY]
+                                                 [--dry-run]
+
+options:
+  -h, --help            show this help message and exit
+  --target-ref TARGET_REF
+  --mechanism MECHANISM
+  --review-input-sha256 REVIEW_INPUT_SHA256
+  --attempt-ref ATTEMPT_REF
+  --exit-code EXIT_CODE
+  --failure-class {auto,attestor_untrusted,auth_unavailable,command_missing,network_proxy_blocked,timeout,unknown_failure}
+  --summary SUMMARY
+  --failure-stdin
+  --failure-from-file FAILURE_FROM_FILE
+  --cooldown-seconds COOLDOWN_SECONDS
+  --idempotency-key IDEMPOTENCY_KEY
+  --dry-run
+```
+
+### `review acquisition status`
+
+```text
+usage: workctl review acquisition status [-h] [--target-ref TARGET_REF]
+                                         [--mechanism MECHANISM]
+
+options:
+  -h, --help            show this help message and exit
+  --target-ref TARGET_REF
+  --mechanism MECHANISM
 ```
 
 ### `review attach`

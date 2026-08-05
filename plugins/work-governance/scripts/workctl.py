@@ -222,6 +222,26 @@ EVIDENCE_CAPTURE_MAX_BYTES = 1024 * 1024
 EVIDENCE_CAPTURE_KIND_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 EVIDENCE_CAPTURE_IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 EVIDENCE_CAPTURE_ID_RE = re.compile(r"^E-\d{8}T\d{6}Z-[0-9a-f]{12}$")
+REVIEWER_ACQUISITION_ID_RE = re.compile(r"^RA-[0-9a-f]{32}$")
+REVIEWER_ACQUISITION_MECHANISM_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+REVIEWER_ACQUISITION_MAX_BYTES = 64 * 1024
+REVIEWER_ACQUISITION_MAX_COOLDOWN_SECONDS = 86400
+REVIEWER_ACQUISITION_MAX_ATTEMPTS = 32
+REVIEWER_FAILURE_CLASSES = {
+    "network_proxy_blocked",
+    "auth_unavailable",
+    "command_missing",
+    "timeout",
+    "attestor_untrusted",
+    "unknown_failure",
+}
+MECHANISM_SCOPED_REVIEWER_FAILURE_CLASSES = {
+    "network_proxy_blocked",
+    "auth_unavailable",
+    "command_missing",
+    "timeout",
+    "attestor_untrusted",
+}
 TASK_TRANSITIONS = {
     "pending": {"in_progress", "blocked", "skipped"},
     "in_progress": {"blocked", "verified", "skipped"},
@@ -12673,8 +12693,15 @@ def cmd_workflow_help(args: argparse.Namespace) -> None:
                 "review status",
                 "review request",
                 "review attach --manifest PATH",
+                "review acquisition check",
+                "review acquisition record-failure",
+                "review acquisition status",
             ],
-            "note": "Review attachment uses the independent-review recorder and its trust rules.",
+            "note": (
+                "Review attachment uses the independent-review recorder and its trust rules; "
+                "reviewer acquisition caches exact and environment-level same-mechanism "
+                "validator-unavailable failures in runtime."
+            ),
         },
         "evidence": {
             "commands": [
@@ -12842,16 +12869,681 @@ def cmd_truth_conflicts(_args: argparse.Namespace) -> None:
     )
 
 
+def reviewer_acquisition_directory(root: Path) -> Path:
+    """Return the runtime cache for reviewer-acquisition attempts."""
+    path = runtime_dir(root) / "reviewer-acquisition"
+    reject_symlink_components(root, path)
+    return path
+
+
+def reviewer_acquisition_id(
+    *,
+    plan_id: str,
+    target_ref: str,
+    mechanism: str,
+    review_input_sha256: str,
+) -> str:
+    """Derive the stable cache key for one reviewer acquisition route."""
+    binding = {
+        "plan_id": plan_id,
+        "target_ref": target_ref,
+        "mechanism": mechanism,
+        "review_input_sha256": review_input_sha256,
+    }
+    digest = sha256_bytes(
+        json.dumps(binding, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    return f"RA-{digest[:32]}"
+
+
+def reviewer_acquisition_path(root: Path, acquisition_id: str) -> Path:
+    """Return the runtime record path for one acquisition cache entry."""
+    if REVIEWER_ACQUISITION_ID_RE.fullmatch(acquisition_id) is None:
+        raise WorkctlError("REVIEWER_ACQUISITION_ID_INVALID")
+    path = reviewer_acquisition_directory(root) / f"{acquisition_id}.json"
+    reject_symlink_components(root, path)
+    return path
+
+
+def reviewer_acquisition_digest(record: Mapping[str, object]) -> str:
+    """Hash a reviewer-acquisition record without its self-authenticating digest."""
+    projection = {key: value for key, value in record.items() if key != "record_sha256"}
+    return sha256_bytes(
+        json.dumps(
+            projection,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    )
+
+
+def validate_reviewer_acquisition_scope(args: argparse.Namespace, plan_id: str) -> str:
+    """Validate and return the stable reviewer-acquisition runtime key."""
+    if not valid_target_ref(args.target_ref):
+        raise WorkctlError("REVIEWER_ACQUISITION_TARGET_INVALID")
+    if REVIEWER_ACQUISITION_MECHANISM_RE.fullmatch(args.mechanism) is None:
+        raise WorkctlError("REVIEWER_ACQUISITION_MECHANISM_INVALID")
+    if SHA256_RE.fullmatch(args.review_input_sha256) is None:
+        raise WorkctlError("REVIEWER_ACQUISITION_INPUT_SHA256_INVALID")
+    return reviewer_acquisition_id(
+        plan_id=plan_id,
+        target_ref=args.target_ref,
+        mechanism=args.mechanism,
+        review_input_sha256=args.review_input_sha256,
+    )
+
+
+def load_reviewer_acquisition_record(root: Path, acquisition_id: str) -> dict[str, Any]:
+    """Load and validate one reviewer-acquisition runtime record."""
+    path = reviewer_acquisition_path(root, acquisition_id)
+    if path.is_symlink() or not path.is_file():
+        raise WorkctlError("REVIEWER_ACQUISITION_NOT_FOUND")
+    try:
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WorkctlError("REVIEWER_ACQUISITION_INVALID") from exc
+    if not isinstance(payload, dict):
+        raise WorkctlError("REVIEWER_ACQUISITION_INVALID")
+    record = cast(dict[str, Any], payload)
+    required = {
+        "schema_version",
+        "kind",
+        "acquisition_id",
+        "plan_id",
+        "target_ref",
+        "mechanism",
+        "review_input_sha256",
+        "state",
+        "created_at",
+        "updated_at",
+        "cooldown_until",
+        "latest_attempt_index",
+        "attempts",
+        "record_sha256",
+    }
+    attempts = record.get("attempts")
+    invalid = (
+        set(record) != required
+        or record.get("schema_version") != 1
+        or record.get("kind") != "work-governance-reviewer-acquisition"
+        or record.get("acquisition_id") != acquisition_id
+        or not isinstance(record.get("plan_id"), str)
+        or PLAN_ID_RE.fullmatch(str(record["plan_id"])) is None
+        or not valid_target_ref(record.get("target_ref"))
+        or not isinstance(record.get("mechanism"), str)
+        or REVIEWER_ACQUISITION_MECHANISM_RE.fullmatch(str(record["mechanism"])) is None
+        or not isinstance(record.get("review_input_sha256"), str)
+        or SHA256_RE.fullmatch(str(record["review_input_sha256"])) is None
+        or record.get("state") != "validator_unavailable"
+        or not isinstance(record.get("cooldown_until"), str)
+        or type(record.get("latest_attempt_index")) is not int
+        or not isinstance(attempts, list)
+        or not attempts
+        or len(attempts) > REVIEWER_ACQUISITION_MAX_ATTEMPTS
+        or not isinstance(record.get("record_sha256"), str)
+        or SHA256_RE.fullmatch(str(record["record_sha256"])) is None
+        or reviewer_acquisition_digest(record) != record.get("record_sha256")
+    )
+    if invalid:
+        raise WorkctlError("REVIEWER_ACQUISITION_INVALID")
+    parse_authorization_time(record["created_at"])
+    parse_authorization_time(record["updated_at"])
+    parse_authorization_time(record["cooldown_until"])
+    attempt_values = cast(list[object], attempts)
+    seen_keys: set[str] = set()
+    for index, item in enumerate(attempt_values, start=1):
+        if (
+            not isinstance(item, dict)
+            or type(item.get("index")) is not int
+            or item.get("index") != index
+            or not valid_reference(item.get("attempt_ref"))
+            or not isinstance(item.get("idempotency_key"), str)
+            or EVIDENCE_CAPTURE_IDEMPOTENCY_RE.fullmatch(str(item["idempotency_key"])) is None
+            or item["idempotency_key"] in seen_keys
+            or item.get("outcome") != "failed"
+            or item.get("failure_class") not in REVIEWER_FAILURE_CLASSES
+            or not isinstance(item.get("failure_fingerprint"), str)
+            or SHA256_RE.fullmatch(str(item["failure_fingerprint"])) is None
+            or not isinstance(item.get("failure_summary"), str)
+            or not item["failure_summary"]
+            or not isinstance(item.get("redacted_excerpt"), str)
+            or not isinstance(item.get("output_sha256"), str)
+            or SHA256_RE.fullmatch(str(item["output_sha256"])) is None
+            or type(item.get("output_size")) is not int
+            or int(cast(int, item["output_size"])) < 0
+            or type(item.get("exit_code")) is not int
+            or type(item.get("cooldown_seconds")) is not int
+            or not (
+                1
+                <= int(cast(int, item["cooldown_seconds"]))
+                <= REVIEWER_ACQUISITION_MAX_COOLDOWN_SECONDS
+            )
+            or not isinstance(item.get("cooldown_until"), str)
+            or not isinstance(item.get("recorded_at"), str)
+        ):
+            raise WorkctlError("REVIEWER_ACQUISITION_INVALID")
+        parse_authorization_time(item["cooldown_until"])
+        parse_authorization_time(item["recorded_at"])
+        seen_keys.add(str(item["idempotency_key"]))
+    latest_index = int(cast(int, record["latest_attempt_index"]))
+    if latest_index != len(attempt_values):
+        raise WorkctlError("REVIEWER_ACQUISITION_INVALID")
+    return record
+
+
+def try_load_reviewer_acquisition_record(
+    root: Path,
+    acquisition_id: str,
+) -> dict[str, Any] | None:
+    """Return a reviewer-acquisition record when it exists."""
+    path = reviewer_acquisition_path(root, acquisition_id)
+    if not path.exists() and not path.is_symlink():
+        return None
+    return load_reviewer_acquisition_record(root, acquisition_id)
+
+
+def load_reviewer_acquisition_records(root: Path, plan_id: str) -> list[dict[str, Any]]:
+    """Load every reviewer-acquisition record for one Plan."""
+    directory = reviewer_acquisition_directory(root)
+    if not directory.exists():
+        return []
+    if directory.is_symlink() or not directory.is_dir():
+        raise WorkctlError("REVIEWER_ACQUISITION_DIRECTORY_INVALID")
+    records: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("RA-*.json")):
+        record = load_reviewer_acquisition_record(root, path.stem)
+        if record.get("plan_id") == plan_id:
+            records.append(record)
+    return records
+
+
+def write_reviewer_acquisition_record(root: Path, record: dict[str, Any]) -> None:
+    """Persist one reviewer-acquisition runtime record with a fresh self digest."""
+    record["record_sha256"] = reviewer_acquisition_digest(record)
+    write_atomic(
+        reviewer_acquisition_path(root, str(record["acquisition_id"])),
+        json.dumps(record, indent=2, sort_keys=True) + "\n",
+    )
+
+
+def read_reviewer_failure_bytes(root: Path, args: argparse.Namespace) -> bytes:
+    """Read reviewer failure output from stdin or one project-local file."""
+    if args.failure_stdin and args.failure_from_file is not None:
+        raise WorkctlError("REVIEWER_ACQUISITION_FAILURE_SOURCE_CONFLICT")
+    if isinstance(args.failure_from_file, str):
+        input_path = checked_project_path(root, args.failure_from_file)
+        reject_symlink_components(root, input_path)
+        if input_path.is_symlink() or not input_path.is_file():
+            raise WorkctlError("REVIEWER_ACQUISITION_FAILURE_SOURCE_MISSING")
+        content = input_path.read_bytes()
+    else:
+        content = sys.stdin.buffer.read()
+    if len(content) > REVIEWER_ACQUISITION_MAX_BYTES:
+        raise WorkctlError("REVIEWER_ACQUISITION_FAILURE_TOO_LARGE")
+    return content
+
+
+def reviewer_failure_signals(text: str) -> list[str]:
+    """Extract stable, non-secret signals from reviewer acquisition failure text."""
+    lowered = text.lower()
+    signals: list[str] = []
+    if "proxy connection failed" in lowered or "http connect failed with status 403" in lowered:
+        signals.append("proxy-connect-403")
+    if "backend-api/codex/responses" in lowered:
+        signals.append("codex-responses-api")
+    if "backend-api/codex/models" in lowered:
+        signals.append("codex-models-api")
+    if "authentication" in lowered or "unauthorized" in lowered or "status 401" in lowered:
+        signals.append("auth-unavailable")
+    if "command not found" in lowered or "no such file or directory" in lowered:
+        signals.append("command-missing")
+    if "timed out" in lowered or "timeout" in lowered:
+        signals.append("timeout")
+    if "trusted_attestation" in lowered or "attestor" in lowered:
+        signals.append("attestor-untrusted")
+    if signals:
+        return sorted(set(signals))
+    normalized: list[str] = []
+    for line in text.splitlines():
+        stripped = re.sub(r"\d{4}-\d{2}-\d{2}T\S+", "<timestamp>", line.strip())
+        stripped = re.sub(r"[0-9a-f]{32,64}", "<hex>", stripped)
+        if stripped:
+            normalized.append(stripped[:160])
+        if len(normalized) >= 6:
+            break
+    return normalized or ["empty-output"]
+
+
+def classify_reviewer_failure(text: str, exit_code: int, requested: str) -> str:
+    """Classify a reviewer acquisition failure into a stable governance category."""
+    if requested != "auto":
+        if requested not in REVIEWER_FAILURE_CLASSES:
+            raise WorkctlError("REVIEWER_ACQUISITION_FAILURE_CLASS_INVALID")
+        return requested
+    lowered = text.lower()
+    if "proxy connection failed" in lowered or "http connect failed with status 403" in lowered:
+        return "network_proxy_blocked"
+    if "authentication" in lowered or "unauthorized" in lowered or "status 401" in lowered:
+        return "auth_unavailable"
+    if "command not found" in lowered or "no such file or directory" in lowered:
+        return "command_missing"
+    if "timed out" in lowered or "timeout" in lowered:
+        return "timeout"
+    if "trusted_attestation" in lowered or "attestor" in lowered:
+        return "attestor_untrusted"
+    if exit_code == 124:
+        return "timeout"
+    return "unknown_failure"
+
+
+def reviewer_failure_fingerprint(
+    *,
+    mechanism: str,
+    failure_class: str,
+    signals: Sequence[str],
+) -> str:
+    """Hash the stable failure classification and signals for cooldown matching."""
+    payload = {
+        "mechanism": mechanism,
+        "failure_class": failure_class,
+        "signals": list(signals),
+    }
+    return sha256_bytes(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+
+
+def reviewer_failure_summary(text: str, explicit_summary: str | None, failure_class: str) -> str:
+    """Return a redacted, bounded failure summary for the runtime record."""
+    if isinstance(explicit_summary, str) and explicit_summary.strip():
+        summary = redact_capture_text(explicit_summary.strip())
+    else:
+        summary = next((line.strip() for line in text.splitlines() if line.strip()), failure_class)
+    summary = summary[:512]
+    return summary or failure_class
+
+
+def reviewer_failure_components(root: Path, args: argparse.Namespace) -> dict[str, object]:
+    """Read and classify one reviewer-acquisition failure payload."""
+    raw_failure = read_reviewer_failure_bytes(root, args)
+    redacted_failure, _text_source = redact_capture_bytes(raw_failure)
+    text = redacted_failure.decode("utf-8")
+    summary = reviewer_failure_summary(text, args.summary, args.failure_class)
+    if not text.strip() and not summary.strip():
+        raise WorkctlError("REVIEWER_ACQUISITION_FAILURE_REQUIRED")
+    classification_text = f"{summary}\n{text}"
+    failure_class = classify_reviewer_failure(
+        classification_text,
+        args.exit_code,
+        args.failure_class,
+    )
+    signals = reviewer_failure_signals(classification_text)
+    return {
+        "text": text,
+        "summary": summary,
+        "failure_class": failure_class,
+        "failure_fingerprint": reviewer_failure_fingerprint(
+            mechanism=args.mechanism,
+            failure_class=failure_class,
+            signals=signals,
+        ),
+        "output_sha256": sha256_bytes(redacted_failure),
+        "output_size": len(redacted_failure),
+    }
+
+
+def reviewer_acquisition_latest(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the latest attempt from a validated reviewer-acquisition record."""
+    attempts = cast(list[dict[str, Any]], record["attempts"])
+    return attempts[int(cast(int, record["latest_attempt_index"])) - 1]
+
+
+def reviewer_acquisition_cooldown_active(record: Mapping[str, Any]) -> bool:
+    """Return whether a reviewer-acquisition cooldown is still active."""
+    return datetime.now(UTC) < parse_authorization_time(record["cooldown_until"])
+
+
+def reviewer_acquisition_mechanism_cache(
+    root: Path,
+    plan_id: str,
+    mechanism: str,
+    *,
+    exclude_acquisition_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Return the active mechanism-scoped cache entry for a reviewer route."""
+    candidates: list[dict[str, Any]] = []
+    for record in load_reviewer_acquisition_records(root, plan_id):
+        if record["acquisition_id"] == exclude_acquisition_id:
+            continue
+        if record["mechanism"] != mechanism:
+            continue
+        latest = reviewer_acquisition_latest(record)
+        if latest["failure_class"] not in MECHANISM_SCOPED_REVIEWER_FAILURE_CLASSES:
+            continue
+        if reviewer_acquisition_cooldown_active(record):
+            candidates.append(record)
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda record: (
+            parse_authorization_time(record["cooldown_until"]),
+            str(record["acquisition_id"]),
+        ),
+    )
+
+
+def reviewer_acquisition_projection(
+    record: Mapping[str, Any],
+    *,
+    cache_scope: str | None = None,
+    requested_acquisition_id: str | None = None,
+) -> dict[str, Any]:
+    """Project a reviewer-acquisition record into a compact status payload."""
+    latest = reviewer_acquisition_latest(record)
+    cached = reviewer_acquisition_cooldown_active(record)
+    payload = {
+        "acquisition_id": record["acquisition_id"],
+        "plan_id": record["plan_id"],
+        "target_ref": record["target_ref"],
+        "mechanism": record["mechanism"],
+        "review_input_sha256": record["review_input_sha256"],
+        "attempt_allowed": not cached,
+        "state": "VALIDATOR_UNAVAILABLE_CACHED" if cached else "cooldown_expired",
+        "failure_class": latest["failure_class"],
+        "failure_fingerprint": latest["failure_fingerprint"],
+        "failure_summary": latest["failure_summary"],
+        "attempt_count": len(cast(list[object], record["attempts"])),
+        "cooldown_until": record["cooldown_until"],
+        "latest_attempt_ref": latest["attempt_ref"],
+        "latest_recorded_at": latest["recorded_at"],
+        "fallback_boundary": (
+            "deterministic_self_challenge_for_reversible_local_only; "
+            "high_impact_targets_remain_fail_closed"
+        ),
+    }
+    if cache_scope is not None:
+        payload["cache_scope"] = cache_scope
+    if requested_acquisition_id is not None:
+        payload["requested_acquisition_id"] = requested_acquisition_id
+    return payload
+
+
+def cmd_review_acquisition_check(args: argparse.Namespace) -> None:
+    """Tell the caller whether a reviewer acquisition attempt should run."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    plan_id = str(doc.frontmatter["plan_id"])
+    acquisition_id = validate_reviewer_acquisition_scope(args, plan_id)
+    record = try_load_reviewer_acquisition_record(root, acquisition_id)
+    if record is not None:
+        payload = reviewer_acquisition_projection(record, cache_scope="exact")
+        if payload["attempt_allowed"]:
+            mechanism_cache = reviewer_acquisition_mechanism_cache(
+                root,
+                plan_id,
+                args.mechanism,
+                exclude_acquisition_id=acquisition_id,
+            )
+            if mechanism_cache is not None:
+                payload = reviewer_acquisition_projection(
+                    mechanism_cache,
+                    cache_scope="mechanism",
+                    requested_acquisition_id=acquisition_id,
+                )
+                payload["requested_target_ref"] = args.target_ref
+                payload["requested_review_input_sha256"] = args.review_input_sha256
+    else:
+        mechanism_cache = reviewer_acquisition_mechanism_cache(root, plan_id, args.mechanism)
+        if mechanism_cache is not None:
+            payload = reviewer_acquisition_projection(
+                mechanism_cache,
+                cache_scope="mechanism",
+                requested_acquisition_id=acquisition_id,
+            )
+            payload["requested_target_ref"] = args.target_ref
+            payload["requested_review_input_sha256"] = args.review_input_sha256
+        else:
+            payload = {
+                "plan_id": plan_id,
+                "target_ref": args.target_ref,
+                "mechanism": args.mechanism,
+                "review_input_sha256": args.review_input_sha256,
+                "acquisition_id": acquisition_id,
+                "attempt_allowed": True,
+                "state": "attempt_allowed",
+                "cache_scope": "none",
+            }
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_review_acquisition_status(args: argparse.Namespace) -> None:
+    """Show reviewer-acquisition failure caches for the active Plan."""
+    root = project_root()
+    require_governed_authority(root)
+    doc = load_plan(active_plan_path(root))
+    plan_id = str(doc.frontmatter["plan_id"])
+    records = load_reviewer_acquisition_records(root, plan_id)
+    projections = [reviewer_acquisition_projection(record) for record in records]
+    if args.target_ref is not None:
+        if not valid_target_ref(args.target_ref):
+            raise WorkctlError("REVIEWER_ACQUISITION_TARGET_INVALID")
+        projections = [item for item in projections if item["target_ref"] == args.target_ref]
+    if args.mechanism is not None:
+        if REVIEWER_ACQUISITION_MECHANISM_RE.fullmatch(args.mechanism) is None:
+            raise WorkctlError("REVIEWER_ACQUISITION_MECHANISM_INVALID")
+        projections = [item for item in projections if item["mechanism"] == args.mechanism]
+    print(
+        json.dumps(
+            {
+                "plan_id": plan_id,
+                "reviewer_acquisition": projections,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def cmd_review_acquisition_record_failure(args: argparse.Namespace) -> None:
+    """Record a failed reviewer acquisition and install a bounded cooldown."""
+    root = project_root()
+    if args.exit_code < -9999 or args.exit_code > 9999:
+        raise WorkctlError("REVIEWER_ACQUISITION_EXIT_CODE_INVALID")
+    if not 1 <= args.cooldown_seconds <= REVIEWER_ACQUISITION_MAX_COOLDOWN_SECONDS:
+        raise WorkctlError("REVIEWER_ACQUISITION_COOLDOWN_INVALID")
+    if not valid_reference(args.attempt_ref):
+        raise WorkctlError("REVIEWER_ACQUISITION_ATTEMPT_REF_INVALID")
+    idempotency_key = args.idempotency_key or "default"
+    if EVIDENCE_CAPTURE_IDEMPOTENCY_RE.fullmatch(idempotency_key) is None:
+        raise WorkctlError("REVIEWER_ACQUISITION_IDEMPOTENCY_KEY_INVALID")
+    failure = reviewer_failure_components(root, args)
+    if args.dry_run:
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        require_plan_contract_ready(doc.frontmatter)
+        plan_id = str(doc.frontmatter["plan_id"])
+        acquisition_id = validate_reviewer_acquisition_scope(args, plan_id)
+        existing = try_load_reviewer_acquisition_record(root, acquisition_id)
+        if existing is not None and reviewer_acquisition_cooldown_active(existing):
+            payload = reviewer_acquisition_projection(existing, cache_scope="exact")
+            payload.update(
+                {
+                    "state": "would_reject_failure_record",
+                    "reason": "REVIEWER_ACQUISITION_COOLDOWN_ACTIVE",
+                    "proposed_failure_class": failure["failure_class"],
+                    "proposed_failure_fingerprint": failure["failure_fingerprint"],
+                    "proposed_failure_summary": failure["summary"],
+                    "write": False,
+                }
+            )
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return
+        mechanism_cache = reviewer_acquisition_mechanism_cache(
+            root,
+            plan_id,
+            args.mechanism,
+            exclude_acquisition_id=acquisition_id,
+        )
+        if mechanism_cache is not None:
+            payload = reviewer_acquisition_projection(
+                mechanism_cache,
+                cache_scope="mechanism",
+                requested_acquisition_id=acquisition_id,
+            )
+            payload["requested_target_ref"] = args.target_ref
+            payload["requested_review_input_sha256"] = args.review_input_sha256
+            payload.update(
+                {
+                    "state": "would_reject_failure_record",
+                    "reason": "REVIEWER_ACQUISITION_MECHANISM_COOLDOWN_ACTIVE",
+                    "proposed_failure_class": failure["failure_class"],
+                    "proposed_failure_fingerprint": failure["failure_fingerprint"],
+                    "proposed_failure_summary": failure["summary"],
+                    "write": False,
+                }
+            )
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return
+        recorded_at = utc_now()
+        cooldown_until = (
+            parse_authorization_time(recorded_at) + timedelta(seconds=args.cooldown_seconds)
+        ).isoformat()
+        payload = {
+            "plan_id": plan_id,
+            "target_ref": args.target_ref,
+            "mechanism": args.mechanism,
+            "review_input_sha256": args.review_input_sha256,
+            "acquisition_id": acquisition_id,
+            "attempt_allowed": False,
+            "state": "would_record_failure",
+            "failure_class": failure["failure_class"],
+            "failure_fingerprint": failure["failure_fingerprint"],
+            "failure_summary": failure["summary"],
+            "cooldown_until": cooldown_until,
+            "write": False,
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        require_plan_contract_ready(doc.frontmatter)
+        plan_id = str(doc.frontmatter["plan_id"])
+        acquisition_id = validate_reviewer_acquisition_scope(args, plan_id)
+        failure_class = str(failure["failure_class"])
+        failure_fingerprint = str(failure["failure_fingerprint"])
+        output_sha256 = str(failure["output_sha256"])
+        existing = try_load_reviewer_acquisition_record(root, acquisition_id)
+        if existing is not None:
+            attempts = cast(list[dict[str, Any]], existing["attempts"])
+            prior = next(
+                (
+                    attempt
+                    for attempt in attempts
+                    if attempt.get("idempotency_key") == idempotency_key
+                ),
+                None,
+            )
+            if prior is not None:
+                if (
+                    prior.get("attempt_ref") != args.attempt_ref
+                    or prior.get("failure_class") != failure_class
+                    or prior.get("failure_fingerprint") != failure_fingerprint
+                    or prior.get("output_sha256") != output_sha256
+                    or prior.get("exit_code") != args.exit_code
+                    or prior.get("cooldown_seconds") != args.cooldown_seconds
+                ):
+                    raise WorkctlError("REVIEWER_ACQUISITION_IDEMPOTENCY_CONFLICT")
+                payload = reviewer_acquisition_projection(existing)
+                payload["idempotent"] = True
+                payload["write"] = False
+                print(json.dumps(payload, indent=2, sort_keys=True))
+                return
+            if reviewer_acquisition_cooldown_active(existing):
+                raise WorkctlError("REVIEWER_ACQUISITION_COOLDOWN_ACTIVE")
+            if len(attempts) >= REVIEWER_ACQUISITION_MAX_ATTEMPTS:
+                raise WorkctlError("REVIEWER_ACQUISITION_ATTEMPTS_EXHAUSTED")
+        mechanism_cache = reviewer_acquisition_mechanism_cache(
+            root,
+            plan_id,
+            args.mechanism,
+            exclude_acquisition_id=acquisition_id,
+        )
+        if mechanism_cache is not None:
+            raise WorkctlError(
+                "REVIEWER_ACQUISITION_MECHANISM_COOLDOWN_ACTIVE: "
+                f"{mechanism_cache['acquisition_id']}"
+            )
+        if existing is not None:
+            attempts = cast(list[dict[str, Any]], existing["attempts"])
+            record = existing
+            created_at = str(existing["created_at"])
+            attempt_index = len(attempts) + 1
+        else:
+            record = {
+                "schema_version": 1,
+                "kind": "work-governance-reviewer-acquisition",
+                "acquisition_id": acquisition_id,
+                "plan_id": plan_id,
+                "target_ref": args.target_ref,
+                "mechanism": args.mechanism,
+                "review_input_sha256": args.review_input_sha256,
+                "state": "validator_unavailable",
+                "attempts": [],
+            }
+            created_at = utc_now()
+            attempt_index = 1
+        recorded_at = utc_now()
+        cooldown_until = (
+            parse_authorization_time(recorded_at) + timedelta(seconds=args.cooldown_seconds)
+        ).isoformat()
+        attempt = {
+            "index": attempt_index,
+            "attempt_ref": args.attempt_ref,
+            "idempotency_key": idempotency_key,
+            "outcome": "failed",
+            "failure_class": failure_class,
+            "failure_fingerprint": failure_fingerprint,
+            "failure_summary": failure["summary"],
+            "redacted_excerpt": str(failure["text"])[:2048],
+            "output_sha256": output_sha256,
+            "output_size": failure["output_size"],
+            "exit_code": args.exit_code,
+            "cooldown_seconds": args.cooldown_seconds,
+            "cooldown_until": cooldown_until,
+            "recorded_at": recorded_at,
+        }
+        attempts = cast(list[dict[str, Any]], record["attempts"])
+        attempts.append(attempt)
+        record["created_at"] = created_at
+        record["updated_at"] = recorded_at
+        record["cooldown_until"] = cooldown_until
+        record["latest_attempt_index"] = attempt_index
+        write_reviewer_acquisition_record(root, record)
+        payload = reviewer_acquisition_projection(record)
+        payload["idempotent"] = False
+        payload["write"] = True
+        print(json.dumps(payload, indent=2, sort_keys=True))
+
+
 def cmd_review_status(_args: argparse.Namespace) -> None:
     """Show active independent-validation records."""
     root = project_root()
     require_governed_authority(root)
     doc = load_plan(active_plan_path(root))
+    plan_id = str(doc.frontmatter["plan_id"])
     print(
         json.dumps(
             {
-                "plan_id": doc.frontmatter.get("plan_id"),
+                "plan_id": plan_id,
                 "independent_validation": doc.frontmatter.get("independent_validation", {}),
+                "reviewer_acquisition": [
+                    reviewer_acquisition_projection(record)
+                    for record in load_reviewer_acquisition_records(root, plan_id)
+                ],
             },
             indent=2,
             sort_keys=True,
@@ -12870,6 +13562,11 @@ def cmd_review_request(_args: argparse.Namespace) -> None:
                     "evidence_audit",
                 ],
                 "record_command": "review attach --manifest PATH",
+                "acquisition_commands": [
+                    "review acquisition check",
+                    "review acquisition record-failure",
+                    "review acquisition status",
+                ],
             },
             indent=2,
             sort_keys=True,
@@ -19366,6 +20063,40 @@ def build_parser() -> argparse.ArgumentParser:
     review_request.set_defaults(func=cmd_review_request)
     review_status = review_sub.add_parser("status")
     review_status.set_defaults(func=cmd_review_status)
+    review_acquisition = review_sub.add_parser("acquisition")
+    review_acquisition_sub = review_acquisition.add_subparsers(
+        dest="review_acquisition_action",
+        required=True,
+    )
+
+    def add_review_acquisition_scope_args(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("--target-ref", required=True)
+        parser.add_argument("--mechanism", required=True)
+        parser.add_argument("--review-input-sha256", required=True)
+
+    review_acquisition_check = review_acquisition_sub.add_parser("check")
+    add_review_acquisition_scope_args(review_acquisition_check)
+    review_acquisition_check.set_defaults(func=cmd_review_acquisition_check)
+    review_acquisition_status = review_acquisition_sub.add_parser("status")
+    review_acquisition_status.add_argument("--target-ref")
+    review_acquisition_status.add_argument("--mechanism")
+    review_acquisition_status.set_defaults(func=cmd_review_acquisition_status)
+    review_acquisition_record = review_acquisition_sub.add_parser("record-failure")
+    add_review_acquisition_scope_args(review_acquisition_record)
+    review_acquisition_record.add_argument("--attempt-ref", required=True)
+    review_acquisition_record.add_argument("--exit-code", type=int, required=True)
+    review_acquisition_record.add_argument(
+        "--failure-class",
+        choices=["auto", *sorted(REVIEWER_FAILURE_CLASSES)],
+        default="auto",
+    )
+    review_acquisition_record.add_argument("--summary")
+    review_acquisition_record.add_argument("--failure-stdin", action="store_true")
+    review_acquisition_record.add_argument("--failure-from-file")
+    review_acquisition_record.add_argument("--cooldown-seconds", type=int, default=900)
+    review_acquisition_record.add_argument("--idempotency-key")
+    review_acquisition_record.add_argument("--dry-run", action="store_true")
+    review_acquisition_record.set_defaults(func=cmd_review_acquisition_record_failure)
     review_attach = review_sub.add_parser("attach")
     review_attach.add_argument("--manifest", required=True)
     review_attach.add_argument("--expected-revision", type=int, required=True)
@@ -19934,6 +20665,10 @@ def command_mutates_state(args: argparse.Namespace) -> bool:
     if args.domain == "truth":
         return cast(str, args.truth_action) not in {"list", "conflicts"}
     if args.domain == "review":
+        if args.review_action == "acquisition":
+            if args.review_acquisition_action in {"check", "status"}:
+                return False
+            return not bool(args.dry_run)
         return cast(str, args.review_action) not in {"status", "request"}
     if args.domain != "plan":
         return False
