@@ -29,6 +29,7 @@ TRUTH_PATH = (
     / "SKILL.md"
 )
 README_PATH = REPOSITORY_ROOT / "README.md"
+CANDIDATE_NOTES_PATH = REPOSITORY_ROOT / "docs" / "WORK_GOVERNANCE_1_1_0_CANDIDATE.md"
 
 SUMMARY_FIELDS = (
     "当前子任务：",
@@ -311,3 +312,54 @@ def test_retirement_is_distinct_from_completion_and_excluded_routes_stay_out() -
     assert "The result is `UNMANAGED_EMPTY`" in readme
     assert "modality-specific" not in public_contract
     assert "large-session rollover" not in public_contract
+
+
+def test_devbooks_patterns_are_codex_native_and_lightweight() -> None:
+    """Borrow useful DevBooks checks without importing its heavy platform model."""
+    intake = L0_PATH.read_text(encoding="utf-8")
+    demand = L1_PATH.read_text(encoding="utf-8")
+    validation = L4_PATH.read_text(encoding="utf-8")
+    deviation = L5_PATH.read_text(encoding="utf-8")
+    closeout = L6_PATH.read_text(encoding="utf-8")
+    independent = INDEPENDENT_PATH.read_text(encoding="utf-8")
+    truth = TRUTH_PATH.read_text(encoding="utf-8")
+    readme = README_PATH.read_text(encoding="utf-8")
+    candidate_notes = CANDIDATE_NOTES_PATH.read_text(encoding="utf-8")
+    normalized_demand = " ".join(demand.split())
+    normalized_deviation = " ".join(deviation.split())
+    normalized_closeout = " ".join(closeout.split())
+    public_contract = "\n".join(
+        (
+            intake,
+            demand,
+            validation,
+            deviation,
+            closeout,
+            independent,
+            truth,
+            readme,
+            candidate_notes,
+        )
+    )
+
+    for gate in ("Value", "Impact", "Cognition", "Verification"):
+        assert gate in intake
+    assert "These gates are an intake thinking aid, not a required Plan artifact" in intake
+    assert "Bind every must-have obligation to at least one acceptance anchor" in demand
+    assert "weak-link" in demand
+    assert "Do not create a second parallel checklist system" in normalized_demand
+    assert "runtime-scoped until it proves a material contract change" in normalized_deviation
+    assert "Do not create a separate deviation log, Plan revision, or contract churn" in (
+        normalized_deviation
+    )
+    assert "Claim-boundary audit" in validation
+    assert "claim-boundary check" in closeout
+    assert "workctl help <workflow>" in normalized_closeout
+    assert "generated `docs/CLI_REFERENCE.md`" in independent
+    assert "External playbooks, framework drafts" in truth
+    assert "DevBooks-Derived Skill Hardening" in candidate_notes
+    assert "They are modeled as ordinary obligations/checks" in readme
+    assert "does not adopt DevBooks change packages" in candidate_notes
+
+    for forbidden in ("~/.claude", "git push  #", "Task 工具", "主 Agent 只编排"):
+        assert forbidden not in public_contract

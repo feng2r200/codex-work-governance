@@ -14,6 +14,12 @@ is unknown, or more evidence is needed. Those are Agent-owned diagnosis and
 exploration unless they prove a material change to goal, scope, behavior,
 cost, safety, or delivery shape.
 
+Keep deviation evidence runtime-scoped until it proves a material contract
+change. A weak-link suspicion, stale artifact suspicion, review note, or
+between-slice audit finding may freeze only the affected downstream targets
+while the agent checks the deciding evidence. Do not create a separate
+deviation log, Plan revision, or contract churn for every observation.
+
 Immediate actions:
 
 - stop downstream execution;

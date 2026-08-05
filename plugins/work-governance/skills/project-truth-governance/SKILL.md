@@ -34,6 +34,12 @@ or ownership requires it.
 Do not create `_Truth/` by default. If no authority exists, propose the smallest
 project-native location and ask for confirmation before making it authoritative.
 
+External playbooks, framework drafts, prior candidate notes, and migration
+designs are method inputs by default. They may inspire a local rule, but they
+do not become project truth until the exact rule is promoted into the current
+project authority, backed by evidence, and confirmed when it changes future
+execution.
+
 ## Promotion Rule
 
 Discussion, logs, candidate plans, and memory do not become project truth by

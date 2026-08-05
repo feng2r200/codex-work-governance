@@ -21,6 +21,27 @@ This candidate must not replace the user's live plugin, marketplace entry,
 shared cache, Codex configuration, or active sessions before explicit
 confirmation.
 
+## DevBooks-Derived Skill Hardening
+
+The candidate selectively absorbs ideas from `dev-playbooks-cn` as
+Codex-native guidance, not as a parallel authority system. The imported pattern
+is lightweight:
+
+- use Value, Impact, Cognition, and Verification as intake decision gates;
+- bind each must obligation to an acceptance anchor and evidence boundary;
+- model docs, templates, CLI help, migration notes, rollback information,
+  activation steps, and handoff wording as weak-link obligations when they are
+  in scope;
+- keep weak-link and deviation observations in runtime or review evidence until
+  they prove a material contract change;
+- audit final candidate claims against the executable `workctl help <workflow>`
+  and generated `docs/CLI_REFERENCE.md` surface.
+
+The candidate intentionally does not adopt DevBooks change packages, fixed
+stage tables, Archiver promotion, non-Codex platform paths, default remote-CI
+trigger assumptions, or a rule that the main Codex agent may only orchestrate
+SubAgents.
+
 ## Evidence Capture
 
 Use direct capture for command output or project-local artifacts:
