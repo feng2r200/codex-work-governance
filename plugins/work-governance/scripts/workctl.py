@@ -34,6 +34,7 @@ import yaml
 
 try:
     from workctl_modules import WORKFLOW_HELP as MODULE_WORKFLOW_HELP
+    from workctl_modules import WORKFLOW_HELP_ALIASES as MODULE_WORKFLOW_HELP_ALIASES
     from workctl_modules import blocked_task_targets as MODULE_BLOCKED_TASK_TARGETS
     from workctl_modules import canonical_evidence_bytes as MODULE_CANONICAL_EVIDENCE_BYTES
     from workctl_modules import next_suggestion as MODULE_NEXT_SUGGESTION
@@ -44,6 +45,7 @@ try:
     from workctl_modules.storage import canonical_event_bytes, redacted_copy
 except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     MODULE_WORKFLOW_HELP = None  # type: ignore[assignment,misc]
+    MODULE_WORKFLOW_HELP_ALIASES = None  # type: ignore[assignment,misc]
     MODULE_BLOCKED_TASK_TARGETS = None  # type: ignore[assignment]
     MODULE_CANONICAL_EVIDENCE_BYTES = None  # type: ignore[assignment]
     MODULE_NEXT_SUGGESTION = None  # type: ignore[assignment]
@@ -11995,9 +11997,15 @@ def cmd_workflow_help(args: argparse.Namespace) -> None:
             ),
         },
     }
+    workflow_aliases: dict[str, str] = {
+        "migrate": "migration",
+    }
     if isinstance(MODULE_WORKFLOW_HELP, dict):
         workflows = MODULE_WORKFLOW_HELP
+    if isinstance(MODULE_WORKFLOW_HELP_ALIASES, dict):
+        workflow_aliases = MODULE_WORKFLOW_HELP_ALIASES
     workflow = args.workflow or "plan"
+    workflow = workflow_aliases.get(workflow, workflow)
     if workflow not in workflows:
         raise WorkctlError(f"UNKNOWN_WORKFLOW: {workflow}")
     print(json.dumps(workflows[workflow], indent=2, sort_keys=True))
@@ -18550,6 +18558,7 @@ def build_parser() -> argparse.ArgumentParser:
             "task",
             "evidence",
             "action",
+            "migrate",
             "migration",
             "goal",
             "gate",

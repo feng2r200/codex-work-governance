@@ -265,6 +265,7 @@ def test_goal_gate_truth_and_review_public_views(tmp_path: Path) -> None:
 def test_public_help_matches_candidate_boundaries(tmp_path: Path) -> None:
     """Workflow and parser help expose implemented candidate commands without overclaiming."""
     migration_help = json.loads(run_workctl(tmp_path, "help", "migration").stdout)
+    migrate_help = json.loads(run_workctl(tmp_path, "help", "migrate").stdout)
     doctor_help = json.loads(run_workctl(tmp_path, "help", "doctor").stdout)
     gate_help = subprocess.run(
         [sys.executable, str(SCRIPT), "gate", "open", "--help"],
@@ -274,6 +275,7 @@ def test_public_help_matches_candidate_boundaries(tmp_path: Path) -> None:
         check=False,
     )
 
+    assert migrate_help == migration_help
     assert "migrate rollback-info" in migration_help["commands"]
     assert "doctor" in migration_help["commands"]
     assert doctor_help["commands"] == ["doctor", "doctor --clean-stale-transactions"]
