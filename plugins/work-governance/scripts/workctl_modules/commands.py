@@ -91,3 +91,7 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
         ),
     },
 }
+
+WORKFLOW_HELP_ALIASES: Final[dict[str, str]] = {
+    "migrate": "migration",
+}

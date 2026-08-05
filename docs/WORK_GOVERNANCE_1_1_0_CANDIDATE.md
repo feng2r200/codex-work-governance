@@ -122,6 +122,11 @@ Candidate activation evidence must include a review record or explicit degraded
 review explanation, a test report, and a replay validation summary. Unit tests
 alone do not prove live plugin activation.
 
+The temporary pre-activation Codex evaluation is recorded in
+`docs/WORK_GOVERNANCE_1_1_0_TEMP_EVAL.md`. That report validates the isolated
+candidate controller and temporary Codex installation path, but it intentionally
+does not claim live activation.
+
 ## Confirmation Gate
 
 Stop before live activation and ask for:

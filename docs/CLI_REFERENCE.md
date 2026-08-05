@@ -336,10 +336,10 @@ options:
 
 ```text
 usage: workctl help [-h]
-                    [{plan,task,evidence,action,migration,goal,gate,truth,review,doctor}]
+                    [{plan,task,evidence,action,migrate,migration,goal,gate,truth,review,doctor}]
 
 positional arguments:
-  {plan,task,evidence,action,migration,goal,gate,truth,review,doctor}
+  {plan,task,evidence,action,migrate,migration,goal,gate,truth,review,doctor}
 
 options:
   -h, --help            show this help message and exit
