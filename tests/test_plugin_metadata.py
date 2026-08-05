@@ -193,6 +193,50 @@ plans:
             }
         ],
     }
+    task_payload = safe_load(
+        """tasks:
+- id: T-010
+  description: 'After C-HOOK-ARCHITECTURE-2026 acceptance, implement the staged Hook
+    architecture: remove ordinary v5 turn-receipt dependence, preserve explicit mutable-v4
+    compatibility.'
+  status: verified
+"""
+    )
+
+    assert task_payload == {
+        "tasks": [
+            {
+                "id": "T-010",
+                "description": (
+                    "After C-HOOK-ARCHITECTURE-2026 acceptance, implement the staged Hook "
+                    "architecture: remove ordinary v5 turn-receipt dependence, preserve "
+                    "explicit mutable-v4 compatibility."
+                ),
+                "status": "verified",
+            }
+        ]
+    }
+    route_payload = safe_load(
+        """route:
+  validation_standard: The repair is atomic, expected-revision and current-intake
+    bound, covers task:T-008, activation, and route, and preserves history.
+  confirmation_gate: none
+  blocks:
+  - task:T-008
+  - activation
+"""
+    )
+
+    assert route_payload == {
+        "route": {
+            "validation_standard": (
+                "The repair is atomic, expected-revision and current-intake bound, "
+                "covers task:T-008, activation, and route, and preserves history."
+            ),
+            "confirmation_gate": "none",
+            "blocks": ["task:T-008", "activation"],
+        }
+    }
     dumped = safe_dump(payload, sort_keys=False, allow_unicode=False)
     assert safe_load(dumped) == payload
 
