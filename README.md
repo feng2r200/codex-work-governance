@@ -186,13 +186,15 @@ controller to perform layout migration or recovery for this SessionStart; it
 cannot authorize Plan or other ordinary writes. A same-session SessionStart
 replaces it, so an older capability for that session fails closed; capabilities
 from different sessions neither authorize nor supersede one another.
-The hook then prewarms the controller's pinned PEP 723 dependency
-in `.work-governance/cache/uv`, trying the existing cache offline before using
-permitted dependency access, disables Python downloads, and runs migration,
-validation, and status commands offline. Exact Plugin builds and incremental
-state live in the ignored session-scoped bootstrap receipt; detailed command
-evidence stays under `.work-governance/evidence/`. The runtime snapshot remains
-available if the Codex Plugin cache entry is replaced or removed after
+The hook then proves the controller can start from `.work-governance/cache/uv`,
+trying the existing cache offline before using permitted dependency access only
+for a script-dependency miss, disables Python downloads, and runs migration,
+validation, and status commands offline. The bundled controller has a
+stdlib-backed YAML compatibility layer, so a fresh project does not need PyPI
+or a pre-existing PyYAML wheel just to bootstrap. Exact Plugin builds and
+incremental state live in the ignored session-scoped bootstrap receipt; detailed
+command evidence stays under `.work-governance/evidence/`. The runtime snapshot
+remains available if the Codex Plugin cache entry is replaced or removed after
 SessionStart.
 
 When a same-session compaction emits another SessionStart and the trusted
@@ -245,6 +247,15 @@ high-frequency workflow surface is available through
 `<receipt-bound-workctl> help <workflow>`. The complete parser-generated
 command and option reference is [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md);
 regenerate it after changing `build_parser()`:
+
+The wrapper first tries the project-local UV cache offline. If the failure is a
+script-dependency cache miss, it performs one normal `uv run` prewarm using the
+same project-local cache, then continues. Set
+`WORK_GOVERNANCE_STRICT_OFFLINE=1` to keep fail-closed offline-only behavior.
+SessionStart remains the required trusted path for Plan-controlled work;
+wrapper prewarm only makes `workctl help`, diagnostics, and later
+receipt-bound controller calls executable if a future controller adds a script
+dependency.
 
 ```sh
 .venv/bin/python plugins/work-governance/scripts/generate_cli_reference.py

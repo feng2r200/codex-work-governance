@@ -47,13 +47,13 @@ SubAgents.
 Use direct capture for command output or project-local artifacts:
 
 ```sh
-some_command | plugins/work-governance/scripts/workctl evidence capture \
+some_command | <workctl> evidence capture \
   --task T-001 \
   --kind command-output \
   --summary "validation output" \
   --idempotency-key task-T-001-validation
 
-plugins/work-governance/scripts/workctl evidence capture \
+<workctl> evidence capture \
   --task T-001 \
   --kind artifact \
   --summary "validation report" \
@@ -68,10 +68,23 @@ content-addressed metadata record to
 `evidence_ref`. Schema-v5 task binding updates runtime state and the event
 ledger only; the Plan contract bytes remain stable.
 
+In these examples, `<workctl>` means either the exact receipt-bound controller
+command emitted by SessionStart or the absolute path to this source candidate's
+`plugins/work-governance/scripts/workctl` wrapper. Do not derive a relative
+`plugins/.../workctl` path from an arbitrary project cwd.
+
+The wrapper keeps the controller cache under the target project's
+`.work-governance/cache/uv`: it tries that cache offline first and performs one
+normal prewarm only for a script-dependency cache miss. The current controller
+uses a stdlib-backed YAML compatibility layer, so cold-start help, diagnostics,
+layout recovery, and hook bootstrap do not depend on fetching PyYAML. Set
+`WORK_GOVERNANCE_STRICT_OFFLINE=1` for environments that must never resolve
+dependencies during direct CLI use.
+
 The legacy canonical Plan evidence path remains supported for compatibility:
 
 ```sh
-plugins/work-governance/scripts/workctl plan evidence record --stdin
+<workctl> plan evidence record --stdin
 ```
 
 Direct capture is conservative rather than omniscient. Text evidence is
@@ -100,20 +113,20 @@ The candidate adds runtime-only reviewer acquisition caching so unavailable
 external reviewers do not consume repeated attempts:
 
 ```sh
-plugins/work-governance/scripts/workctl review acquisition check \
+<workctl> review acquisition check \
   --target-ref route \
   --mechanism codex-exec-review \
   --review-input-sha256 <sha256>
 
 codex exec review 2>&1 | \
-  plugins/work-governance/scripts/workctl review acquisition record-failure \
+  <workctl> review acquisition record-failure \
     --target-ref route \
     --mechanism codex-exec-review \
     --review-input-sha256 <sha256> \
     --attempt-ref runtime:reviewer/codex-exec/attempt-1 \
     --exit-code 1
 
-plugins/work-governance/scripts/workctl review acquisition status
+<workctl> review acquisition status
 ```
 
 `record-failure` stores a redacted bounded excerpt, stable failure class,
@@ -139,12 +152,12 @@ optional route authority lease for repeated same-kind actions after the user
 has already accepted a bounded route decision:
 
 ```sh
-plugins/work-governance/scripts/workctl action lease prepare \
+<workctl> action lease prepare \
   --action-kind production_change \
   --target-prefix project:service/example-production/ \
   --allowed-action-sha256 <sha256>
 
-plugins/work-governance/scripts/workctl action lease issue \
+<workctl> action lease issue \
   --confirmation-id C-ROUTE-ACTION-LEASE \
   --basis-sha256 <lease-basis-sha256> \
   --ref <current-request-ref> \
@@ -153,7 +166,7 @@ plugins/work-governance/scripts/workctl action lease issue \
   --target-prefix project:service/example-production/ \
   --allowed-action-sha256 <sha256>
 
-plugins/work-governance/scripts/workctl action lease authorize \
+<workctl> action lease authorize \
   --lease-id LEASE-... \
   --action-kind production_change \
   --target-ref project:service/example-production/deploy \
@@ -174,14 +187,14 @@ validation evidence, pilot evidence, activation evidence, or drift checks.
 Use explicit schema-v5 migration commands:
 
 ```sh
-plugins/work-governance/scripts/workctl migrate inspect
-plugins/work-governance/scripts/workctl migrate apply --dry-run
-plugins/work-governance/scripts/workctl migrate apply \
+<workctl> migrate inspect
+<workctl> migrate apply --dry-run
+<workctl> migrate apply \
   --confirmation C-MIGRATION-SCHEMA-V5 \
   --expected-contract-revision <revision>
-plugins/work-governance/scripts/workctl migrate recover --migration-id MIG-YYYYMMDD-NNN
-plugins/work-governance/scripts/workctl migrate rollback-info --migration-id MIG-YYYYMMDD-NNN
-plugins/work-governance/scripts/workctl doctor
+<workctl> migrate recover --migration-id MIG-YYYYMMDD-NNN
+<workctl> migrate rollback-info --migration-id MIG-YYYYMMDD-NNN
+<workctl> doctor
 ```
 
 `migrate inspect`, `migrate apply --dry-run`, `migrate rollback-info`, and the

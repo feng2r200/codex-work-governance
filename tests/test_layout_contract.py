@@ -74,15 +74,12 @@ def test_public_contracts_name_only_canonical_normal_paths() -> None:
     assert 'worktree_root="$repo_root/.worktree"' not in git_skill
 
 
-def test_controller_dependency_and_project_lock_are_exactly_pinned() -> None:
-    """Bootstrap prewarm and repository validation resolve the same PyYAML."""
+def test_controller_runtime_bootstrap_has_no_external_script_dependency() -> None:
+    """Cold hook bootstrap must not require fetching PyYAML into a new cache."""
     controller = CONTROLLER.read_text(encoding="utf-8")
-    pyproject = (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    lock = (REPOSITORY_ROOT / "uv.lock").read_text(encoding="utf-8")
 
-    assert '# dependencies = ["pyyaml==6.0.3"]' in controller
-    assert '"pyyaml==6.0.3"' in pyproject
-    assert 'specifier = "==6.0.3"' in lock
+    assert "# dependencies = []" in controller
+    assert "yaml_compat" in controller
 
 
 def test_public_contract_explains_proposal_and_executed_hook_boundaries() -> None:
