@@ -3499,7 +3499,10 @@ def active_plan_path(root: Path) -> Path:
 def load_yaml_file(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise WorkctlError(f"MISSING_FILE: {path}")
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise WorkctlError(f"INVALID_YAML: {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise WorkctlError(f"INVALID_YAML: {path} must contain a mapping")
     return data
@@ -3508,14 +3511,20 @@ def load_yaml_file(path: Path) -> dict[str, Any]:
 def load_plan(path: Path) -> PlanDocument:
     if not path.is_file():
         raise WorkctlError(f"MISSING_FILE: {path}")
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise WorkctlError(f"INVALID_PLAN: {path}: {exc}") from exc
     if not text.startswith("---\n"):
         raise WorkctlError("INVALID_PLAN: plan must start with YAML frontmatter")
     try:
         _, raw_frontmatter, body = text.split("---\n", 2)
     except ValueError as exc:
         raise WorkctlError("INVALID_PLAN: plan frontmatter is not closed") from exc
-    frontmatter = yaml.safe_load(raw_frontmatter)
+    try:
+        frontmatter = yaml.safe_load(raw_frontmatter)
+    except yaml.YAMLError as exc:
+        raise WorkctlError(f"INVALID_PLAN_FRONTMATTER_YAML: {path}: {exc}") from exc
     if not isinstance(frontmatter, dict):
         raise WorkctlError("INVALID_PLAN: plan frontmatter must be a mapping")
     return PlanDocument(path=path, frontmatter=frontmatter, body=body)
@@ -6132,7 +6141,7 @@ def cmd_layout_status(_args: argparse.Namespace) -> None:
 
 
 def cmd_layout_validate(_args: argparse.Namespace) -> None:
-    """Validate committed layout and, when present, its active Plan structure."""
+    """Validate committed layout without promoting active Plan parse failures."""
     root = project_root()
     report = inspect_layout(root)
     if report.state != "LAYOUT_READY":
@@ -6140,14 +6149,6 @@ def cmd_layout_validate(_args: argparse.Namespace) -> None:
         suffix = f": {details}" if details else ""
         raise WorkctlError(f"LAYOUT_INVALID: {report.state}{suffix}")
     errors = layout_version_errors(root)
-    if index_path(root).exists():
-        errors.extend(
-            validate_plan(
-                root,
-                reject_blocking_artifacts=False,
-                require_governed=False,
-            )
-        )
     if errors:
         raise WorkctlError("LAYOUT_INVALID: " + "; ".join(errors))
     print("LAYOUT_VALID")
@@ -19716,12 +19717,31 @@ def validate_rollover_journal(
             for item in unsigned_confirmations["required"]
             if not isinstance(item, dict) or item.get("id") != "C-PLAN-ROLLOVER"
         ]
-        unsigned_doc = PlanDocument(
+        expected_unsigned_frontmatter = copy.deepcopy(prepared_doc.frontmatter)
+        expected_unsigned_frontmatter["intake"] = copy.deepcopy(target_doc.frontmatter["intake"])
+        expected_unsigned_frontmatter["authority"] = {
+            "model": AUTHORITY_MODEL,
+            "state": AUTHORITY_STATE,
+            "canonical_plan_id": target_plan_id,
+            "rollover_id": rollover_id,
+            "predecessor": source,
+            "sources": [],
+            "confirmations": {"rollover": "C-PLAN-ROLLOVER"},
+        }
+        expected_unsigned_doc = PlanDocument(
             staged_plan,
-            unsigned_frontmatter,
-            target_doc.body,
+            expected_unsigned_frontmatter,
+            prepared_doc.body,
         )
-        if sha256_bytes(dump_plan(unsigned_doc).encode()) != target_contract_sha256:
+        unsigned_contract_bytes_match = sha256_bytes(
+            dump_plan(expected_unsigned_doc).encode()
+        ) == target_contract_sha256
+        legacy_unsigned_semantics_match = (
+            confirmation_payload_version == 1
+            and unsigned_frontmatter == expected_unsigned_frontmatter
+            and target_doc.body == prepared_doc.body
+        )
+        if not unsigned_contract_bytes_match and not legacy_unsigned_semantics_match:
             raise WorkctlError("ROLLOVER_TARGET_CONTRACT_HASH_MISMATCH")
     expected_frontmatter = copy.deepcopy(prepared_doc.frontmatter)
     if STRICT_INITIAL_INTAKE_REQUIRED:
@@ -19741,7 +19761,15 @@ def validate_rollover_journal(
         expected_frontmatter,
         prepared_doc.body,
     )
-    if staged_plan.read_bytes() != dump_plan(expected_target_doc).encode():
+    target_bytes_match = staged_plan.read_bytes() == dump_plan(expected_target_doc).encode()
+    legacy_versionless_semantics_match = (
+        confirmation_payload_version == 1
+        and target_doc.frontmatter == expected_frontmatter
+        and target_doc.body == prepared_doc.body
+    )
+    # Versionless rollover journals may carry bytes produced by the old dumper.
+    # Their staged hash and transaction binding still protect the exact file.
+    if not target_bytes_match and not legacy_versionless_semantics_match:
         raise WorkctlError("STAGED_ROLLOVER_TARGET_CONTRACT_MISMATCH")
 
     staged_index_value = load_yaml_file(staged_index)

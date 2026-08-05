@@ -184,6 +184,22 @@ def write_schema3_plan_fixture(project: Path, plan_id: str, title: str) -> Path:
     return plan
 
 
+def rewrite_plan_with_pyyaml_escaped_continuation(plan: Path) -> None:
+    """Inject the escaped quoted-scalar shape produced by PyYAML line wrapping."""
+    text = plan.read_text(encoding="utf-8")
+    old = "  validation_standard: Every obligation has direct fresh evidence.\n"
+    new = "\n".join(
+        [
+            '  validation_standard: "Risk feature hit \\u5DF2\\',
+            "    \\u7531 fallback\\",
+            '    \\ text tied."',
+        ]
+    )
+    if old not in text:
+        raise AssertionError("validation_standard fixture line drifted")
+    plan.write_text(text.replace(old, new + "\n", 1), encoding="utf-8")
+
+
 def write_active_proposal_journal(
     namespace: dict[str, Any],
     governance: Path,
@@ -948,6 +964,51 @@ def test_migrated_layout_remains_ready_on_second_session(tmp_path: Path) -> None
     assert re.fullmatch(r"LAY-\d{8}T\d{6}Z-[0-9a-f]{8}-[0-9a-f]{32}", transactions[0])
     assert receipt["status"] == "READY"
     assert not (project / "_Plan").exists()
+
+
+def test_sessionstart_ready_when_active_plan_uses_pyyaml_continuation(
+    tmp_path: Path,
+) -> None:
+    """The fallback reader no longer lets PyYAML continuation break bootstrap."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv_log = tmp_path / "uv.jsonl"
+    install_fake_uv(fake_bin, uv_log)
+    project = tmp_path / "project"
+    project.mkdir()
+    run_hook(project, fake_bin, uv_log)
+    plan = write_schema3_plan_fixture(project, "PLAN-20260805-001", "Fallback incident")
+    rewrite_plan_with_pyyaml_escaped_continuation(plan)
+
+    resumed = run_hook(
+        project,
+        fake_bin,
+        uv_log,
+        payload={
+            "session_id": "plan-yaml-incident",
+            "cwd": str(project),
+            "hook_event_name": "SessionStart",
+            "source": "resume",
+        },
+        environment_overrides={"WORK_GOVERNANCE_DISABLE_PYYAML": "1"},
+    )
+    context = resumed["hookSpecificOutput"]["additionalContext"]
+    status = json.loads(
+        subprocess.run(
+            [sys.executable, str(WORKCTL), "layout", "status"],
+            cwd=project,
+            text=True,
+            capture_output=True,
+            check=True,
+            env={**os.environ, "WORK_GOVERNANCE_DISABLE_PYYAML": "1"},
+        ).stdout
+    )
+
+    assert "WORK_GOVERNANCE_BOOTSTRAP READY" in context
+    assert "ENVIRONMENT_BLOCKED" not in context
+    assert status["layout_state"] == "LAYOUT_READY"
+    assert status["plan_authority_state"] == "GOVERNED_ACTIVE"
+    assert status["plan_authority_blocking_reasons"] == []
 
 
 def test_action_four_sessionstart_upgrades_action_three_scope_residual(
