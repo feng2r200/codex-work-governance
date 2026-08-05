@@ -1,0 +1,404 @@
+{
+  "schema_version": 1,
+  "evaluation_id": "WG-CODEX-EFFECT-EVAL-20260805",
+  "date": "2026-08-05",
+  "candidate": {
+    "evaluated_source_commit": "7372acb",
+    "branch": "feat/goal-driven-light-governance",
+    "plugin_version": "1.1.0+codex.20260805000000",
+    "activation_status": "not_activated",
+    "live_plugin_observed": "1.0.7+codex.20260804122047"
+  },
+  "boundaries": {
+    "activation_gate": "CONFIRM_ACTIVATE_WORK_GOVERNANCE_1_1_0",
+    "live_plugin_unchanged": true,
+    "marketplace_or_cache_switch": false,
+    "push": false,
+    "auth_secret_copy": false,
+    "temporary_codex_home": "<system-temp>/wg-codex-effect-home-20260805b"
+  },
+  "metrics": [
+    "plan_contract_churn",
+    "temporary_evidence_dependency",
+    "ready_task_progress",
+    "repeated_user_confirmation_prompts",
+    "reviewer_retry_loop",
+    "help_first_usability",
+    "overclaim_prevention",
+    "activation_boundary"
+  ],
+  "evidence_grades": {
+    "real_codex_live": "real codex exec against current live config",
+    "real_codex_candidate_degraded": "real codex exec against isolated candidate config, blocked before model response by missing auth",
+    "real_hook_candidate": "candidate SessionStart hook against a temporary project",
+    "controller_replay": "receipt-bound pytest/controller replay",
+    "static_contract": "source, docs, generated help, or scan evidence"
+  },
+  "evidence_records": [
+    {
+      "id": "EV-001",
+      "source_type": "command-output",
+      "evidence_grade": "real_codex_live",
+      "command_summary": "live codex exec no-plan smoke plus workspace side-effect checks",
+      "exit_code": 0,
+      "output_excerpt": "WG_CODEX_EFFECT_SMOKE_OK\nhooks SessionStart/UserPromptSubmit completed\nLIVE_NO_PLAN_DIR_CREATED\nLIVE_BOOTSTRAP_RUNTIME_CREATED\n",
+      "output_excerpt_sha256": "28183181caf29eacb8296cbcc3b8d2e3daeda400cec1c6c5cd9587b9ffa179eb",
+      "supports_result": "passed",
+      "redaction_policy": "secret-free excerpt; temporary paths generalized"
+    },
+    {
+      "id": "EV-002",
+      "source_type": "command-output",
+      "evidence_grade": "static_contract",
+      "command_summary": "temporary CODEX_HOME marketplace add for candidate worktree",
+      "exit_code": 0,
+      "output_excerpt": "{\"marketplaceName\":\"work-governance-local\",\"installedRoot\":\"<candidate-worktree>\",\"alreadyAdded\":false}\n",
+      "output_excerpt_sha256": "84ad72f6f13dbcd565e22d0c139e643c7fc914ca300405c725d4a5699b966abc",
+      "supports_result": "passed",
+      "redaction_policy": "project path generalized"
+    },
+    {
+      "id": "EV-003",
+      "source_type": "command-output",
+      "evidence_grade": "static_contract",
+      "command_summary": "temporary CODEX_HOME candidate plugin add",
+      "exit_code": 0,
+      "output_excerpt": "{\"pluginId\":\"work-governance@work-governance-local\",\"version\":\"1.1.0+codex.20260805000000\",\"installedPath\":\"<system-temp>/plugins/cache/work-governance-local/work-governance/1.1.0+codex.20260805000000\"}\n",
+      "output_excerpt_sha256": "51fc7cd2b8ca5629f8f69a18308d3493d645da055e32304b33cb7b2dd6b58a3c",
+      "supports_result": "passed",
+      "redaction_policy": "temporary path generalized"
+    },
+    {
+      "id": "EV-004",
+      "source_type": "command-output",
+      "evidence_grade": "real_codex_candidate_degraded",
+      "command_summary": "candidate codex exec in isolated CODEX_HOME",
+      "exit_code": 1,
+      "output_excerpt": "ERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header\nNO_CANDIDATE_WORK_GOVERNANCE_DIR\n",
+      "output_excerpt_sha256": "5a45eb53fd026df8e78408917f015109a706d092f718eb1bb32586579c1a71ca",
+      "supports_result": "degraded",
+      "redaction_policy": "request ids and network metadata omitted"
+    },
+    {
+      "id": "EV-005",
+      "source_type": "command-output",
+      "evidence_grade": "real_hook_candidate",
+      "command_summary": "candidate SessionStart hook normal sandbox prewarm attempt",
+      "exit_code": 0,
+      "output_excerpt": "WORK_GOVERNANCE_BOOTSTRAP ENVIRONMENT_BLOCKED; source=startup; reason=CONTROLLER_PREWARM_FAILED; detail=Failed to fetch pypi package through tunnel\n",
+      "output_excerpt_sha256": "83f66271bf9b17f7d303f678ce1d2777dd9e402d1b10677b04a40b0c5126bfa0",
+      "supports_result": "degraded",
+      "redaction_policy": "network details summarized"
+    },
+    {
+      "id": "EV-006",
+      "source_type": "command-output",
+      "evidence_grade": "real_hook_candidate",
+      "command_summary": "candidate SessionStart hook elevated same-input retry",
+      "exit_code": 0,
+      "output_excerpt": "WORK_GOVERNANCE_BOOTSTRAP READY; layout=LAYOUT_READY; build=1.1.0+codex.20260805000000; receipt_sha256=8ba35b5aa10c6da5bff55a67ddc72a72a7dc1be605c08830f335949b1e8a8f2c\nCANDIDATE_HOOK_NO_PLAN_DIR_CREATED\n",
+      "output_excerpt_sha256": "965908dc806318009f281556e45c8ac06e019a44caa1ec593b3e5718c4abb2e3",
+      "supports_result": "passed",
+      "redaction_policy": "temporary paths omitted"
+    },
+    {
+      "id": "EV-007",
+      "source_type": "command-output",
+      "evidence_grade": "real_hook_candidate",
+      "command_summary": "receipt-bound candidate controller plan create probe",
+      "exit_code": 2,
+      "output_excerpt": "PLAN_ADMISSION_REQUIRED: use plan admit apply --manifest\n",
+      "output_excerpt_sha256": "a640ae40d61ff03290d7da1e47679b1e64fce1b38ecbfe9a503f8c204b5ed694",
+      "supports_result": "passed",
+      "redaction_policy": "secret-free stderr"
+    },
+    {
+      "id": "EV-008",
+      "source_type": "command-output",
+      "evidence_grade": "controller_replay",
+      "command_summary": "focused schema-v5, lifecycle, and effect-eval pytest suite",
+      "exit_code": 0,
+      "output_excerpt": "48 passed in 22.28s\n",
+      "output_excerpt_sha256": "5eb57ed375ac78bf6d86cf63b988576b36ec6a603352fb0320b16e652a942704",
+      "supports_result": "passed",
+      "redaction_policy": "pytest summary only"
+    },
+    {
+      "id": "EV-009",
+      "source_type": "command-output",
+      "evidence_grade": "controller_replay",
+      "command_summary": "final-state full pytest suite",
+      "exit_code": 0,
+      "output_excerpt": "436 passed, 1 skipped in 273.81s (0:04:33)\n",
+      "output_excerpt_sha256": "eca62f6c7c7418a695829967d95e9da31a7b8059f0e5e9a36dd96bced081e5c9",
+      "supports_result": "passed",
+      "redaction_policy": "pytest summary only"
+    },
+    {
+      "id": "EV-010",
+      "source_type": "command-output",
+      "evidence_grade": "static_contract",
+      "command_summary": "ruff check",
+      "exit_code": 0,
+      "output_excerpt": "All checks passed!\n",
+      "output_excerpt_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "supports_result": "passed",
+      "redaction_policy": "tool summary only"
+    },
+    {
+      "id": "EV-011",
+      "source_type": "command-output",
+      "evidence_grade": "static_contract",
+      "command_summary": "mypy",
+      "exit_code": 0,
+      "output_excerpt": "Success: no issues found in 12 source files\n",
+      "output_excerpt_sha256": "8b88f6d12bd312c1b024b66d07a7f7619a68482ac4d64e475759b1823199faa5",
+      "supports_result": "passed",
+      "redaction_policy": "tool summary only"
+    },
+    {
+      "id": "EV-012",
+      "source_type": "command-output",
+      "evidence_grade": "static_contract",
+      "command_summary": "generated CLI reference check",
+      "exit_code": 0,
+      "output_excerpt": "CLI_REFERENCE_VALID: docs/CLI_REFERENCE.md\n",
+      "output_excerpt_sha256": "92acc5abc5eab2f84713ce5ee83335a42ae1aaa13c466f4415ec9ebd7de13793",
+      "supports_result": "passed",
+      "redaction_policy": "repository path generalized"
+    },
+    {
+      "id": "EV-013",
+      "source_type": "command-output",
+      "evidence_grade": "static_contract",
+      "command_summary": "workctl help migrate/action/review/evidence/plan",
+      "exit_code": 0,
+      "output_excerpt": "help migrate/action/review/evidence/plan returned JSON command summaries including migrate recover, action lease, review acquisition, evidence capture, and plan status\n",
+      "output_excerpt_sha256": "e99743aa7458fcbb2f2812dcc7c0554c8fdc04e0533fe7387d430d884f3a3f25",
+      "supports_result": "passed",
+      "redaction_policy": "summarized command output"
+    },
+    {
+      "id": "EV-014",
+      "source_type": "command-output",
+      "evidence_grade": "static_contract",
+      "command_summary": "anti-temp and overclaim scans",
+      "exit_code": 1,
+      "output_excerpt": "rg scans returned no matches for exact temporary path recommendations or draft-done overclaim phrases in README, docs, skills, and effect-eval fixtures\n",
+      "output_excerpt_sha256": "93bfeeff1cee298d3d66e6352e006dd3e76acdb2df07f93d248922586860a95e",
+      "supports_result": "passed",
+      "redaction_policy": "no secret-bearing output"
+    },
+    {
+      "id": "EV-015",
+      "source_type": "review-output",
+      "evidence_grade": "static_contract",
+      "command_summary": "independent Codex review of initial evaluation assets",
+      "exit_code": 0,
+      "output_excerpt": "No P1 findings. P2 findings requested durable evidence binding and broader overclaim scan coverage.\n",
+      "output_excerpt_sha256": "ad8764e73d62961dc317e29c3b2908ec30d606849fdbb42e2785530dde894551",
+      "supports_result": "degraded",
+      "redaction_policy": "review summary only"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "CE-001",
+      "name": "live no-plan smoke does not create a Plan",
+      "historical_friction": "ordinary requests created governance churn",
+      "result": "passed",
+      "evidence_grade": "real_codex_live",
+      "command_or_evidence": "codex exec --ephemeral --skip-git-repo-check --cd <system-temp>/wg-codex-effect-eval-live-1",
+      "observed": "returned WG_CODEX_EFFECT_SMOKE_OK; live bootstrap/runtime/cache existed; .work-governance/_Plan did not exist",
+      "claim_boundary": "live 1.0.7 smoke only",
+      "evidence_refs": ["EV-001"],
+      "metrics": {
+        "plan_contract_churn": "0 plan directories created",
+        "activation_boundary": "live candidate not activated"
+      }
+    },
+    {
+      "id": "CE-002",
+      "name": "candidate installs only into isolated Codex home",
+      "historical_friction": "candidate validation must not replace live plugin",
+      "result": "passed",
+      "evidence_grade": "static_contract",
+      "command_or_evidence": "CODEX_HOME=<system-temp>/wg-codex-effect-home-20260805b codex plugin add work-governance@work-governance-local --json",
+      "observed": "installed 1.1.0+codex.20260805000000 from the candidate worktree",
+      "claim_boundary": "temporary installation only",
+      "evidence_refs": ["EV-002", "EV-003"],
+      "metrics": {
+        "activation_boundary": "no live plugin replacement",
+        "help_first_usability": "candidate source visible through plugin list"
+      }
+    },
+    {
+      "id": "CE-003",
+      "name": "candidate Codex model smoke without copied auth",
+      "historical_friction": "effect evaluation should not require copying user credentials",
+      "result": "degraded",
+      "evidence_grade": "real_codex_candidate_degraded",
+      "command_or_evidence": "CODEX_HOME=<system-temp>/wg-codex-effect-home-20260805b codex exec --ephemeral --skip-git-repo-check --cd <system-temp>/wg-codex-effect-eval-candidate-20260805b",
+      "observed": "stopped with 401 Unauthorized before model response; no candidate workspace .work-governance directory was created",
+      "claim_boundary": "candidate startup channel reached, model response not proven",
+      "evidence_refs": ["EV-004"],
+      "metrics": {
+        "activation_boundary": "candidate not activated",
+        "overclaim_prevention": "degraded auth result recorded"
+      }
+    },
+    {
+      "id": "CE-004",
+      "name": "candidate SessionStart hook reaches READY with valid input",
+      "historical_friction": "bootstrap and receipt behavior must be real-boundary tested",
+      "result": "passed",
+      "evidence_grade": "real_hook_candidate",
+      "command_or_evidence": "PLUGIN_ROOT=<candidate>/plugins/work-governance python3 <candidate>/plugins/work-governance/hooks/session_start.py",
+      "observed": "normal sandbox first hit CONTROLLER_PREWARM_FAILED due PyPI tunnel failure; one elevated same-input retry returned WORK_GOVERNANCE_BOOTSTRAP READY for 1.1.0+codex.20260805000000",
+      "claim_boundary": "temporary project hook receipt only",
+      "evidence_refs": ["EV-005", "EV-006"],
+      "metrics": {
+        "activation_boundary": "isolated temporary project",
+        "plan_contract_churn": "hook did not create .work-governance/_Plan"
+      }
+    },
+    {
+      "id": "CE-005",
+      "name": "candidate Plan admission remains explicit",
+      "historical_friction": "ordinary startup must not silently create or mutate a Plan",
+      "result": "passed",
+      "evidence_grade": "real_hook_candidate",
+      "command_or_evidence": "receipt-bound candidate controller plan create probe",
+      "observed": "temporary project had no .work-governance/_Plan after READY; naked plan create returned PLAN_ADMISSION_REQUIRED",
+      "claim_boundary": "current candidate admission surface",
+      "evidence_refs": ["EV-006", "EV-007"],
+      "metrics": {
+        "plan_contract_churn": "no implicit plan",
+        "overclaim_prevention": "full draft CRUD not claimed"
+      }
+    },
+    {
+      "id": "CE-006",
+      "name": "direct evidence capture without temp manifest handoff",
+      "historical_friction": "evidence written to the system temporary directory could become unrecoverable",
+      "result": "passed",
+      "evidence_grade": "controller_replay",
+      "command_or_evidence": "uv run pytest tests/test_schema_v5.py -q",
+      "observed": "direct capture test covers from-file capture, redacted blob placeholder, oversized input rejection, and corrupt ledger fail-closed behavior",
+      "claim_boundary": "controller replay, not activated live plugin",
+      "evidence_refs": ["EV-008", "EV-009"],
+      "metrics": {
+        "temporary_evidence_dependency": "direct capture covered",
+        "plan_contract_churn": "evidence append is runtime state"
+      }
+    },
+    {
+      "id": "CE-007",
+      "name": "blocked task does not hide ready siblings",
+      "historical_friction": "one blocked task froze unrelated work",
+      "result": "passed",
+      "evidence_grade": "controller_replay",
+      "command_or_evidence": "uv run pytest tests/test_schema_v5.py -q",
+      "observed": "scheduler test keeps ready sibling work visible and reports blocker propagation",
+      "claim_boundary": "controller replay, not activated live plugin",
+      "evidence_refs": ["EV-008", "EV-009"],
+      "metrics": {
+        "ready_task_progress": "blocked and ready task visibility covered"
+      }
+    },
+    {
+      "id": "CE-008",
+      "name": "bounded route authority lease",
+      "historical_friction": "confirmed repeated action routes still asked for repeated user turns",
+      "result": "passed",
+      "evidence_grade": "controller_replay",
+      "command_or_evidence": "uv run pytest tests/test_schema_v5.py -q",
+      "observed": "route lease tests cover prepare, issue, single-use authorize, consume retry, max-use enforcement, and drift freeze",
+      "claim_boundary": "controller replay, not external action proof",
+      "evidence_refs": ["EV-008", "EV-009"],
+      "metrics": {
+        "repeated_user_confirmation_prompts": "bounded lease covered",
+        "activation_boundary": "no external action performed"
+      }
+    },
+    {
+      "id": "CE-009",
+      "name": "reviewer acquisition failure cache",
+      "historical_friction": "same reviewer failure path repeated without value",
+      "result": "passed",
+      "evidence_grade": "controller_replay",
+      "command_or_evidence": "uv run pytest tests/test_schema_v5.py -q",
+      "observed": "review acquisition tests cover redaction, cooldown, exact and environment-level matching, duplicate refusal, expiry, and status",
+      "claim_boundary": "validator unavailable remains unavailable",
+      "evidence_refs": ["EV-008", "EV-009", "EV-015"],
+      "metrics": {
+        "reviewer_retry_loop": "bounded cache covered",
+        "overclaim_prevention": "cache does not certify review"
+      }
+    },
+    {
+      "id": "CE-010",
+      "name": "workctl help-first command discovery",
+      "historical_friction": "agents repeatedly read/search the large workctl implementation",
+      "result": "passed",
+      "evidence_grade": "static_contract",
+      "command_or_evidence": "workctl help migrate/action/review/evidence/plan",
+      "observed": "all checked workflow help commands returned JSON command summaries",
+      "claim_boundary": "implemented executable surface only",
+      "evidence_refs": ["EV-013"],
+      "metrics": {
+        "help_first_usability": "help surface available",
+        "overclaim_prevention": "full draft CRUD not claimed"
+      }
+    },
+    {
+      "id": "CE-011",
+      "name": "candidate overclaim scan",
+      "historical_friction": "candidate notes could imply unfinished draft items are complete",
+      "result": "passed",
+      "evidence_grade": "static_contract",
+      "command_or_evidence": "rg over README.md docs plugins/work-governance/skills",
+      "observed": "activation gate references found; overclaim phrases were absent",
+      "claim_boundary": "static scan only",
+      "evidence_refs": ["EV-014"],
+      "metrics": {
+        "overclaim_prevention": "activation deferred",
+        "activation_boundary": "confirmation gate retained"
+      }
+    },
+    {
+      "id": "CE-012",
+      "name": "activation gate retained",
+      "historical_friction": "candidate testing could be mistaken for live activation",
+      "result": "passed",
+      "evidence_grade": "static_contract",
+      "command_or_evidence": "docs and fixture boundary",
+      "observed": "next formal gate remains CONFIRM_ACTIVATE_WORK_GOVERNANCE_1_1_0",
+      "claim_boundary": "no activation claim",
+      "evidence_refs": ["EV-014"],
+      "metrics": {
+        "activation_boundary": "gate retained"
+      }
+    }
+  ],
+  "overclaim_scan": {
+    "target_paths": [
+      "README.md",
+      "docs",
+      "plugins/work-governance/skills",
+      "tests/fixtures/work_governance_1_1_0_codex_effect_eval.json"
+    ],
+    "forbidden_phrases": [
+      "1.1.0 is activated",
+      "1.1.0 activated",
+      "live plugin switched to 1.1.0",
+      "live 1.1.0 is verified",
+      "target architecture is complete",
+      "target architecture complete",
+      "target architecture fully implemented",
+      "full bash-first crud surface is implemented",
+      "full bash-first crud surface complete",
+      "task add is implemented"
+    ]
+  }
+}
