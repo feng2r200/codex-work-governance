@@ -388,6 +388,110 @@ def persist_capture_metadata(
     return f"evidence:{governance_dir_name}/evidence/records/{digest}.json", digest
 
 
+def utc_now() -> str:
+    """Return the current UTC timestamp used by direct evidence records."""
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+def persist_direct_evidence_bytes(
+    root: Path,
+    *,
+    plan_id: str,
+    task_id: str | None,
+    kind: str,
+    summary: str,
+    raw_content: bytes,
+    source_type: str,
+    source_ref: str | None,
+    idempotency_key: str | None,
+    governance_dir_name: str = ".work-governance",
+) -> dict[str, object]:
+    """Persist direct evidence bytes and return the ledger-compatible record."""
+    if EVIDENCE_CAPTURE_KIND_RE.fullmatch(kind) is None:
+        raise ValueError("EVIDENCE_CAPTURE_KIND_INVALID")
+    summary = redact_capture_text(summary.strip())
+    if not summary:
+        raise ValueError("EVIDENCE_CAPTURE_SUMMARY_REQUIRED")
+    if len(summary) > 512:
+        raise ValueError("EVIDENCE_CAPTURE_SUMMARY_TOO_LONG")
+    if (
+        idempotency_key is not None
+        and EVIDENCE_CAPTURE_IDEMPOTENCY_RE.fullmatch(idempotency_key) is None
+    ):
+        raise ValueError("EVIDENCE_CAPTURE_IDEMPOTENCY_KEY_INVALID")
+    redacted_content, text_source = redact_capture_bytes(raw_content)
+    source_digest = sha256_bytes(redacted_content)
+    task_ref = f"task:{task_id}" if task_id is not None else None
+    existing = (
+        find_capture_record_by_idempotency_key(
+            root,
+            plan_id=plan_id,
+            key=idempotency_key,
+            governance_dir_name=governance_dir_name,
+        )
+        if idempotency_key is not None
+        else None
+    )
+    if existing is not None:
+        if (
+            existing.get("source_digest") != source_digest
+            or existing.get("evidence_kind") != kind
+            or existing.get("summary") != summary
+            or existing.get("task_ref") != task_ref
+        ):
+            raise ValueError("EVIDENCE_CAPTURE_IDEMPOTENCY_CONFLICT")
+        record_ref, record_sha256 = verify_capture_record_file(
+            root,
+            existing,
+            governance_dir_name=governance_dir_name,
+        )
+        return {
+            **existing,
+            "evidence_ref": record_ref,
+            "evidence_sha256": record_sha256,
+            "idempotent": True,
+        }
+    blob_ref, blob_sha256, blob_size = persist_capture_blob(
+        root,
+        redacted_content,
+        governance_dir_name=governance_dir_name,
+    )
+    created_at = utc_now()
+    record_id = capture_record_id(created_at)
+    record: dict[str, object] = {
+        "schema_version": 1,
+        "kind": "work-governance-evidence-record",
+        "id": record_id,
+        "plan_id": plan_id,
+        "goal_ref": f"plan:{plan_id}",
+        "task_ref": task_ref,
+        "evidence_kind": kind,
+        "summary": summary,
+        "source_type": source_type,
+        "source_ref": source_ref,
+        "source_digest": source_digest,
+        "source_size": len(redacted_content),
+        "text_source": text_source,
+        "redaction_policy": "default-secret-patterns-v1",
+        "blob_ref": blob_ref,
+        "blob_sha256": blob_sha256,
+        "blob_size": blob_size,
+        "validator": "workctl:workflow",
+        "result": "captured",
+        "created_at": created_at,
+    }
+    if idempotency_key is not None:
+        record["idempotency_key"] = idempotency_key
+    record_ref, record_sha256 = persist_capture_metadata(
+        root,
+        record,
+        governance_dir_name=governance_dir_name,
+    )
+    ledger_record = {**record, "evidence_ref": record_ref, "evidence_sha256": record_sha256}
+    append_capture_record(root, ledger_record, governance_dir_name=governance_dir_name)
+    return {**ledger_record, "idempotent": False}
+
+
 def validate_evidence_payload(
     payload: Mapping[str, object],
     *,
