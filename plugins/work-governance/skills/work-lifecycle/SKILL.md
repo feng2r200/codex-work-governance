@@ -215,9 +215,12 @@ legacy input, then use `migrate inspect`, `migrate apply --dry-run`, and
 receipt-bound `migrate apply --expected-contract-revision <revision>` to archive
 the legacy Plan and rebuild a fresh v5 contract. Do not adapt legacy task state
 or use `plan contract upgrade`/`plan reconcile-upgrade` for new work. Incomplete
-historical upgrade journals remain recovery-only audit artifacts. Use
-`plan adapt`, `plan contract revise`, and `plan unknown add|resolve` for their
-separate responsibilities after the active Plan is current schema. For
+historical upgrade journals remain recovery-only audit artifacts. Treat
+`legacy_summary` and `plan status.legacy_refresh` as `NON_AUTHORITY` read-only
+guidance; they do not release old task status, confirmations, or evidence into
+current runtime state. Use `plan adapt`, `plan contract revise`, and
+`plan unknown add|resolve` for their separate responsibilities after the active
+Plan is current schema. For
 schema-v5 runtime work,
 prefer direct `evidence capture` for command output and project-local artifacts;
 small structured compatibility evidence can still be recorded under

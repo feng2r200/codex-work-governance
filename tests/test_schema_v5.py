@@ -396,11 +396,17 @@ def test_v4_inspect_and_dry_run_are_read_only_and_repeatable(tmp_path: Path) -> 
     assert inspect["to_schema_version"] == 5
     assert inspect["requires_migration"] is True
     assert inspect["migration_mode"] == "archive_legacy_and_rebuild_current_plan"
+    assert inspect["state_reset"] is True
+    assert inspect["legacy_state_migrated"] is False
+    assert inspect["legacy_summary"]["authority"] == "NON_AUTHORITY"
+    assert "task.status" in inspect["not_migrated"]
+    assert "archived legacy Plan" in inspect["next_model_action"]
     assert first == second
     assert first["writes"] == []
     assert first["confirmation_ref"] is None
     assert first["confirmations_required"] == []
     assert first["archive_path"].startswith(".work-governance/_Plan/archive/MIG-")
+    assert first["legacy_summary"] == inspect["legacy_summary"]
     assert first["state_mapping"] == (
         "not performed; legacy state remains only in the archived Plan"
     )
@@ -436,16 +442,34 @@ def test_current_schema_refresh_archives_legacy_and_rebuilds_fresh_state(
     frontmatter["tasks"][0]["status"] = "verified"
     frontmatter["tasks"][0]["note"] = "legacy task completion must not become runtime state"
     frontmatter["tasks"][0]["evidence"] = [{"ref": "project:legacy-evidence", "sha256": "a" * 64}]
+    frontmatter["tasks"].append(
+        {
+            "id": "T-002",
+            "description": "Legacy in-progress task.",
+            "status": "in_progress",
+        }
+    )
     write_plan(tmp_path, frontmatter, body)
     source_before = read_active_plan_bytes(tmp_path)
 
-    migrated = run_workctl(tmp_path, "migrate", "apply", "--expected-contract-revision", "1")
+    migrated = json.loads(
+        run_workctl(tmp_path, "migrate", "apply", "--expected-contract-revision", "1").stdout
+    )
 
-    assert "CURRENT_PLAN_SCHEMA_REFRESH_COMMITTED" in migrated.stdout
+    assert migrated["status"] == "CURRENT_PLAN_SCHEMA_REFRESH_COMMITTED"
+    assert migrated["legacy_state_migrated"] is False
+    assert migrated["legacy_summary"]["tasks_by_status"] == {
+        "in_progress": 1,
+        "verified": 1,
+    }
+    assert migrated["legacy_summary"]["in_progress_task_ids"] == ["T-002"]
+    assert "project:legacy-evidence" in migrated["legacy_summary"]["evidence_refs"]
     frontmatter, refreshed_body = read_plan(tmp_path)
     assert frontmatter["schema_version"] == 5
     assert frontmatter["contract_revision"] == 1
     assert frontmatter["confirmations"] == {"required": []}
+    assert frontmatter["legacy_archive"]["legacy_state_migrated"] is False
+    assert "task.status" in frontmatter["legacy_archive"]["not_migrated"]
     assert "revision_history" not in frontmatter
     assert all("status" not in task for task in frontmatter["tasks"])
     assert all("note" not in task for task in frontmatter["tasks"])
@@ -456,11 +480,24 @@ def test_current_schema_refresh_archives_legacy_and_rebuilds_fresh_state(
     runtime_plan = tmp_path / ".work-governance" / "runtime" / "plans" / "PLAN-20260723-001"
     state = json.loads((runtime_plan / "state.json").read_text(encoding="utf-8"))
     events = (runtime_plan / "events.jsonl").read_text(encoding="utf-8").splitlines()
-    assert state["tasks"] == {"T-001": {"status": "pending"}}
+    assert state["tasks"] == {
+        "T-001": {"status": "pending"},
+        "T-002": {"status": "pending"},
+    }
     assert state["current_task"] is None
-    assert json.loads(events[0])["event"] == "contract.rebuilt_from_legacy_archive"
+    event = json.loads(events[0])
+    assert event["event"] == "contract.rebuilt_from_legacy_archive"
+    assert event["payload"]["legacy_state_migrated"] is False
+    assert event["payload"]["legacy_summary"] == migrated["legacy_summary"]
+    status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    assert status["legacy_refresh"]["archive_status"] == "readable"
+    assert status["legacy_refresh"]["legacy_state_migrated"] is False
+    assert status["legacy_refresh"]["legacy_summary"] == migrated["legacy_summary"]
+    full_status = json.loads(run_workctl(tmp_path, "plan", "status", "--full").stdout)
+    assert full_status["legacy_refresh"] == status["legacy_refresh"]
     assert "Schema v5 fixture" not in refreshed_body
     assert "Legacy Plan bytes are archived at" in refreshed_body
+    assert "Legacy runtime state was not migrated" in refreshed_body
 
 
 def test_goal_gate_truth_and_review_public_views(tmp_path: Path) -> None:

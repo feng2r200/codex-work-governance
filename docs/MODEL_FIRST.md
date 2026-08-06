@@ -24,6 +24,9 @@
   `migrate apply --expected-contract-revision <revision>` 归档旧 Plan 并重建
   schema-v5 contract；不要做状态适配、旧 task 状态迁移或
   `plan contract upgrade`。
+- `legacy_summary` 和 `plan status.legacy_refresh` 只是 `NON_AUTHORITY`
+  读取提示，用来帮助选择刷新后的下一步；不要把其中的旧 task status、
+  confirmation 或 evidence 当成当前 runtime state。
 - 判断高影响动作前，可用 `risk inspect --action-kind KIND --target-ref REF`
   获取风险事实。controller 不替模型决定是否必须向用户确认。
 - 子 worktree 执行只记录
