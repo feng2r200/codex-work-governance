@@ -12623,6 +12623,115 @@ def write_worktree_ledger(root: Path, worktree_id: str, payload: Mapping[str, An
     write_atomic(worktree_ledger_path(root, worktree_id), module_encode_worktree_ledger(payload))
 
 
+def worktree_parent_fork_base(root: Path, *, captured_at: str) -> dict[str, Any]:
+    """Project the current active parent Plan state for a worktree fork."""
+    doc = load_plan(active_plan_path(root))
+    frontmatter = doc.frontmatter
+    plan_id = frontmatter.get("plan_id")
+    if not isinstance(plan_id, str):
+        raise WorkctlError("INVALID_PLAN: plan_id must be a string")
+    base: dict[str, Any] = {
+        "authority": "PARENT_PLAN_BASE",
+        "captured_at": captured_at,
+        "plan_id": plan_id,
+        "plan_path": relative_project_path(root, doc.path),
+        "plan_sha256": sha256_file(doc.path),
+        "contract_state": contract_state(frontmatter),
+    }
+    schema_version = frontmatter.get("schema_version")
+    if isinstance(schema_version, int):
+        base["schema_version"] = schema_version
+    status = frontmatter.get("status")
+    if isinstance(status, str):
+        base["status"] = status
+    revision = frontmatter.get("revision")
+    if isinstance(revision, int):
+        base["revision"] = revision
+    contract_revision = frontmatter.get("contract_revision")
+    if not isinstance(contract_revision, int):
+        contract = frontmatter.get("contract")
+        if isinstance(contract, dict) and isinstance(contract.get("revision"), int):
+            contract_revision = contract["revision"]
+    if isinstance(contract_revision, int):
+        base["contract_revision"] = contract_revision
+    current_task = frontmatter.get("current_task")
+    if isinstance(current_task, str):
+        base["current_task"] = current_task
+    if schema_version == 5:
+        state = load_v5_state(root, frontmatter)
+        base["state_sequence"] = state["state_sequence"]
+        base["event_sequence"] = state["event_sequence"]
+    git_head = current_git_baseline(root)
+    if git_head is not None:
+        base["git_head"] = git_head
+    return base
+
+
+def worktree_parent_drift_reasons(
+    fork_base: object,
+    current_parent: Mapping[str, Any],
+) -> list[str]:
+    """Compare one worktree fork basis with the current active parent Plan."""
+    if not isinstance(fork_base, dict):
+        return ["fork_base_missing"]
+    compare_fields = (
+        "plan_id",
+        "plan_sha256",
+        "schema_version",
+        "revision",
+        "contract_revision",
+        "state_sequence",
+        "event_sequence",
+        "git_head",
+    )
+    reason_names = {
+        "plan_id": "parent_plan_id_changed",
+        "plan_sha256": "parent_plan_sha_changed",
+        "schema_version": "parent_schema_version_changed",
+        "revision": "parent_plan_revision_changed",
+        "contract_revision": "parent_contract_revision_changed",
+        "state_sequence": "parent_state_sequence_changed",
+        "event_sequence": "parent_event_sequence_changed",
+        "git_head": "parent_git_head_changed",
+    }
+    reasons: list[str] = []
+    for field in compare_fields:
+        fork_value = fork_base.get(field)
+        current_value = current_parent.get(field)
+        if fork_value != current_value:
+            reasons.append(reason_names[field])
+    return reasons
+
+
+def worktree_merge_suggested_actions(*, drift_detected: bool, closed: bool) -> list[str]:
+    """Return model-facing next steps for non-authoritative worktree absorption."""
+    if not closed:
+        return [
+            "Close the worktree ledger before parent Plan evidence absorption.",
+            "Keep the ledger NON_AUTHORITY; do not treat it as a second Plan.",
+        ]
+    if drift_detected:
+        return [
+            "Review fork_base, current_parent, close_summary, and worktree events together.",
+            (
+                "Decide whether the parent Plan needs plan adapt, task done, "
+                "or a confirmation gate before absorbing evidence."
+            ),
+            (
+                "Reference only reviewed close_summary/evidence in the parent Plan; "
+                "never promote the ledger as authority."
+            ),
+        ]
+    return [
+        "Review close_summary and cited evidence.",
+        (
+            "Record the parent Plan evidence or task completion explicitly with "
+            "task done or evidence capture."
+        ),
+        "Keep the worktree ledger as NON_AUTHORITY runtime history.",
+    ]
+
+
 def worktree_event(args: argparse.Namespace, *, event_name: str | None = None) -> dict[str, Any]:
     """Build one bounded worktree ledger event."""
     if module_build_worktree_event is None:
@@ -12652,12 +12761,14 @@ def cmd_worktree_begin(args: argparse.Namespace) -> None:
         if path.exists() or path.is_symlink():
             raise WorkctlError("WORKTREE_LEDGER_ALREADY_EXISTS")
         now = utc_now()
+        fork_base = worktree_parent_fork_base(root, captured_at=now)
         payload = module_open_worktree_ledger(
             worktree_id=ledger_id,
             path=str(args.path),
             branch=str(args.branch),
             summary=str(args.summary),
             opened_at=now,
+            fork_base=fork_base,
         )
         write_worktree_ledger(root, ledger_id, payload)
         print(
@@ -12667,6 +12778,7 @@ def cmd_worktree_begin(args: argparse.Namespace) -> None:
                     "authority": "NON_AUTHORITY",
                     "worktree_id": ledger_id,
                     "path": relative_project_path(root, path),
+                    "fork_base": fork_base,
                 },
                 indent=2,
                 sort_keys=True,
@@ -12733,6 +12845,42 @@ def cmd_worktree_close(args: argparse.Namespace) -> None:
                 sort_keys=True,
             )
         )
+
+
+def cmd_worktree_merge_inspect(args: argparse.Namespace) -> None:
+    """Inspect whether one closed worktree summary can be reviewed without drift."""
+    root = project_root()
+    ledger_id = str(vars(args)["worktree_id"])
+    payload = load_worktree_ledger(root, ledger_id)
+    current_parent = worktree_parent_fork_base(root, captured_at=utc_now())
+    drift_reasons = worktree_parent_drift_reasons(payload.get("fork_base"), current_parent)
+    closed = payload.get("status") == "closed"
+    if drift_reasons:
+        merge_state = "MERGE_REVIEW_REQUIRED"
+    elif closed:
+        merge_state = "READY_FOR_PARENT_REVIEW"
+    else:
+        merge_state = "WORKTREE_NOT_CLOSED"
+    output = {
+        "status": "WORKTREE_MERGE_INSPECTED",
+        "authority": "NON_AUTHORITY",
+        "controller_decision": "inspect_only",
+        "decision_owner": "model",
+        "parent_mutated": False,
+        "worktree_id": ledger_id,
+        "worktree_status": payload.get("status"),
+        "merge_state": merge_state,
+        "drift_detected": bool(drift_reasons),
+        "drift_reasons": drift_reasons,
+        "fork_base": payload.get("fork_base"),
+        "current_parent": current_parent,
+        "close_summary": payload.get("close_summary"),
+        "suggested_parent_actions": worktree_merge_suggested_actions(
+            drift_detected=bool(drift_reasons),
+            closed=closed,
+        ),
+    }
+    print(json.dumps(output, indent=2, sort_keys=True))
 
 
 def cmd_plan_init(args: argparse.Namespace) -> None:
@@ -22358,6 +22506,14 @@ def build_parser() -> argparse.ArgumentParser:
     worktree_close.add_argument("--evidence-ref")
     worktree_close.add_argument("--evidence-sha256")
     worktree_close.set_defaults(func=cmd_worktree_close)
+    worktree_merge = worktree_sub.add_parser("merge")
+    worktree_merge_sub = worktree_merge.add_subparsers(
+        dest="worktree_merge_action",
+        required=True,
+    )
+    worktree_merge_inspect = worktree_merge_sub.add_parser("inspect")
+    worktree_merge_inspect.add_argument("--worktree-id", required=True)
+    worktree_merge_inspect.set_defaults(func=cmd_worktree_merge_inspect)
 
     log = sub.add_parser("log")
     log_sub = log.add_subparsers(dest="action", required=True)
@@ -22390,6 +22546,8 @@ def command_mutates_state(args: argparse.Namespace) -> bool:
     if args.domain in {"task", "log"}:
         return True
     if args.domain == "worktree":
+        if args.worktree_action == "merge":
+            return cast(str, args.worktree_merge_action) != "inspect"
         return True
     if args.domain == "goal":
         return cast(str, args.goal_action) != "show"

@@ -129,8 +129,9 @@ Truth writes are aliases over the confirmed contract revision path.
 - `worktree begin --worktree-id WT-ID --path PATH --branch BRANCH`
 - `worktree record --worktree-id WT-ID --event EVENT --summary TEXT`
 - `worktree close --worktree-id WT-ID --summary TEXT`
+- `worktree merge inspect --worktree-id WT-ID`
 
-Worktree ledgers are runtime-only NON_AUTHORITY execution logs; only their close summary should be absorbed into the parent Plan evidence.
+Worktree ledgers are runtime-only NON_AUTHORITY execution logs; only their close summary should be absorbed into the parent Plan evidence after read-only drift inspection.
 
 ## Parser command reference
 
@@ -1675,6 +1676,16 @@ options:
   --summary SUMMARY
   --evidence-ref EVIDENCE_REF
   --evidence-sha256 EVIDENCE_SHA256
+```
+
+### `worktree merge inspect`
+
+```text
+usage: workctl worktree merge inspect [-h] --worktree-id WORKTREE_ID
+
+options:
+  -h, --help            show this help message and exit
+  --worktree-id WORKTREE_ID
 ```
 
 ### `worktree record`
