@@ -43,6 +43,9 @@ try:
     from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
     from workctl_modules import ready_task_targets as MODULE_READY_TASK_TARGETS
     from workctl_modules import yaml_compat as yaml
+    from workctl_modules.evidence import (
+        validate_evidence_payload as module_validate_evidence_payload,
+    )
     from workctl_modules.history import (
         PlanHistoryError as ModulePlanHistoryError,
     )
@@ -167,6 +170,7 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     module_action_reversibility = None  # type: ignore[assignment]
     module_risk_factors_for_action = None  # type: ignore[assignment]
     module_risk_inspection_payload = None  # type: ignore[assignment]
+    module_validate_evidence_payload = None  # type: ignore[assignment]
     redacted_copy = None  # type: ignore[assignment]
     module_append_worktree_event = None  # type: ignore[assignment]
     module_build_worktree_event = None  # type: ignore[assignment]
@@ -17615,6 +17619,19 @@ def validate_evidence_payload(
     expected_subject: str | None = None,
 ) -> None:
     """Validate bounded evidence metadata without accepting process output blobs."""
+    if module_validate_evidence_payload is not None:
+        try:
+            module_validate_evidence_payload(
+                payload,
+                expected_plan_id=expected_plan_id,
+                expected_subject=expected_subject,
+                valid_reference=valid_reference,
+                sha256_pattern=SHA256_RE,
+                max_items=EVIDENCE_MANIFEST_MAX_ITEMS,
+            )
+        except ValueError as exc:
+            raise WorkctlError(str(exc)) from exc
+        return
     subject = payload.get("subject")
     required_fields = {
         "schema_version",

@@ -1,7 +1,7 @@
 """Testable boundaries for the Work Governance controller."""
 
 from .commands import WORKFLOW_HELP, WORKFLOW_HELP_ALIASES
-from .evidence import canonical_evidence_bytes, parse_evidence_bytes
+from .evidence import canonical_evidence_bytes, parse_evidence_bytes, validate_evidence_payload
 from .migration import build_v5_contract, build_v5_state, migration_projection
 from .scheduler import (
     blocked_task_targets,
@@ -22,4 +22,5 @@ __all__ = [
     "parse_evidence_bytes",
     "ready_task_targets",
     "migration_projection",
+    "validate_evidence_payload",
 ]
