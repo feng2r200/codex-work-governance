@@ -43,6 +43,15 @@ try:
     from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
     from workctl_modules import ready_task_targets as MODULE_READY_TASK_TARGETS
     from workctl_modules import yaml_compat as yaml
+    from workctl_modules.history import (
+        PlanHistoryError as ModulePlanHistoryError,
+    )
+    from workctl_modules.history import (
+        find_plan_history_target as module_find_plan_history_target,
+    )
+    from workctl_modules.history import (
+        tolerant_plan_history_summary as module_tolerant_plan_history_summary,
+    )
     from workctl_modules.migration import (
         REFRESH_NEXT_MODEL_ACTION,
         REFRESH_NOT_MIGRATED,
@@ -93,6 +102,9 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     class ModuleWorktreeLedgerError(ValueError):  # type: ignore[no-redef]
         """Fallback exception for legacy single-file runtime bundles."""
 
+    class ModulePlanHistoryError(ValueError):  # type: ignore[no-redef]
+        """Fallback exception for legacy single-file runtime bundles."""
+
     MODULE_WORKFLOW_HELP = None  # type: ignore[assignment,misc]
     MODULE_WORKFLOW_HELP_ALIASES = None  # type: ignore[assignment,misc]
     MODULE_BLOCKED_TASK_TARGETS = None  # type: ignore[assignment]
@@ -102,6 +114,8 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     MODULE_READY_TASK_TARGETS = None  # type: ignore[assignment]
     build_v5_contract = None  # type: ignore[assignment]
     build_v5_state = None  # type: ignore[assignment]
+    module_find_plan_history_target = None  # type: ignore[assignment]
+    module_tolerant_plan_history_summary = None  # type: ignore[assignment]
     legacy_plan_summary = None  # type: ignore[assignment]
     migration_projection = None  # type: ignore[assignment]
     TaskProjection = None  # type: ignore[assignment,misc]
@@ -12323,54 +12337,19 @@ def cmd_plan_adapt_intent(args: argparse.Namespace) -> None:
 
 def tolerant_plan_history_summary(root: Path, path: Path) -> dict[str, Any]:
     """Read historical Plan metadata without enforcing the active schema."""
-    summary: dict[str, Any] = {
-        "path": relative_project_path(root, path),
-        "sha256": sha256_file(path),
-        "parse_state": "ok",
-        "plan_id": None,
-        "title": None,
-        "status": None,
-        "schema_version": None,
-        "task_counts": {},
-        "confirmation_counts": {},
-    }
+    if module_tolerant_plan_history_summary is None:
+        raise WorkctlError("PLAN_HISTORY_MODULE_UNAVAILABLE")
     try:
-        text = path.read_text(encoding="utf-8")
-        if not text.startswith("---\n"):
-            raise WorkctlError("frontmatter missing")
-        _, raw_frontmatter, body = text.split("---\n", 2)
-        frontmatter = yaml.safe_load(raw_frontmatter)
-        if not isinstance(frontmatter, dict):
-            raise WorkctlError("frontmatter must be a mapping")
-    except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError, WorkctlError) as exc:
-        summary["parse_state"] = "error"
-        summary["error"] = str(exc)
-        return summary
-    summary.update(
-        {
-            "plan_id": frontmatter.get("plan_id"),
-            "title": frontmatter.get("title"),
-            "status": frontmatter.get("status"),
-            "schema_version": frontmatter.get("schema_version"),
-            "body_sha256": sha256_bytes(body.encode("utf-8")),
-        }
-    )
-    task_counts: dict[str, int] = {}
-    tasks = frontmatter.get("tasks", [])
-    for task in tasks if isinstance(tasks, list) else []:
-        status = task.get("status", "contract-only") if isinstance(task, dict) else "invalid"
-        task_counts[str(status)] = task_counts.get(str(status), 0) + 1
-    summary["task_counts"] = task_counts
-    confirmation_counts: dict[str, int] = {}
-    raw_confirmations = frontmatter.get("confirmations", {})
-    if isinstance(raw_confirmations, dict):
-        for group in ("required", "accepted"):
-            values = raw_confirmations.get(group, [])
-            for item in values if isinstance(values, list) else []:
-                status = item.get("status", group) if isinstance(item, dict) else "invalid"
-                confirmation_counts[str(status)] = confirmation_counts.get(str(status), 0) + 1
-    summary["confirmation_counts"] = confirmation_counts
-    return summary
+        return dict(
+            module_tolerant_plan_history_summary(
+                path=path,
+                relative_path=relative_project_path(root, path),
+                file_sha256=sha256_file(path),
+                body_sha256=sha256_bytes,
+            )
+        )
+    except ModulePlanHistoryError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def cmd_plan_history(args: argparse.Namespace) -> None:
@@ -12390,11 +12369,10 @@ def cmd_plan_history(args: argparse.Namespace) -> None:
         path = checked_project_path(root, args.path)
         target = tolerant_plan_history_summary(root, path)
     elif args.plan_id:
-        for item in summaries:
-            path_plan_id = Path(str(item.get("path"))).stem
-            if item.get("plan_id") == args.plan_id or path_plan_id == args.plan_id:
-                target = item
-                break
+        if module_find_plan_history_target is None:
+            raise WorkctlError("PLAN_HISTORY_MODULE_UNAVAILABLE")
+        target_item = module_find_plan_history_target(summaries, str(args.plan_id))
+        target = dict(target_item) if target_item is not None else None
     else:
         raise WorkctlError("PLAN_HISTORY_TARGET_REQUIRED")
     if target is None:
