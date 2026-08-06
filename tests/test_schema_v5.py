@@ -281,7 +281,7 @@ def test_worktree_ledger_is_non_authority(tmp_path: Path) -> None:
 
 
 def add_pending_v5_confirmation(tmp_path: Path, *, basis_sha256: str) -> None:
-    """Add a strict pending gate that survives the v4-to-v5 fixture migration."""
+    """Add a strict pending gate directly to the refreshed v5 fixture."""
     frontmatter, body = read_plan(tmp_path)
     frontmatter["confirmations"]["required"].append(
         {
@@ -351,7 +351,7 @@ def add_pending_action_lease_confirmation(
 
 
 def prepare_v4_plan(tmp_path: Path) -> None:
-    """Create a valid v4 Plan with an explicit migration gate."""
+    """Create a valid legacy v4 Plan, including stale confirmation history."""
     init_plan(tmp_path)
     frontmatter = schema_v4_admission_plan("PLAN-20260723-001")
     frontmatter["confirmations"]["required"].append(
@@ -371,7 +371,7 @@ def read_active_plan_bytes(tmp_path: Path) -> bytes:
 
 
 def test_v4_inspect_and_dry_run_are_read_only_and_repeatable(tmp_path: Path) -> None:
-    """Migration inspection does not rewrite the v4 source and dry-run is stable."""
+    """Refresh inspection does not rewrite the v4 source and dry-run is stable."""
     prepare_v4_plan(tmp_path)
     before = read_active_plan_bytes(tmp_path)
     inspect = json.loads(run_workctl(tmp_path, "migrate", "inspect").stdout)
@@ -395,68 +395,72 @@ def test_v4_inspect_and_dry_run_are_read_only_and_repeatable(tmp_path: Path) -> 
     assert inspect["from_schema_version"] == 4
     assert inspect["to_schema_version"] == 5
     assert inspect["requires_migration"] is True
+    assert inspect["migration_mode"] == "archive_legacy_and_rebuild_current_plan"
     assert first == second
     assert first["writes"] == []
     assert first["confirmation_ref"] is None
-    assert first["confirmations_required"] == ["C-MIGRATION-SCHEMA-V5"]
+    assert first["confirmations_required"] == []
+    assert first["archive_path"].startswith(".work-governance/_Plan/archive/MIG-")
+    assert first["state_mapping"] == (
+        "not performed; legacy state remains only in the archived Plan"
+    )
     assert read_active_plan_bytes(tmp_path) == before
     assert not (tmp_path / ".work-governance" / "runtime" / "migrations-v5").exists()
 
 
-def test_v5_migration_requires_exact_migration_confirmation_gate(tmp_path: Path) -> None:
-    """A schema-v5 migration cannot reuse an unrelated accepted Plan confirmation."""
+def test_current_schema_refresh_requires_expected_contract_revision(tmp_path: Path) -> None:
+    """A durable current-schema refresh still requires an expected revision guard."""
     prepare_v4_plan(tmp_path)
     before = read_active_plan_bytes(tmp_path)
 
-    unrelated = run_workctl(
+    missing_revision = run_workctl(
         tmp_path,
         "migrate",
         "apply",
-        "--confirmation",
-        "C-ADMISSION",
-        "--expected-contract-revision",
-        "1",
         check=False,
     )
 
-    assert unrelated.returncode == 2
-    assert "SCHEMA_V5_MIGRATION_CONFIRMATION_SCOPE_INVALID" in unrelated.stderr
+    assert missing_revision.returncode == 2
+    assert "EXPECTED_CONTRACT_REVISION_REQUIRED" in missing_revision.stderr
     assert read_active_plan_bytes(tmp_path) == before
     assert not (tmp_path / ".work-governance" / "runtime" / "migrations-v5").exists()
 
 
-def test_v5_migration_accepts_strict_route_migration_confirmation(
+def test_current_schema_refresh_archives_legacy_and_rebuilds_fresh_state(
     tmp_path: Path,
 ) -> None:
-    """The exact migration gate may carry strict route-bound intervention metadata."""
+    """Refresh archives the legacy Plan and does not adapt legacy task status."""
     prepare_v4_plan(tmp_path)
+    source_before = read_active_plan_bytes(tmp_path)
     frontmatter, body = read_plan(tmp_path)
-    migration_gate = next(
-        item
-        for item in frontmatter["confirmations"]["required"]
-        if item["id"] == "C-MIGRATION-SCHEMA-V5"
-    )
-    migration_gate["intervention"] = {
-        "kind": "plan_contract",
-        "blocks": ["route"],
-        "basis_ref": "project:schema-v5-migration",
-        "basis_sha256": "d" * 64,
-    }
+    frontmatter["tasks"][0]["status"] = "verified"
+    frontmatter["tasks"][0]["note"] = "legacy task completion must not become runtime state"
+    frontmatter["tasks"][0]["evidence"] = [{"ref": "project:legacy-evidence", "sha256": "a" * 64}]
     write_plan(tmp_path, frontmatter, body)
+    source_before = read_active_plan_bytes(tmp_path)
 
-    migrated = run_workctl(
-        tmp_path,
-        "migrate",
-        "apply",
-        "--confirmation",
-        "C-MIGRATION-SCHEMA-V5",
-        "--expected-contract-revision",
-        "1",
-    )
+    migrated = run_workctl(tmp_path, "migrate", "apply", "--expected-contract-revision", "1")
 
-    assert "SCHEMA_V5_MIGRATION_COMMITTED" in migrated.stdout
-    frontmatter, _body = read_plan(tmp_path)
+    assert "CURRENT_PLAN_SCHEMA_REFRESH_COMMITTED" in migrated.stdout
+    frontmatter, refreshed_body = read_plan(tmp_path)
     assert frontmatter["schema_version"] == 5
+    assert frontmatter["contract_revision"] == 1
+    assert frontmatter["confirmations"] == {"required": []}
+    assert "revision_history" not in frontmatter
+    assert all("status" not in task for task in frontmatter["tasks"])
+    assert all("note" not in task for task in frontmatter["tasks"])
+    archive_path = tmp_path / frontmatter["legacy_archive"]["path"]
+    assert archive_path.is_file()
+    assert archive_path.read_bytes() == source_before
+    assert frontmatter["legacy_archive"]["sha256"] == sha256_path(archive_path)
+    runtime_plan = tmp_path / ".work-governance" / "runtime" / "plans" / "PLAN-20260723-001"
+    state = json.loads((runtime_plan / "state.json").read_text(encoding="utf-8"))
+    events = (runtime_plan / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    assert state["tasks"] == {"T-001": {"status": "pending"}}
+    assert state["current_task"] is None
+    assert json.loads(events[0])["event"] == "contract.rebuilt_from_legacy_archive"
+    assert "Schema v5 fixture" not in refreshed_body
+    assert "Legacy Plan bytes are archived at" in refreshed_body
 
 
 def test_goal_gate_truth_and_review_public_views(tmp_path: Path) -> None:
@@ -498,6 +502,7 @@ def test_goal_gate_truth_and_review_public_views(tmp_path: Path) -> None:
 def test_reviewer_acquisition_failure_cache_is_runtime_only(tmp_path: Path) -> None:
     """Reviewer acquisition failures are cached without Plan churn or repeated retries."""
     prepare_v4_plan(tmp_path)
+    run_workctl(tmp_path, "migrate", "apply", "--expected-contract-revision", "1")
     before = read_active_plan_bytes(tmp_path)
     review_input_sha256 = "f" * 64
     scope_args = [
@@ -837,11 +842,19 @@ def test_top_level_write_aliases_require_ready_receipt(tmp_path: Path) -> None:
         assert "BOOTSTRAP_RECEIPT_REQUIRED" in result.stderr
 
 
-def test_gate_aliases_are_directional_and_upgrade_gate_compatible(
+def test_gate_aliases_are_directional_for_current_schema(
     tmp_path: Path,
 ) -> None:
-    """Gate aliases hard-code their decision and remain legal under upgrade gating."""
-    init_plan(tmp_path)
+    """Gate aliases hard-code their decision after the active Plan is current schema."""
+    prepare_v4_plan(tmp_path)
+    run_workctl(
+        tmp_path,
+        "migrate",
+        "apply",
+        "--expected-contract-revision",
+        "1",
+        env=STRICT_CONTROLLER_ENV,
+    )
     result = run_workctl(
         tmp_path,
         "gate",
@@ -892,8 +905,6 @@ def test_v5_apply_creates_backup_bundle_and_recovers_after_replace_interrupt(
         tmp_path,
         "migrate",
         "apply",
-        "--confirmation",
-        "C-MIGRATION-SCHEMA-V5",
         "--expected-contract-revision",
         "1",
         env={"WORKCTL_TEST_V5_MIGRATION_INTERRUPT": "1"},
@@ -907,7 +918,12 @@ def test_v5_apply_creates_backup_bundle_and_recovers_after_replace_interrupt(
     journal_path = transactions[0]
     journal = json.loads(journal_path.read_text(encoding="utf-8"))
     assert journal["status"] == "plan-replaced"
+    assert journal["kind"] == "current-plan-schema-refresh"
+    assert journal["migration_mode"] == "archive_legacy_and_rebuild_current_plan"
     assert journal["source_sha256"] == sha256_path(next(journal_path.parent.glob("backup/plan.md")))
+    archive_path = tmp_path / journal["archive_path"]
+    assert archive_path.is_file()
+    assert archive_path.read_bytes() == source_before
     active = yaml.safe_load(read_active_plan_bytes(tmp_path).decode().split("---\n", 2)[1])
     assert active["schema_version"] == 5
 
@@ -922,6 +938,8 @@ def test_v5_apply_creates_backup_bundle_and_recovers_after_replace_interrupt(
     )
     assert rollback_info["write"] is False
     assert rollback_info["entries"][0]["backup_sha256"] == journal["source_sha256"]
+    assert rollback_info["entries"][0]["archive_sha256"] == journal["source_sha256"]
+    assert rollback_info["entries"][0]["archive_path"] == journal["archive_path"]
     assert rollback_info["entries"][0]["recovery_command"] == (
         f"migrate recover --migration-id {journal_path.parent.name}"
     )
@@ -944,7 +962,7 @@ def test_v5_apply_creates_backup_bundle_and_recovers_after_replace_interrupt(
         "--migration-id",
         journal_path.parent.name,
     )
-    assert "SCHEMA_V5_MIGRATION_RECOVERED" in recovered.stdout
+    assert "CURRENT_PLAN_SCHEMA_REFRESH_RECOVERED" in recovered.stdout
     assert json.loads(journal_path.read_text(encoding="utf-8"))["status"] == "committed"
     assert (journal_path.parent / "backup" / "plan.md").read_bytes() == source_before
     runtime_plan = tmp_path / ".work-governance" / "runtime" / "plans" / "PLAN-20260723-001"
@@ -961,8 +979,6 @@ def test_v5_migration_recover_rejects_drifted_staging(tmp_path: Path) -> None:
         tmp_path,
         "migrate",
         "apply",
-        "--confirmation",
-        "C-MIGRATION-SCHEMA-V5",
         "--expected-contract-revision",
         "1",
         env={"WORKCTL_TEST_V5_MIGRATION_INTERRUPT": "1"},
@@ -1132,7 +1148,6 @@ def test_v5_task_advancement_preserves_independent_review_blockers(
             "expected_evidence_delta": "The sibling task can still progress.",
         }
     )
-    frontmatter["independent_validation"] = independent_validation_fixture()
     write_plan(tmp_path, frontmatter, body)
     run_workctl(
         tmp_path,
@@ -1143,6 +1158,9 @@ def test_v5_task_advancement_preserves_independent_review_blockers(
         "--expected-contract-revision",
         "1",
     )
+    frontmatter, body = read_plan(tmp_path)
+    frontmatter["independent_validation"] = independent_validation_fixture()
+    write_plan(tmp_path, frontmatter, body)
 
     blocked_start = run_workctl(
         tmp_path,
@@ -1199,7 +1217,6 @@ def test_v5_task_advancement_preserves_artifact_blockers(tmp_path: Path) -> None
             "expected_evidence_delta": "The suspect artifact is repaired.",
         }
     )
-    frontmatter["artifacts"] = [{"id": "A-001", "path": "out.txt", "status": "pending"}]
     write_plan(tmp_path, frontmatter, body)
     run_workctl(
         tmp_path,
@@ -1211,7 +1228,10 @@ def test_v5_task_advancement_preserves_artifact_blockers(tmp_path: Path) -> None
         "1",
     )
     frontmatter, body = read_plan(tmp_path)
-    frontmatter["artifacts"][0]["status"] = "suspect"
+    frontmatter["artifacts"] = [{"id": "A-001", "path": "out.txt", "status": "suspect"}]
+    for task in frontmatter["tasks"]:
+        if task["id"] == "T-002":
+            task["resolves_artifacts"] = ["A-001"]
     write_plan(tmp_path, frontmatter, body)
 
     blocked = run_workctl(
@@ -1251,9 +1271,6 @@ def test_v5_task_advancement_preserves_artifact_blockers(tmp_path: Path) -> None
 def test_v5_scheduler_exposes_in_progress_terminal_blockers(tmp_path: Path) -> None:
     """A current task blocked after start is visible before terminal advancement fails."""
     prepare_v4_plan(tmp_path)
-    frontmatter, body = read_plan(tmp_path)
-    frontmatter["artifacts"] = [{"id": "A-001", "path": "out.txt", "status": "pending"}]
-    write_plan(tmp_path, frontmatter, body)
     run_workctl(
         tmp_path,
         "migrate",
@@ -1273,7 +1290,7 @@ def test_v5_scheduler_exposes_in_progress_terminal_blockers(tmp_path: Path) -> N
         "0",
     )
     frontmatter, body = read_plan(tmp_path)
-    frontmatter["artifacts"][0]["status"] = "suspect"
+    frontmatter["artifacts"] = [{"id": "A-001", "path": "out.txt", "status": "suspect"}]
     write_plan(tmp_path, frontmatter, body)
 
     status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
@@ -1657,6 +1674,17 @@ def test_v5_status_and_scheduler_keep_blocked_work_visible_and_bounded(
         "--expected-contract-revision",
         "1",
     )
+    run_workctl(
+        tmp_path,
+        "task",
+        "block",
+        "--task-id",
+        "T-002",
+        "--expected-state-sequence",
+        "0",
+        "--note",
+        "Blocked for scheduler probe.",
+    )
 
     status = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
     assert len(json.dumps(status, ensure_ascii=False).encode("utf-8")) < 8 * 1024
@@ -1726,7 +1754,6 @@ def test_v5_confirmation_requires_exact_current_turn_without_plan_intake(
     """A v5 high-impact gate is turn-bound but does not recreate v4 intake."""
     basis_sha256 = "b" * 64
     prepare_v4_plan(tmp_path)
-    add_pending_v5_confirmation(tmp_path, basis_sha256=basis_sha256)
     run_workctl(
         tmp_path,
         "migrate",
@@ -1737,6 +1764,7 @@ def test_v5_confirmation_requires_exact_current_turn_without_plan_intake(
         "1",
         env=STRICT_CONTROLLER_ENV,
     )
+    add_pending_v5_confirmation(tmp_path, basis_sha256=basis_sha256)
 
     missing = run_workctl(
         tmp_path,
@@ -1881,11 +1909,6 @@ def test_high_impact_action_authorization_is_target_bound_and_single_use(
     target_ref = "project:service/stocklens-production"
     action_sha256 = "c" * 64
     prepare_v4_plan(tmp_path)
-    add_pending_action_confirmation(
-        tmp_path,
-        target_ref=target_ref,
-        action_sha256=action_sha256,
-    )
     run_workctl(
         tmp_path,
         "migrate",
@@ -1895,6 +1918,11 @@ def test_high_impact_action_authorization_is_target_bound_and_single_use(
         "--expected-contract-revision",
         "1",
         env=STRICT_CONTROLLER_ENV,
+    )
+    add_pending_action_confirmation(
+        tmp_path,
+        target_ref=target_ref,
+        action_sha256=action_sha256,
     )
     request_ref, turn_sha256 = issue_test_turn(
         tmp_path,
@@ -2155,12 +2183,6 @@ def test_route_action_lease_mints_bounded_single_use_authorizations(
     )
     assert explicit_blocks["scope"]["blocks"] == ["task:T-001"]
     assert explicit_blocks["basis_sha256"] != prepared["basis_sha256"]
-    add_pending_action_lease_confirmation(
-        tmp_path,
-        action_kind="production_change",
-        basis_ref=prepared["basis_ref"],
-        basis_sha256=prepared["basis_sha256"],
-    )
     run_workctl(
         tmp_path,
         "migrate",
@@ -2170,6 +2192,12 @@ def test_route_action_lease_mints_bounded_single_use_authorizations(
         "--expected-contract-revision",
         "1",
         env=STRICT_CONTROLLER_ENV,
+    )
+    add_pending_action_lease_confirmation(
+        tmp_path,
+        action_kind="production_change",
+        basis_ref=prepared["basis_ref"],
+        basis_sha256=prepared["basis_sha256"],
     )
     request_ref, turn_sha256 = issue_test_turn(
         tmp_path,
@@ -2433,12 +2461,6 @@ def test_route_action_lease_freezes_on_contract_drift(tmp_path: Path) -> None:
             *scope_args,
         ).stdout
     )
-    add_pending_action_lease_confirmation(
-        tmp_path,
-        action_kind="remote_write",
-        basis_ref=prepared["basis_ref"],
-        basis_sha256=prepared["basis_sha256"],
-    )
     run_workctl(
         tmp_path,
         "migrate",
@@ -2448,6 +2470,12 @@ def test_route_action_lease_freezes_on_contract_drift(tmp_path: Path) -> None:
         "--expected-contract-revision",
         "1",
         env=STRICT_CONTROLLER_ENV,
+    )
+    add_pending_action_lease_confirmation(
+        tmp_path,
+        action_kind="remote_write",
+        basis_ref=prepared["basis_ref"],
+        basis_sha256=prepared["basis_sha256"],
     )
     request_ref, turn_sha256 = issue_test_turn(
         tmp_path,
@@ -2531,7 +2559,6 @@ def test_v5_confirmation_recovers_event_after_contract_replace_interrupt(
     """A killed v5 confirmation repairs its ledger without replaying authority."""
     basis_sha256 = "d" * 64
     prepare_v4_plan(tmp_path)
-    add_pending_v5_confirmation(tmp_path, basis_sha256=basis_sha256)
     run_workctl(
         tmp_path,
         "migrate",
@@ -2542,6 +2569,7 @@ def test_v5_confirmation_recovers_event_after_contract_replace_interrupt(
         "1",
         env=STRICT_CONTROLLER_ENV,
     )
+    add_pending_v5_confirmation(tmp_path, basis_sha256=basis_sha256)
     request_ref, turn_sha256 = issue_test_turn(
         tmp_path,
         turn_id="turn-v5-interrupt",

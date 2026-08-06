@@ -208,19 +208,17 @@ supersedes the digest when its trusted runtime identity changes; a different
 session has its own receipt and cannot supersede this one. All controller commands require `LAYOUT_READY`
 except for layout inspection/recovery. A blocked SessionStart may inject an exact
 capability-bound `layout_command_prefix`; use it only for the reported layout
-recovery, never for Plan writes. An active schema-v3 Plan reports
-`PLAN_CONTRACT_UPGRADE_REQUIRED` until `plan contract upgrade apply|recover`
-commits schema v4. When one confirmed workflow must reconcile schema-v3
-authority and then upgrade that exact result, use
-`plan reconcile-upgrade apply|recover`; its parent journal fixes
-reconciliation before contract upgrade while both child journals remain
-independently recoverable. If exact staging exists without its journal, re-run
-parent `apply` for the parent window or parent `recover` for a child window;
-unexpected or drifted partial staging fails closed. Any incomplete parent or
-contract-upgrade journal makes authority recovery-only and blocks ordinary
-Plan or task writes plus fresh structural Plan transactions; only the bound
-workflow may resume. Use `plan adapt`, `plan contract revise`, and `plan unknown
-add|resolve` for their separate responsibilities. For schema-v5 runtime work,
+recovery, never for Plan writes. The Plugin release declares one current active
+Plan schema. In this release that schema is v5. Any active V3/V4 or otherwise
+outdated Plan reports `PLAN_SCHEMA_REFRESH_REQUIRED`; treat it as read-only
+legacy input, then use `migrate inspect`, `migrate apply --dry-run`, and
+receipt-bound `migrate apply --expected-contract-revision <revision>` to archive
+the legacy Plan and rebuild a fresh v5 contract. Do not adapt legacy task state
+or use `plan contract upgrade`/`plan reconcile-upgrade` for new work. Incomplete
+historical upgrade journals remain recovery-only audit artifacts. Use
+`plan adapt`, `plan contract revise`, and `plan unknown add|resolve` for their
+separate responsibilities after the active Plan is current schema. For
+schema-v5 runtime work,
 prefer direct `evidence capture` for command output and project-local artifacts;
 small structured compatibility evidence can still be recorded under
 `.work-governance/_Plan/.evidence/` and passed by `--evidence-manifest`.

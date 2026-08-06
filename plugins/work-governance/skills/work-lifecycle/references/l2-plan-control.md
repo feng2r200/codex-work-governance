@@ -112,12 +112,15 @@ Schema-v4 Plans carry:
   confirmation reference;
 - route state `active`, `awaiting_confirmation`, or `terminal`.
 
-Schema version is immutable through ordinary Plan revision. An active
-schema-v3 Plan is readable but ordinary writes fail closed with
-`PLAN_CONTRACT_UPGRADE_REQUIRED`; use the recoverable
-`plan contract upgrade apply|recover` transaction with an embedded
-current-turn intake proposal. A completed inactive
-schema-v3 Plan remains readable historical evidence.
+Schema version is immutable through ordinary Plan revision. The Plugin release
+declares one current active Plan schema; this release uses schema-v5. An active
+V3/V4 or otherwise outdated Plan is readable but ordinary writes fail closed
+with `PLAN_SCHEMA_REFRESH_REQUIRED`; use `migrate inspect`,
+`migrate apply --dry-run`, then receipt-bound
+`migrate apply --expected-contract-revision <revision>` to archive the legacy
+Plan and rebuild a fresh v5 contract. Do not adapt legacy task state or use
+`plan contract upgrade`/`plan reconcile-upgrade` for new work. Completed
+inactive legacy Plans remain readable historical evidence.
 
 `deferred`, `pending_confirmation`, and `in_progress` activation block terminal
 closeout. A terminal route requires complete delivery and either verified
@@ -187,21 +190,14 @@ Allowed structural changes:
   `AGENTS.md` rewrite, write the new Plan, and activate the index last.
 - `plan reconcile recover`: idempotently roll an interrupted staged migration
   forward. Recovery never resumes the old queue automatically.
-- `plan reconcile-upgrade apply --manifest ...`: fully prepare one parent
-  workflow, schema-v3 reconciliation target, schema-v4 upgrade target, and both
-  authenticated child transactions before mutation; execute only the fixed
-  reconciliation-then-contract-upgrade order. Re-run apply after exact parent
-  staging was interrupted before parent-journal publication; drifted partial
-  staging fails closed.
-- `plan reconcile-upgrade recover --workflow-id ...`: authenticate the parent
-  binding and existing child journals; validate and fill exact child staging
-  when interruption preceded a child journal; then resume only the incomplete
-  child and require the exact final schema-v4 authority. A committed call
-  performs read-only revalidation and never advances an incomplete child.
-  Until both parent and contract-upgrade journals commit, authority reports
-  `MIGRATION_RECOVERY_REQUIRED`; ordinary Plan or task writes and fresh
-  structural Plan transactions fail closed, while the same bound workflow may
-  resume through apply or recover.
+- `plan reconcile-upgrade apply|recover`: historical schema-v3-to-v4
+  recovery/audit surface only. New work must not use it to adapt active legacy
+  state. If an active Plan is older than the Plugin-declared current schema,
+  use `migrate inspect`, `migrate apply --dry-run`, and
+  `migrate apply --expected-contract-revision <revision>` to archive the
+  legacy Plan and rebuild a fresh current-schema contract. Existing incomplete
+  historical journals remain `MIGRATION_RECOVERY_REQUIRED` and may be resumed
+  only through their bound recovery path.
 - `plan structural-rebase apply --manifest ... --dry-run`: show the exact
   same-Plan source and index hashes, derived target hash, authorization ID, and
   changed fields for one confirmed material route rebase. The manifest may only
@@ -352,21 +348,21 @@ Allowed structural changes:
   exact `basis_ref` plus `basis_sha256`. This may rebind only a still-pending
   strict gate. It cannot change protected targets, revise an accepted decision,
   or serve as evidence that the external action happened.
-- `migrate inspect` and `migrate apply --dry-run`: inspect or preview schema-v5
-  migration without writing project state or requiring a READY receipt.
-- `migrate apply`: after explicit confirmation and expected contract revision,
-  write backup, staging, runtime state, event ledger and journal data, then
-  replace the active Plan. It is receipt-bound and accepts only the exact
-  `C-MIGRATION-SCHEMA-V5` migration gate, never an unrelated accepted
-  confirmation.
-- `migrate recover`: finish only the authenticated schema-v5 migration journal
-  and is receipt-bound because it can replace Plan/runtime files.
-- `migrate rollback-info`: show backup, staging, recovery command and manual
-  rollback boundary without writing state.
-- `doctor`: report layout, authority, schema-v5 migration journals, and generic
+- `migrate inspect` and `migrate apply --dry-run`: inspect or preview
+  current-schema refresh without writing project state or requiring a READY
+  receipt.
+- `migrate apply`: with expected contract revision, write backup, staging,
+  versioned legacy archive, fresh runtime state, event ledger, and journal data,
+  then replace the active Plan. It is receipt-bound; it does not require a fixed
+  migration confirmation gate and does not carry legacy task status into runtime.
+- `migrate recover`: finish only the authenticated current-schema refresh
+  journal and is receipt-bound because it can replace Plan/runtime files.
+- `migrate rollback-info`: show archive, backup, staging, recovery command and
+  manual rollback boundary without writing state.
+- `doctor`: report layout, authority, current-schema refresh journals, and generic
   runtime transactions. `doctor --clean-stale-transactions` is receipt-bound
   and removes only stale generic transaction directories that have no journal;
-  it never deletes schema-v5 migration journals or backup/staging bundles.
+  it never deletes schema refresh journals, archives, or backup/staging bundles.
 - `risk inspect`: return read-only action kind, target, reversibility, digest,
   and risk factors. The controller reports facts only; the model decides
   whether current authority is enough or a user confirmation is needed.

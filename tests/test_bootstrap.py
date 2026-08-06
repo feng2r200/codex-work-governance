@@ -1950,12 +1950,16 @@ def test_runtime_bundle_survives_plugin_cache_loss_and_preserves_other_session(
 
     assert receipt["schema_version"] == 2
     assert receipt["session_id"] == "observed-session-current"
+    assert receipt["current_plan_schema_version"] == 5
     assert hashlib.sha256(controller.read_bytes()).hexdigest() == receipt["controller_sha256"]
     assert hashlib.sha256(lifecycle.read_bytes()).hexdigest() == receipt["lifecycle_sha256"]
     assert (
         hashlib.sha256(bundle_manifest.read_bytes()).hexdigest()
         == receipt["runtime_manifest_sha256"]
     )
+    assert json.loads(bundle_manifest.read_text(encoding="utf-8"))[
+        "current_plan_schema_version"
+    ] == 5
     preserved = subprocess.run(
         [
             sys.executable,

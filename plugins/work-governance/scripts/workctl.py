@@ -45,6 +45,7 @@ try:
     from workctl_modules import yaml_compat as yaml
     from workctl_modules.migration import build_v5_contract, build_v5_state, migration_projection
     from workctl_modules.model import TaskProjection
+    from workctl_modules.plan_schema import CURRENT_PLAN_SCHEMA_VERSION
     from workctl_modules.storage import canonical_event_bytes, redacted_copy
 except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     import yaml  # type: ignore[no-redef]
@@ -60,6 +61,7 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     build_v5_state = None  # type: ignore[assignment]
     migration_projection = None  # type: ignore[assignment]
     TaskProjection = None  # type: ignore[assignment,misc]
+    CURRENT_PLAN_SCHEMA_VERSION = 5
     canonical_event_bytes = None  # type: ignore[assignment]
     redacted_copy = None  # type: ignore[assignment]
 
@@ -777,6 +779,7 @@ def load_controller_receipt_v2(
         "status",
         "plugin_build",
         "plugin_manifest_sha256",
+        "current_plan_schema_version",
         "project_input_sha256",
         "project_output_sha256",
         "layout_state",
@@ -797,6 +800,7 @@ def load_controller_receipt_v2(
         or payload.get("action_revision") != BOOTSTRAP_ACTION_REVISION
         or not isinstance(payload.get("session_id"), str)
         or not payload.get("session_id")
+        or payload.get("current_plan_schema_version") != CURRENT_PLAN_SCHEMA_VERSION
     ):
         return None
     status_and_layout = (payload.get("status"), payload.get("layout_state"))
@@ -950,6 +954,7 @@ def validate_current_ready_receipt(
         "kind": "work-governance-runtime-bundle",
         "plugin_build": receipt["plugin_build"],
         "plugin_manifest_sha256": receipt["plugin_manifest_sha256"],
+        "current_plan_schema_version": CURRENT_PLAN_SCHEMA_VERSION,
         "controller_ref": receipt["controller_ref"],
         "controller_sha256": receipt["controller_sha256"],
         "lifecycle_ref": receipt["lifecycle_ref"],
@@ -1236,6 +1241,12 @@ def uncommitted_governance_footprint_errors(root: Path) -> list[str]:
                         if lifecycle.is_file() and not lifecycle.is_symlink()
                         else None,
                     }
+                    if isinstance(payload, dict) and "current_plan_schema_version" in payload:
+                        version = payload["current_plan_schema_version"]
+                        if not isinstance(version, int) or version < 1:
+                            errors.append("uncommitted runtime plugin manifest is invalid")
+                            continue
+                        expected["current_plan_schema_version"] = version
                     if isinstance(payload, dict) and "module_files" in payload:
                         module_files = payload["module_files"]
                         if not isinstance(module_files, list):
@@ -3311,7 +3322,7 @@ def allowed_commands_for_state(state: str) -> list[str]:
 
 
 def incomplete_v5_migration_journals(root: Path) -> list[Path]:
-    """Return unfinished schema-v5 migration journals for authority recovery."""
+    """Return unfinished current-schema refresh journals for authority recovery."""
     base = v5_migration_base(root)
     if not base.is_dir():
         return []
@@ -3400,7 +3411,7 @@ def inspect_authority(
             for journal in structural_rebase_journals
         )
         blockers.extend(
-            f"incomplete schema-v5 migration journal: {relative_project_path(root, journal)}"
+            f"incomplete current-schema refresh journal: {relative_project_path(root, journal)}"
             for journal in v5_migration_journals
         )
         state = "MIGRATION_RECOVERY_REQUIRED"
@@ -3802,19 +3813,18 @@ def bump_revision(
 
 
 def contract_state(frontmatter: dict[str, Any]) -> str:
-    """Return the schema-cutover state independently from Plan authority."""
+    """Return the current-schema state independently from Plan authority."""
     schema_version = frontmatter.get("schema_version")
-    if schema_version == 5:
+    status = frontmatter.get("status")
+    if schema_version == CURRENT_PLAN_SCHEMA_VERSION:
         return "PLAN_CONTRACT_READY"
-    if schema_version == 4:
-        return "PLAN_CONTRACT_READY"
-    if schema_version == 3 and frontmatter.get("status") not in {"complete", "retired"}:
-        return "PLAN_CONTRACT_UPGRADE_REQUIRED"
+    if status not in {"complete", "retired"}:
+        return "PLAN_SCHEMA_REFRESH_REQUIRED"
     return "PLAN_CONTRACT_LEGACY_READABLE"
 
 
 def require_plan_contract_ready(frontmatter: dict[str, Any]) -> None:
-    """Block ordinary writes from silently trusting an active schema-v3 contract."""
+    """Block ordinary writes from silently trusting an outdated active contract."""
     state = contract_state(frontmatter)
     if state != "PLAN_CONTRACT_READY":
         raise WorkctlError(state)
@@ -6275,7 +6285,7 @@ def cmd_intake_status(args: argparse.Namespace) -> None:
         and plan_contract_state
         in {"NO_ACTIVE_PLAN", "PLAN_CONTRACT_READY", "PLAN_CONTRACT_LEGACY_READABLE"}
         else plan_contract_state
-        if plan_contract_state == "PLAN_CONTRACT_UPGRADE_REQUIRED"
+        if plan_contract_state == "PLAN_SCHEMA_REFRESH_REQUIRED"
         else "INTAKE_BLOCKED"
     )
     print(
@@ -6957,8 +6967,11 @@ def cmd_intake_receipt(args: argparse.Namespace) -> None:
             plan = load_plan(active_plan_path(root))
         else:
             raise WorkctlError("PLAN_INTAKE_CANDIDATE_REQUIRED")
-        if plan.frontmatter.get("schema_version") != 4:
-            raise WorkctlError("PLAN_CONTRACT_UPGRADE_REQUIRED")
+        plan_schema_version = plan.frontmatter.get("schema_version")
+        if plan_schema_version != 4:
+            if plan_schema_version == CURRENT_PLAN_SCHEMA_VERSION:
+                raise WorkctlError("PLAN_INTAKE_NOT_REQUIRED_FOR_CURRENT_SCHEMA")
+            raise WorkctlError("PLAN_SCHEMA_REFRESH_REQUIRED")
         if legacy_unknown_ids(plan.frontmatter):
             raise WorkctlError("UNKNOWN_CONTRACT_REQUIRED")
         validate_intake_decision(
@@ -13917,7 +13930,11 @@ def cmd_workflow_help(args: argparse.Namespace) -> None:
                 "migrate rollback-info",
                 "doctor",
             ],
-            "note": "Migration is explicit, backed up, and recovery-bound.",
+            "note": (
+                "Outdated active Plans are read-only inputs: migrate apply archives the "
+                "legacy Plan, rebuilds the current schema contract, and starts fresh "
+                "runtime state without adapting legacy task status."
+            ),
         },
         "doctor": {
             "commands": ["doctor", "doctor --clean-stale-transactions"],
@@ -14753,14 +14770,14 @@ def cmd_review_request(_args: argparse.Namespace) -> None:
 
 
 def cmd_migrate_inspect(_args: argparse.Namespace) -> None:
-    """Report the current migration boundary without writing any state."""
+    """Report the current-schema refresh boundary without writing any state."""
     root = project_root()
     report = inspect_authority(root)
     payload: dict[str, Any] = {
         "authority_state": report.state,
         "plan_id": None,
         "from_schema_version": None,
-        "to_schema_version": 5,
+        "to_schema_version": CURRENT_PLAN_SCHEMA_VERSION,
         "write": False,
     }
     if report.state == "GOVERNED_ACTIVE":
@@ -14773,7 +14790,7 @@ def cmd_migrate_inspect(_args: argparse.Namespace) -> None:
 
 
 def v5_migration_base(root: Path) -> Path:
-    """Return the ignored parent for schema-v5 migration transactions."""
+    """Return the ignored parent for current-schema refresh transactions."""
     path = governance_root(root) / "runtime" / "migrations-v5"
     reject_symlink_components(root, path)
     return path
@@ -14812,41 +14829,63 @@ def v5_migration_paths(root: Path, migration_id: str) -> dict[str, Path]:
     }
 
 
-def validate_v5_migration_confirmation(
-    frontmatter: Mapping[str, Any],
-    supplied: str | None,
-) -> dict[str, Any]:
-    """Require an accepted explicit gate for a durable schema migration."""
-    if not isinstance(supplied, str) or not supplied:
-        raise WorkctlError("SCHEMA_V5_MIGRATION_CONFIRMATION_REQUIRED")
-    if not supplied.startswith("C-"):
-        raise WorkctlError("INVALID_CONFIRMATION_ID")
-    if supplied != "C-MIGRATION-SCHEMA-V5":
-        raise WorkctlError("SCHEMA_V5_MIGRATION_CONFIRMATION_SCOPE_INVALID")
-    decision = confirmations(cast(dict[str, Any], frontmatter)).get(supplied)
-    if (
-        not isinstance(decision, dict)
-        or decision.get("status") != "accepted"
-        or not decision.get("ref")
-    ):
-        raise WorkctlError(f"CONFIRMATION_REQUIRED: {supplied}")
-    intervention = decision.get("intervention")
-    if intervention is None:
-        return decision
-    if not isinstance(intervention, dict):
-        raise WorkctlError("SCHEMA_V5_MIGRATION_CONFIRMATION_SCOPE_INVALID")
-    plan_id = str(frontmatter.get("plan_id", ""))
-    blocks = intervention.get("blocks")
-    if (
-        intervention.get("kind") != "plan_contract"
-        or not isinstance(blocks, list)
-        or ("route" not in blocks and f"plan:{plan_id}" not in blocks)
-    ):
-        raise WorkctlError("SCHEMA_V5_MIGRATION_CONFIRMATION_SCOPE_INVALID")
-    basis_sha256 = intervention.get("basis_sha256")
-    if not isinstance(basis_sha256, str) or SHA256_RE.fullmatch(basis_sha256) is None:
-        raise WorkctlError("SCHEMA_V5_MIGRATION_CONFIRMATION_BASIS_INVALID")
-    return decision
+def v5_legacy_archive_path(root: Path, migration_id: str, source_name: str) -> Path:
+    """Return the versioned archive target for one legacy active Plan."""
+    if MIGRATION_ID_RE.fullmatch(migration_id) is None:
+        raise WorkctlError("SCHEMA_V5_MIGRATION_ID_INVALID")
+    if Path(source_name).name != source_name:
+        raise WorkctlError("SCHEMA_V5_MIGRATION_SOURCE_NAME_INVALID")
+    path = checked_project_path(root, plan_relative_path("archive", migration_id, source_name))
+    reject_symlink_components(root, path)
+    return path
+
+
+def current_schema_refresh_body(contract: Mapping[str, Any]) -> str:
+    """Build a fresh active Plan body that points to the archived legacy source."""
+    title = str(contract.get("title") or contract.get("plan_id") or "Current Plan")
+    goal = contract.get("goal")
+    success_conditions = contract.get("success_conditions", [])
+    tasks = contract.get("tasks", [])
+    archive = contract.get("legacy_archive")
+    archive_path = archive.get("path") if isinstance(archive, dict) else None
+    lines = [
+        f"# {title}",
+        "",
+        "## Goal",
+        str(goal) if isinstance(goal, str) and goal else "See frontmatter goal.",
+        "",
+        "## Success Conditions",
+    ]
+    if isinstance(success_conditions, list) and success_conditions:
+        lines.extend(
+            f"- {item}" for item in success_conditions if isinstance(item, str) and item
+        )
+    else:
+        lines.append("- See frontmatter success_conditions.")
+    lines.extend(["", "## Tasks"])
+    if isinstance(tasks, list) and tasks:
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            task_id = task.get("id")
+            description = task.get("description")
+            if isinstance(task_id, str) and isinstance(description, str):
+                lines.append(f"- {task_id}: {description}")
+    else:
+        lines.append("- See frontmatter tasks.")
+    lines.extend(
+        [
+            "",
+            "## Legacy Archive",
+            (
+                f"Legacy Plan bytes are archived at `{archive_path}`."
+                if isinstance(archive_path, str) and archive_path
+                else "Legacy Plan bytes are archived in the schema refresh journal."
+            ),
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def prepare_v5_migration(
@@ -14854,26 +14893,37 @@ def prepare_v5_migration(
     source: PlanDocument,
     *,
     migration_id: str,
-    confirmation_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], bytes]:
-    """Prepare v5 contract, state, event, and journal bytes without publishing them."""
-    if source.frontmatter.get("schema_version") not in {1, 2, 3, 4}:
+    """Prepare current-schema contract, state, event, and journal bytes."""
+    from_schema_version = source.frontmatter.get("schema_version")
+    if from_schema_version == CURRENT_PLAN_SCHEMA_VERSION:
+        raise WorkctlError("CURRENT_PLAN_SCHEMA_REFRESH_NOT_REQUIRED")
+    if not isinstance(from_schema_version, int) or from_schema_version < 1:
         raise WorkctlError("SCHEMA_V5_MIGRATION_SOURCE_UNSUPPORTED")
     if build_v5_contract is None or build_v5_state is None:
         raise WorkctlError("SCHEMA_V5_MIGRATION_MODULE_UNAVAILABLE")
+    timestamp = utc_now()
     source_bytes = source.path.read_bytes()
+    source_sha256 = sha256_bytes(source_bytes)
+    archive_path = v5_legacy_archive_path(root, migration_id, source.path.name)
+    archive_relative = relative_project_path(root, archive_path)
     contract = build_v5_contract(source.frontmatter)
+    contract["legacy_archive"] = {
+        "path": archive_relative,
+        "sha256": source_sha256,
+        "from_schema_version": from_schema_version,
+        "mode": "archive_legacy_and_rebuild_current_plan",
+    }
     if redacted_copy is not None:
         contract = cast(dict[str, Any], redacted_copy(contract))
     state = build_v5_state(
         source.frontmatter,
-        updated_at=str(source.frontmatter.get("updated_at", utc_now())),
+        updated_at=timestamp,
     )
     if redacted_copy is not None:
         state = cast(dict[str, Any], redacted_copy(state))
-    plan_doc = PlanDocument(source.path, contract, source.body)
+    plan_doc = PlanDocument(source.path, contract, current_schema_refresh_body(contract))
     target_bytes = dump_plan(plan_doc).encode("utf-8")
-    source_sha256 = sha256_bytes(source_bytes)
     target_sha256 = sha256_bytes(target_bytes)
     plan_id = str(source.frontmatter["plan_id"])
     event = {
@@ -14882,15 +14932,18 @@ def prepare_v5_migration(
         "plan_id": plan_id,
         "event_sequence": 1,
         "state_sequence": 0,
-        "event": "contract.migrated",
+        "event": "contract.rebuilt_from_legacy_archive",
         "subject": f"plan:{plan_id}",
         "payload": {
-            "from_schema_version": source.frontmatter.get("schema_version"),
-            "to_schema_version": 5,
+            "from_schema_version": from_schema_version,
+            "to_schema_version": CURRENT_PLAN_SCHEMA_VERSION,
+            "migration_mode": "archive_legacy_and_rebuild_current_plan",
             "source_sha256": source_sha256,
-            "confirmation_id": confirmation_id,
+            "archive_path": archive_relative,
+            "archive_sha256": source_sha256,
+            "state_mapping": "not_performed",
         },
-        "recorded_at": utc_now(),
+        "recorded_at": timestamp,
     }
     if redacted_copy is not None:
         event = cast(dict[str, Any], redacted_copy(event))
@@ -14902,21 +14955,25 @@ def prepare_v5_migration(
     )
     journal = {
         "schema_version": 1,
-        "kind": "schema-v5-migration",
+        "kind": "current-plan-schema-refresh",
         "migration_id": migration_id,
         "status": "prepared",
         "plan_id": plan_id,
+        "from_schema_version": from_schema_version,
+        "to_schema_version": CURRENT_PLAN_SCHEMA_VERSION,
+        "migration_mode": "archive_legacy_and_rebuild_current_plan",
         "source_path": relative_project_path(root, source.path),
         "source_sha256": source_sha256,
+        "archive_path": archive_relative,
+        "archive_sha256": source_sha256,
         "target_sha256": target_sha256,
         "state_sha256": sha256_bytes(
             json.dumps(state, indent=2, sort_keys=True).encode("utf-8") + b"\n"
         ),
         "events_sha256": sha256_bytes(event_bytes),
         "contract_revision": contract.get("contract_revision"),
-        "confirmation_id": confirmation_id,
-        "created_at": utc_now(),
-        "updated_at": utc_now(),
+        "created_at": timestamp,
+        "updated_at": timestamp,
     }
     return journal, state, event, target_bytes
 
@@ -14940,7 +14997,7 @@ def write_v5_migration_staging(
 
 
 def finish_v5_migration(root: Path, journal_path: Path) -> None:
-    """Complete one prepared v5 migration idempotently after an interruption."""
+    """Complete one prepared current-schema refresh after an interruption."""
     journal = load_yaml_file(journal_path)
     migration_id = journal.get("migration_id")
     if not isinstance(migration_id, str):
@@ -14954,23 +15011,32 @@ def finish_v5_migration(root: Path, journal_path: Path) -> None:
         "migration_id",
         "status",
         "plan_id",
+        "from_schema_version",
+        "to_schema_version",
+        "migration_mode",
         "source_path",
         "source_sha256",
+        "archive_path",
+        "archive_sha256",
         "target_sha256",
         "state_sha256",
         "events_sha256",
         "contract_revision",
-        "confirmation_id",
         "created_at",
         "updated_at",
     }
     if (
         set(journal) != required
         or journal.get("schema_version") != 1
-        or journal.get("kind") != "schema-v5-migration"
+        or journal.get("kind") != "current-plan-schema-refresh"
+        or journal.get("to_schema_version") != CURRENT_PLAN_SCHEMA_VERSION
+        or journal.get("migration_mode") != "archive_legacy_and_rebuild_current_plan"
+        or journal.get("status") not in {"prepared", "plan-replaced", "committed"}
     ):
         raise WorkctlError("SCHEMA_V5_MIGRATION_JOURNAL_INVALID")
     source = checked_project_path(root, str(journal["source_path"]))
+    archive = checked_project_path(root, str(journal["archive_path"]))
+    reject_symlink_components(root, archive)
     plan_id = str(journal["plan_id"])
     runtime = v5_runtime_dir(root, plan_id)
     state_target = runtime / "state.json"
@@ -14986,19 +15052,33 @@ def finish_v5_migration(root: Path, journal_path: Path) -> None:
         or sha256_file(paths["events_staging"]) != journal["events_sha256"]
     ):
         raise WorkctlError("SCHEMA_V5_MIGRATION_STAGING_INVALID")
+    if journal["archive_sha256"] != journal["source_sha256"]:
+        raise WorkctlError("SCHEMA_V5_MIGRATION_JOURNAL_INVALID")
+    if archive.exists() and (
+        not archive.is_file() or sha256_file(archive) != journal["archive_sha256"]
+    ):
+        raise WorkctlError("SCHEMA_V5_MIGRATION_ARCHIVE_DRIFT")
     if journal["status"] == "committed":
         if not source.is_file() or sha256_file(source) != journal["target_sha256"]:
+            raise WorkctlError("SCHEMA_V5_MIGRATION_COMMITTED_DRIFT")
+        if not archive.is_file() or sha256_file(archive) != journal["archive_sha256"]:
             raise WorkctlError("SCHEMA_V5_MIGRATION_COMMITTED_DRIFT")
         return
     if not source.is_file():
         raise WorkctlError("SCHEMA_V5_MIGRATION_SOURCE_MISSING")
     current_sha256 = sha256_file(source)
     if current_sha256 == journal["source_sha256"]:
+        write_atomic_bytes(archive, paths["backup"].read_bytes())
         write_atomic_bytes(state_target, paths["state_staging"].read_bytes())
         write_atomic_bytes(event_target, paths["events_staging"].read_bytes())
         write_atomic_bytes(source, paths["staging"].read_bytes())
     elif current_sha256 != journal["target_sha256"]:
         raise WorkctlError("SCHEMA_V5_MIGRATION_SOURCE_DRIFT")
+    else:
+        if not archive.is_file():
+            write_atomic_bytes(archive, paths["backup"].read_bytes())
+        write_atomic_bytes(state_target, paths["state_staging"].read_bytes())
+        write_atomic_bytes(event_target, paths["events_staging"].read_bytes())
     journal["status"] = "plan-replaced"
     journal["updated_at"] = utc_now()
     write_atomic(journal_path, json.dumps(journal, indent=2, sort_keys=True) + "\n")
@@ -15013,15 +15093,19 @@ def finish_v5_migration(root: Path, journal_path: Path) -> None:
 
 
 def cmd_migrate_apply(args: argparse.Namespace) -> None:
-    """Apply an explicit, backed-up, atomically recoverable v4-to-v5 migration."""
+    """Archive an outdated active Plan and rebuild the current-schema contract."""
     root = project_root()
     if args.dry_run:
         require_governed_authority(root)
         source = load_plan(active_plan_path(root))
-        if source.frontmatter.get("schema_version") == 5:
+        if source.frontmatter.get("schema_version") == CURRENT_PLAN_SCHEMA_VERSION:
             print(
                 json.dumps(
-                    {"status": "already_v5", "plan_id": source.frontmatter.get("plan_id")},
+                    {
+                        "status": "already_current",
+                        "plan_id": source.frontmatter.get("plan_id"),
+                        "schema_version": CURRENT_PLAN_SCHEMA_VERSION,
+                    },
                     sort_keys=True,
                 )
             )
@@ -15040,42 +15124,29 @@ def cmd_migrate_apply(args: argparse.Namespace) -> None:
                 "CONTRACT_REVISION_MISMATCH: "
                 f"expected {args.expected_contract_revision}, found {current_revision}"
             )
+        preview_migration_id = next_v5_migration_id(root)
         journal, state, _event, target_bytes = prepare_v5_migration(
             root,
             source,
-            migration_id="MIG-DRY-RUN-001",
-            confirmation_id=str(args.confirmation or "C-MIGRATION-SCHEMA-V5"),
+            migration_id=preview_migration_id,
         )
         target_sha256 = sha256_bytes(target_bytes)
-        decision: dict[str, Any] | None = None
-        confirmations_required = ["C-MIGRATION-SCHEMA-V5"]
-        if isinstance(args.confirmation, str):
-            candidate = confirmations(source.frontmatter).get(args.confirmation)
-            if (
-                isinstance(candidate, dict)
-                and candidate.get("status") == "accepted"
-                and candidate.get("ref")
-            ):
-                decision = validate_v5_migration_confirmation(
-                    source.frontmatter,
-                    args.confirmation,
-                )
-                confirmations_required = []
-            else:
-                if not args.confirmation.startswith("C-"):
-                    raise WorkctlError("INVALID_CONFIRMATION_ID")
-                confirmations_required = [args.confirmation]
+        if isinstance(args.confirmation, str) and not args.confirmation.startswith("C-"):
+            raise WorkctlError("INVALID_CONFIRMATION_ID")
         payload = migration_projection(source.frontmatter) if callable(migration_projection) else {}
         payload.update(
             {
                 "status": "dry_run",
                 "plan_id": source.frontmatter.get("plan_id"),
                 "source_sha256": sha256_file(source.path),
+                "archive_path": journal.get("archive_path"),
+                "archive_sha256": journal.get("archive_sha256"),
                 "target_sha256": target_sha256,
                 "state_sequence": state.get("state_sequence"),
                 "contract_revision": journal.get("contract_revision"),
-                "confirmation_ref": decision.get("ref") if decision else None,
-                "confirmations_required": confirmations_required,
+                "confirmation_ref": None,
+                "confirmation_deprecated": bool(args.confirmation),
+                "confirmations_required": [],
                 "writes": [],
             }
         )
@@ -15084,14 +15155,20 @@ def cmd_migrate_apply(args: argparse.Namespace) -> None:
     with lock(root):
         require_governed_authority(root)
         source = load_plan(active_plan_path(root))
-        if source.frontmatter.get("schema_version") == 5:
+        if source.frontmatter.get("schema_version") == CURRENT_PLAN_SCHEMA_VERSION:
             print(
                 json.dumps(
-                    {"status": "already_v5", "plan_id": source.frontmatter.get("plan_id")},
+                    {
+                        "status": "already_current",
+                        "plan_id": source.frontmatter.get("plan_id"),
+                        "schema_version": CURRENT_PLAN_SCHEMA_VERSION,
+                    },
                     sort_keys=True,
                 )
             )
             return
+        if isinstance(args.confirmation, str) and not args.confirmation.startswith("C-"):
+            raise WorkctlError("INVALID_CONFIRMATION_ID")
         expected = args.expected_contract_revision
         contract = source.frontmatter.get("contract")
         current_revision = (
@@ -15110,11 +15187,6 @@ def cmd_migrate_apply(args: argparse.Namespace) -> None:
             root,
             source,
             migration_id=migration_id,
-            confirmation_id=str(args.confirmation),
-        )
-        validate_v5_migration_confirmation(
-            source.frontmatter,
-            args.confirmation,
         )
         paths = v5_migration_paths(root, migration_id)
         source_bytes = source.path.read_bytes()
@@ -15126,11 +15198,14 @@ def cmd_migrate_apply(args: argparse.Namespace) -> None:
         write_v5_migration_staging(root, paths, source_bytes, target_bytes, state, event_bytes)
         write_atomic(paths["journal"], json.dumps(journal, indent=2, sort_keys=True) + "\n")
         finish_v5_migration(root, paths["journal"])
-    print(f"SCHEMA_V5_MIGRATION_COMMITTED {migration_id} plan={source.frontmatter['plan_id']}")
+    print(
+        f"CURRENT_PLAN_SCHEMA_REFRESH_COMMITTED {migration_id} "
+        f"plan={source.frontmatter['plan_id']}"
+    )
 
 
 def migration_rollback_entry(root: Path, journal_path: Path) -> dict[str, Any]:
-    """Build a read-only rollback/recovery entry from one schema-v5 migration journal."""
+    """Build a read-only rollback/recovery entry from one schema refresh journal."""
     journal = load_yaml_file(journal_path)
     migration_id = journal.get("migration_id")
     if not isinstance(migration_id, str):
@@ -15138,13 +15213,29 @@ def migration_rollback_entry(root: Path, journal_path: Path) -> dict[str, Any]:
     paths = v5_migration_paths(root, migration_id)
     backup_sha256 = sha256_file(paths["backup"]) if paths["backup"].is_file() else None
     staging_sha256 = sha256_file(paths["staging"]) if paths["staging"].is_file() else None
+    archive_path = (
+        checked_project_path(root, str(journal["archive_path"]))
+        if isinstance(journal.get("archive_path"), str)
+        else None
+    )
+    archive_sha256 = (
+        sha256_file(archive_path)
+        if isinstance(archive_path, Path) and archive_path.is_file()
+        else None
+    )
     return {
         "migration_id": migration_id,
         "status": journal.get("status"),
         "plan_id": journal.get("plan_id"),
+        "from_schema_version": journal.get("from_schema_version"),
+        "to_schema_version": journal.get("to_schema_version"),
+        "migration_mode": journal.get("migration_mode"),
         "source_path": journal.get("source_path"),
         "source_sha256": journal.get("source_sha256"),
         "target_sha256": journal.get("target_sha256"),
+        "archive_path": journal.get("archive_path"),
+        "archive_sha256": archive_sha256,
+        "expected_archive_sha256": journal.get("archive_sha256"),
         "backup_path": (
             relative_project_path(root, paths["backup"]) if paths["backup"].exists() else None
         ),
@@ -15155,14 +15246,14 @@ def migration_rollback_entry(root: Path, journal_path: Path) -> dict[str, Any]:
         "staging_sha256": staging_sha256,
         "recovery_command": f"migrate recover --migration-id {migration_id}",
         "rollback_boundary": (
-            "No automatic rollback command is exposed. The original bytes are preserved "
-            "in backup_path for audit and manually confirmed recovery planning."
+            "No automatic rollback command is exposed. The legacy Plan is preserved "
+            "in archive_path for audit and manually confirmed recovery planning."
         ),
     }
 
 
 def migration_rollback_report_entry(root: Path, journal_path: Path) -> dict[str, Any]:
-    """Build a doctor-safe migration journal report entry."""
+    """Build a doctor-safe schema refresh journal report entry."""
     try:
         return migration_rollback_entry(root, journal_path)
     except WorkctlError as exc:
@@ -15172,14 +15263,14 @@ def migration_rollback_report_entry(root: Path, journal_path: Path) -> dict[str,
             "error": str(exc),
             "recovery_command": None,
             "rollback_boundary": (
-                "Invalid migration journal was preserved for investigation; "
-                "doctor does not delete schema-v5 migration bundles."
+                "Invalid schema refresh journal was preserved for investigation; "
+                "doctor does not delete schema refresh bundles."
             ),
         }
 
 
 def cmd_migrate_rollback_info(args: argparse.Namespace) -> None:
-    """Show schema-v5 migration backup and recovery information without mutating state."""
+    """Show schema refresh archive, backup, and recovery information."""
     root = project_root()
     base = v5_migration_base(root)
     if args.migration_id:
@@ -15195,7 +15286,7 @@ def cmd_migrate_rollback_info(args: argparse.Namespace) -> None:
         json.dumps(
             {
                 "schema_version": 1,
-                "kind": "schema-v5-migration-rollback-info",
+                "kind": "current-plan-schema-refresh-rollback-info",
                 "write": False,
                 "entries": entries,
             },
@@ -15316,9 +15407,10 @@ def cmd_doctor(args: argparse.Namespace) -> None:
                 "runtime_transactions": stale_entries,
                 "cleaned": cleaned,
                 "next_action": (
-                    "Run migrate recover for incomplete schema-v5 journals before ordinary work."
+                    "Run migrate recover for incomplete current-schema refresh journals "
+                    "before ordinary work."
                     if any(entry.get("status") != "committed" for entry in migration_journals)
-                    else "No schema-v5 migration recovery action is required."
+                    else "No current-schema refresh recovery action is required."
                 ),
             },
             indent=2,
@@ -15328,7 +15420,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
 
 
 def cmd_migrate_recover(args: argparse.Namespace) -> None:
-    """Recover one named or the only incomplete schema-v5 migration."""
+    """Recover one named or the only incomplete current-schema refresh."""
     root = project_root()
     base = v5_migration_base(root)
     candidates = []
@@ -15348,7 +15440,7 @@ def cmd_migrate_recover(args: argparse.Namespace) -> None:
         )
     with lock(root):
         finish_v5_migration(root, candidates[0])
-    print(f"SCHEMA_V5_MIGRATION_RECOVERED {candidates[0].parent.name}")
+    print(f"CURRENT_PLAN_SCHEMA_REFRESH_RECOVERED {candidates[0].parent.name}")
 
 
 def cmd_plan_validate(args: argparse.Namespace) -> None:
@@ -21451,9 +21543,20 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_inspect = migrate_sub.add_parser("inspect")
     migrate_inspect.set_defaults(func=cmd_migrate_inspect)
     migrate_apply = migrate_sub.add_parser("apply")
-    migrate_apply.add_argument("--confirmation")
-    migrate_apply.add_argument("--expected-contract-revision", type=int)
-    migrate_apply.add_argument("--dry-run", action="store_true")
+    migrate_apply.add_argument(
+        "--confirmation",
+        help="Deprecated compatibility argument; current-schema refresh does not require it.",
+    )
+    migrate_apply.add_argument(
+        "--expected-contract-revision",
+        type=int,
+        help="Required for durable refresh; guards the archived legacy source revision.",
+    )
+    migrate_apply.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview the archive and rebuild boundary without writing project state.",
+    )
     migrate_apply.set_defaults(func=cmd_migrate_apply)
     migrate_recover = migrate_sub.add_parser("recover")
     migrate_recover.add_argument("--migration-id")
@@ -21600,17 +21703,41 @@ def build_parser() -> argparse.ArgumentParser:
     contract_revise = contract_sub.add_parser("revise")
     contract_revise.add_argument("--manifest", required=True)
     contract_revise.set_defaults(func=cmd_plan_contract_revise)
-    contract_upgrade = contract_sub.add_parser("upgrade")
+    contract_upgrade = contract_sub.add_parser(
+        "upgrade",
+        description=(
+            "Historical schema-v3-to-v4 recovery/audit surface. New work uses "
+            "`migrate apply` current-schema refresh."
+        ),
+    )
     contract_upgrade_sub = contract_upgrade.add_subparsers(
         dest="contract_upgrade_action",
         required=True,
     )
-    contract_upgrade_status = contract_upgrade_sub.add_parser("status")
+    contract_upgrade_status = contract_upgrade_sub.add_parser(
+        "status",
+        description=(
+            "Historical schema-v3-to-v4 upgrade status. Current active Plans "
+            "older than the plugin-declared schema use `migrate inspect`."
+        ),
+    )
     contract_upgrade_status.set_defaults(func=cmd_plan_contract_upgrade_status)
-    contract_upgrade_apply = contract_upgrade_sub.add_parser("apply")
+    contract_upgrade_apply = contract_upgrade_sub.add_parser(
+        "apply",
+        description=(
+            "Historical schema-v3-to-v4 upgrade transaction. New work must "
+            "archive and rebuild through `migrate apply` instead."
+        ),
+    )
     contract_upgrade_apply.add_argument("--manifest", required=True)
     contract_upgrade_apply.set_defaults(func=cmd_plan_contract_upgrade_apply)
-    contract_upgrade_recover = contract_upgrade_sub.add_parser("recover")
+    contract_upgrade_recover = contract_upgrade_sub.add_parser(
+        "recover",
+        description=(
+            "Recover only an already staged historical schema-v3-to-v4 upgrade "
+            "journal."
+        ),
+    )
     contract_upgrade_recover.add_argument("--transaction-id")
     contract_upgrade_recover.set_defaults(func=cmd_plan_contract_upgrade_recover)
     structural_rebase = plan_sub.add_parser("structural-rebase")
@@ -21666,15 +21793,33 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile_recover = reconcile_sub.add_parser("recover")
     reconcile_recover.add_argument("--migration-id")
     reconcile_recover.set_defaults(func=cmd_plan_reconcile_recover)
-    reconcile_upgrade = plan_sub.add_parser("reconcile-upgrade")
+    reconcile_upgrade = plan_sub.add_parser(
+        "reconcile-upgrade",
+        description=(
+            "Historical composed schema-v3 reconciliation plus schema-v4 upgrade "
+            "surface. New work uses `migrate apply` current-schema refresh."
+        ),
+    )
     reconcile_upgrade_sub = reconcile_upgrade.add_subparsers(
         dest="reconcile_upgrade_action",
         required=True,
     )
-    reconcile_upgrade_apply = reconcile_upgrade_sub.add_parser("apply")
+    reconcile_upgrade_apply = reconcile_upgrade_sub.add_parser(
+        "apply",
+        description=(
+            "Historical composed schema-v3/v4 transaction. Current active legacy "
+            "Plans are archived and rebuilt through `migrate apply`."
+        ),
+    )
     reconcile_upgrade_apply.add_argument("--manifest", required=True)
     reconcile_upgrade_apply.set_defaults(func=cmd_plan_reconcile_upgrade_apply)
-    reconcile_upgrade_recover = reconcile_upgrade_sub.add_parser("recover")
+    reconcile_upgrade_recover = reconcile_upgrade_sub.add_parser(
+        "recover",
+        description=(
+            "Recover only an already staged historical reconcile-upgrade "
+            "workflow."
+        ),
+    )
     reconcile_upgrade_recover.add_argument("--workflow-id")
     reconcile_upgrade_recover.set_defaults(func=cmd_plan_reconcile_upgrade_recover)
     rollover = plan_sub.add_parser("rollover")
@@ -21974,33 +22119,21 @@ def command_mutates_state(args: argparse.Namespace) -> bool:
 
 
 def enforce_active_contract_gate(args: argparse.Namespace, root: Path) -> None:
-    """Allow only upgrade preparation/recovery writes for an active schema-v3 Plan."""
+    """Allow only current-schema refresh writes for an outdated active Plan."""
     if not command_mutates_state(args) or args.domain == "layout":
         return
     report = inspect_authority(root)
     if report.state != "GOVERNED_ACTIVE":
         return
     doc = load_plan(active_plan_path(root))
-    if contract_state(doc.frontmatter) != "PLAN_CONTRACT_UPGRADE_REQUIRED":
+    state = contract_state(doc.frontmatter)
+    if state == "PLAN_CONTRACT_READY":
         return
-    allowed = args.domain == "plan" and (
-        args.action in {"confirmation", "confirm", "evidence"}
-        or (
-            args.action == "reconcile-upgrade"
-            and args.reconcile_upgrade_action in {"apply", "recover"}
-        )
-        or (
-            args.action == "contract"
-            and args.contract_action == "upgrade"
-            and args.contract_upgrade_action in {"apply", "recover"}
-        )
-    )
-    if args.domain == "gate" and args.gate_action in {"open", "satisfy", "waive"}:
-        allowed = True
-    if args.domain == "migrate" and args.migration_action in {"apply", "recover"}:
-        allowed = True
+    if state != "PLAN_SCHEMA_REFRESH_REQUIRED":
+        raise WorkctlError(state)
+    allowed = args.domain == "migrate" and args.migration_action in {"apply", "recover"}
     if not allowed:
-        raise WorkctlError("PLAN_CONTRACT_UPGRADE_REQUIRED")
+        raise WorkctlError("PLAN_SCHEMA_REFRESH_REQUIRED")
 
 
 def main(argv: list[str] | None = None) -> int:

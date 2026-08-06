@@ -55,14 +55,57 @@ def ensure_test_ready_receipt(
             "STRICT_INITIAL_INTAKE_REQUIRED = False\n",
             1,
         )
+        contract_state_marker = (
+            "def contract_state(frontmatter: dict[str, Any]) -> str:\n"
+            '    """Return the current-schema state independently from Plan authority."""\n'
+            '    schema_version = frontmatter.get("schema_version")\n'
+            '    status = frontmatter.get("status")\n'
+            "    if schema_version == CURRENT_PLAN_SCHEMA_VERSION:\n"
+            '        return "PLAN_CONTRACT_READY"\n'
+            '    if status not in {"complete", "retired"}:\n'
+            '        return "PLAN_SCHEMA_REFRESH_REQUIRED"\n'
+            '    return "PLAN_CONTRACT_LEGACY_READABLE"\n'
+        )
+        legacy_contract_state = (
+            "def contract_state(frontmatter: dict[str, Any]) -> str:\n"
+            '    """Return the schema-cutover state independently from Plan authority."""\n'
+            '    schema_version = frontmatter.get("schema_version")\n'
+            "    if schema_version == 5:\n"
+            '        return "PLAN_CONTRACT_READY"\n'
+            "    if schema_version == 4:\n"
+            '        return "PLAN_CONTRACT_READY"\n'
+            "    if (\n"
+            "        schema_version == 3\n"
+            '        and frontmatter.get("status") not in {"complete", "retired"}\n'
+            "    ):\n"
+            '        return "PLAN_CONTRACT_UPGRADE_REQUIRED"\n'
+            '    return "PLAN_CONTRACT_LEGACY_READABLE"\n'
+        )
+        if contract_state_marker not in controller_source:
+            raise AssertionError("test contract-state patch marker drifted")
+        controller_source = controller_source.replace(
+            contract_state_marker,
+            legacy_contract_state,
+            1,
+        )
         marker = (
             "def enforce_active_contract_gate(args: argparse.Namespace, root: Path) -> None:\n"
-            '    """Allow only upgrade preparation/recovery writes for an active '
-            'schema-v3 Plan."""\n'
+            '    """Allow only current-schema refresh writes for an outdated active Plan."""\n'
         )
         if marker not in controller_source:
             raise AssertionError("test controller patch marker drifted")
         controller_source = controller_source.replace(marker, marker + "    return\n", 1)
+        contract_marker = (
+            "def require_plan_contract_ready(frontmatter: dict[str, Any]) -> None:\n"
+            '    """Block ordinary writes from silently trusting an outdated active contract."""\n'
+        )
+        if contract_marker not in controller_source:
+            raise AssertionError("test contract-ready patch marker drifted")
+        controller_source = controller_source.replace(
+            contract_marker,
+            contract_marker + "    return\n",
+            1,
+        )
         intake_marker = (
             "def require_current_intake(\n"
             "    root: Path,\n"
@@ -142,6 +185,7 @@ def ensure_test_ready_receipt(
         "kind": "work-governance-runtime-bundle",
         "plugin_build": "pytest",
         "plugin_manifest_sha256": plugin_manifest_sha256,
+        "current_plan_schema_version": 5,
         "controller_ref": controller_ref,
         "controller_sha256": controller_sha256,
         "lifecycle_ref": lifecycle_ref,
@@ -160,6 +204,7 @@ def ensure_test_ready_receipt(
         "status": "BOOTSTRAPPING" if bootstrapping else "READY",
         "plugin_build": "pytest",
         "plugin_manifest_sha256": plugin_manifest_sha256,
+        "current_plan_schema_version": 5,
         "project_input_sha256": "2" * 64,
         "project_output_sha256": "3" * 64,
         "layout_state": "BOOTSTRAPPING" if bootstrapping else "LAYOUT_READY",
@@ -9684,8 +9729,8 @@ def test_composed_reconciliation_upgrade_rejects_forged_migration_binding(
     assert sha256_path(active_path) == active_before
 
 
-def test_active_schema_v3_requires_recoverable_contract_upgrade(tmp_path: Path) -> None:
-    """A live v3 contract is explicit debt, then upgrades without trusting logs."""
+def test_active_schema_v3_requires_current_schema_refresh(tmp_path: Path) -> None:
+    """A live v3 contract is read-only debt until current-schema refresh archives it."""
     init_plan(tmp_path)
     required = json.loads(
         run_workctl(
@@ -9694,6 +9739,14 @@ def test_active_schema_v3_requires_recoverable_contract_upgrade(tmp_path: Path) 
             "contract",
             "upgrade",
             "status",
+            env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
+        ).stdout
+    )
+    refresh = json.loads(
+        run_workctl(
+            tmp_path,
+            "migrate",
+            "inspect",
             env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
         ).stdout
     )
@@ -9708,116 +9761,30 @@ def test_active_schema_v3_requires_recoverable_contract_upgrade(tmp_path: Path) 
         check=False,
         env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
     )
-    assert required["contract_state"] == "PLAN_CONTRACT_UPGRADE_REQUIRED"
-    assert "PLAN_CONTRACT_UPGRADE_REQUIRED" in blocked.stderr
-
-    run_workctl(
-        tmp_path,
-        "plan",
-        "confirmation",
-        "add",
-        "--confirmation-id",
-        "C-CONTRACT-UPGRADE",
-        "--description",
-        "Upgrade the active Plan contract.",
-        "--status",
-        "accepted",
-        "--ref",
-        "user:contract-upgrade",
-        "--intervention-kind",
-        "plan_contract",
-        "--blocks",
-        "route",
-        "--basis-ref",
-        "user:contract-upgrade",
-        "--basis-sha256",
-        "b" * 64,
-        "--expected-revision",
-        "1",
-        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
-    )
-    plan_id = "PLAN-20260723-001"
-    upgrade_evidence = {
-        "schema_version": 1,
-        "kind": "work-governance-evidence",
-        "plan_id": plan_id,
-        "subject": "contract-upgrade",
-        "created_at": "2026-07-28T10:02:00+00:00",
-        "producer_ref": "user:contract-upgrade",
-        "items": [{"ref": "project:confirmed-contract", "sha256": "b" * 64}],
-    }
-    evidence_path = tmp_path / "upgrade-evidence.json"
-    evidence_path.write_text(json.dumps(upgrade_evidence), encoding="utf-8")
-    recorded = json.loads(
-        run_workctl(
-            tmp_path,
-            "plan",
-            "evidence",
-            "record",
-            "--manifest",
-            str(evidence_path),
-            env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
-        ).stdout
-    )
-    current_plan = plan_path(tmp_path)
-    manifest = {
-        "schema_version": 1,
-        "kind": "plan-contract-upgrade",
-        "transaction_id": "UPG-20260728-001",
-        "plan_id": plan_id,
-        "expected_revision": 2,
-        "plan_sha256": sha256_path(current_plan),
-        "confirmation_id": "C-CONTRACT-UPGRADE",
-        "confirmation_ref": "user:contract-upgrade",
-        "evidence_manifest": recorded["path"],
-        "goal": {
-            "statement": "Preserve the confirmed work while resolving unknowns.",
-            "success_conditions": ["The active Plan is schema v4."],
-        },
-        "unknowns": [],
-        "task_metadata": {},
-        "validation_provenance": {},
-    }
-    manifest_path = tmp_path / "upgrade.yaml"
-    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
-    interrupted = run_workctl(
+    obsolete_upgrade = run_workctl(
         tmp_path,
         "plan",
         "contract",
         "upgrade",
         "apply",
         "--manifest",
-        str(manifest_path),
+        "missing-upgrade.yaml",
         check=False,
-        env={
-            "TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1",
-            "WORKCTL_TEST_UPGRADE_INTERRUPT_AFTER": "plan-replaced",
-        },
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
     )
-    assert "PLAN_CONTRACT_UPGRADE_TEST_INTERRUPTED: plan-replaced" in interrupted.stderr
 
-    recovered = run_workctl(
-        tmp_path,
-        "plan",
-        "contract",
-        "upgrade",
-        "recover",
-        "--transaction-id",
-        "UPG-20260728-001",
-        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "1"},
-    )
-    upgraded, _ = read_plan(tmp_path)
-
-    assert "PLAN_CONTRACT_UPGRADE_COMMITTED" in recovered.stdout
-    assert upgraded["schema_version"] == 4
-    assert upgraded["revision_history"][-1]["kind"] == "contract-upgrade"
-    assert run_workctl(tmp_path, "plan", "validate").stdout.strip() == "PLAN_VALID"
+    assert required["contract_state"] == "PLAN_SCHEMA_REFRESH_REQUIRED"
+    assert refresh["requires_migration"] is True
+    assert refresh["migration_mode"] == "archive_legacy_and_rebuild_current_plan"
+    assert "PLAN_SCHEMA_REFRESH_REQUIRED" in blocked.stderr
+    assert obsolete_upgrade.returncode == 2
+    assert "PLAN_SCHEMA_REFRESH_REQUIRED" in obsolete_upgrade.stderr
 
 
 def test_contract_upgrade_recovery_rejects_noncanonical_target_before_write(
     tmp_path: Path,
 ) -> None:
-    """A forged upgrade journal cannot write outside the indexed Plan path."""
+    """Historical contract-upgrade recovery still rejects forged journal targets."""
     init_plan(tmp_path)
     plan_id = "PLAN-20260723-001"
     transaction_id = "UPG-20260728-009"

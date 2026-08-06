@@ -7,54 +7,41 @@ from copy import deepcopy
 from typing import Any
 
 from .model import V5ContractProjection
+from .plan_schema import CURRENT_PLAN_SCHEMA_VERSION
 
 
 def migration_projection(frontmatter: Mapping[str, object]) -> dict[str, object]:
-    """Describe one Plan's read-only migration source and target versions."""
+    """Describe one Plan's read-only current-schema refresh boundary."""
     version = frontmatter.get("schema_version")
     tasks_value = frontmatter.get("tasks", [])
     tasks = tasks_value if isinstance(tasks_value, list) else []
-    unknowns_value = frontmatter.get("unknowns", [])
-    unknowns = unknowns_value if isinstance(unknowns_value, list) else []
-    confirmations = frontmatter.get("confirmations", {})
-    confirmation_items: list[object] = []
-    if isinstance(confirmations, dict):
-        required = confirmations.get("required", [])
-        if isinstance(required, list):
-            confirmation_items = required
     truth_refs_value = frontmatter.get("truth_refs", [])
     truth_refs = truth_refs_value if isinstance(truth_refs_value, list) else []
     return {
         "from_schema_version": version,
-        "to_schema_version": 5,
-        "requires_migration": version != 5,
+        "to_schema_version": CURRENT_PLAN_SCHEMA_VERSION,
+        "requires_migration": version != CURRENT_PLAN_SCHEMA_VERSION,
+        "migration_mode": "archive_legacy_and_rebuild_current_plan",
         "write": False,
         "contract_fields": [
             "goal",
-            "success_criteria",
-            "scope",
+            "success_conditions",
             "truth_refs",
             "tasks",
-            "milestones",
-            "confirmations",
         ],
-        "state_fields": ["state_sequence", "current_task", "tasks", "priorities"],
+        "state_fields": [
+            "state_sequence",
+            "current_task",
+            "tasks",
+            "priorities",
+        ],
         "event_fields": ["event_sequence", "event", "subject", "payload"],
-        "task_mapping": [
+        "legacy_task_ids": [
             item.get("id")
             for item in tasks
             if isinstance(item, dict) and isinstance(item.get("id"), str)
         ],
-        "unknown_mapping": [
-            item.get("id")
-            for item in unknowns
-            if isinstance(item, dict) and isinstance(item.get("id"), str)
-        ],
-        "confirmation_mapping": [
-            item.get("id")
-            for item in confirmation_items
-            if isinstance(item, dict) and isinstance(item.get("id"), str)
-        ],
+        "state_mapping": "not performed; legacy state remains only in the archived Plan",
         "evidence_mapping": "canonical Plan evidence remains addressable by content hash",
         "truth_refs": list(truth_refs),
     }
@@ -79,73 +66,107 @@ def v5_contract_projection(frontmatter: Mapping[str, Any]) -> V5ContractProjecti
     )
 
 
+def _goal_statement(frontmatter: Mapping[str, Any]) -> str:
+    """Extract a readable goal statement from a legacy Plan."""
+    goal = frontmatter.get("goal")
+    if isinstance(goal, dict) and isinstance(goal.get("statement"), str) and goal["statement"]:
+        return str(goal["statement"])
+    if isinstance(goal, str) and goal:
+        return goal
+    title = frontmatter.get("title")
+    if isinstance(title, str) and title:
+        return title
+    return "Review the archived legacy Plan and establish the current execution contract."
+
+
+def _success_conditions(frontmatter: Mapping[str, Any]) -> list[str]:
+    """Extract current-schema success conditions from a legacy Plan."""
+    goal = frontmatter.get("goal")
+    candidates: object = None
+    if isinstance(goal, dict):
+        candidates = goal.get("success_conditions")
+    if candidates is None:
+        candidates = frontmatter.get("success_conditions", frontmatter.get("success_criteria"))
+    if isinstance(candidates, list):
+        values = [item for item in candidates if isinstance(item, str) and item]
+        if values:
+            return values
+    return ["A current-schema Plan is established from the archived legacy Plan."]
+
+
+def _contract_tasks(frontmatter: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Extract task definitions without carrying legacy runtime state."""
+    raw_tasks = frontmatter.get("tasks", [])
+    tasks: list[dict[str, Any]] = []
+    if isinstance(raw_tasks, list):
+        for raw_task in raw_tasks:
+            if not isinstance(raw_task, dict):
+                continue
+            task_id = raw_task.get("id")
+            description = raw_task.get("description")
+            if not isinstance(task_id, str) or not isinstance(description, str) or not description:
+                continue
+            task: dict[str, Any] = {
+                "id": task_id,
+                "description": description,
+            }
+            depends_on = raw_task.get("depends_on", [])
+            if isinstance(depends_on, list) and all(
+                isinstance(item, str) for item in depends_on
+            ):
+                task["depends_on"] = list(depends_on)
+            tasks.append(task)
+    if tasks:
+        return tasks
+    return [
+        {
+            "id": "T-001",
+            "description": (
+                "Review the archived legacy Plan and define the next "
+                "current-schema execution slice."
+            ),
+        }
+    ]
+
+
 def build_v5_contract(frontmatter: Mapping[str, Any]) -> dict[str, Any]:
-    """Create a v5 contract mapping while preserving v4 source semantics."""
-    contract = deepcopy(dict(frontmatter))
-    contract["schema_version"] = 5
-    nested = contract.get("contract")
-    nested_revision = nested.get("revision") if isinstance(nested, dict) else None
-    revision_value = contract.get(
-        "contract_revision",
-        nested_revision or contract.get("revision", 1),
-    )
-    revision = revision_value if isinstance(revision_value, int) else 1
-    contract["contract_revision"] = revision
-    contract["revision"] = revision
-    if isinstance(nested, dict):
-        nested["revision"] = revision
-    contract.pop("revision_history", None)
-    contract.setdefault("truth_refs", [])
-    plan_id = str(contract["plan_id"])
+    """Create a fresh v5 contract from a legacy Plan summary."""
+    plan_id = str(frontmatter["plan_id"])
+    title = frontmatter.get("title")
     base = f".work-governance/runtime/plans/{plan_id}"
-    contract["state_ref"] = f"runtime:{base}/state.json"
-    contract["event_ref"] = f"runtime:{base}/events.jsonl"
-    contract["evidence_store_ref"] = "evidence:.work-governance/evidence"
-    goal = contract.get("goal")
-    if "success_criteria" not in contract:
-        contract["success_criteria"] = deepcopy(
-            goal.get("success_conditions", []) if isinstance(goal, dict) else []
-        )
-    contract.setdefault("milestones", [])
-    raw_tasks = contract.get("tasks", [])
-    for task in raw_tasks if isinstance(raw_tasks, list) else []:
-        if isinstance(task, dict):
-            task["status"] = "pending"
-            task.pop("note", None)
-            task.pop("evidence_ref", None)
-            task.pop("evidence_sha256", None)
-            task.pop("verified_at", None)
-            task.setdefault("depends_on", [])
-    return contract
+    truth_refs = frontmatter.get("truth_refs", [])
+    return {
+        "schema_version": CURRENT_PLAN_SCHEMA_VERSION,
+        "plan_id": plan_id,
+        "title": title if isinstance(title, str) and title else plan_id,
+        "status": "active",
+        "contract_revision": 1,
+        "revision": 1,
+        "goal": _goal_statement(frontmatter),
+        "success_conditions": _success_conditions(frontmatter),
+        "tasks": _contract_tasks(frontmatter),
+        "confirmations": {"required": []},
+        "truth_refs": deepcopy(truth_refs) if isinstance(truth_refs, list) else [],
+        "state_ref": f"runtime:{base}/state.json",
+        "event_ref": f"runtime:{base}/events.jsonl",
+        "evidence_store_ref": "evidence:.work-governance/evidence",
+    }
 
 
 def build_v5_state(frontmatter: Mapping[str, Any], *, updated_at: str) -> dict[str, Any]:
-    """Create the independent runtime state snapshot for one v4 source."""
+    """Create a fresh runtime state snapshot without adapting legacy state."""
     plan_id = str(frontmatter["plan_id"])
     tasks: dict[str, dict[str, Any]] = {}
-    raw_tasks = frontmatter.get("tasks", [])
-    for task in raw_tasks if isinstance(raw_tasks, list) else []:
-        if not isinstance(task, dict) or not isinstance(task.get("id"), str):
-            continue
-        entry: dict[str, Any] = {"status": task.get("status", "pending")}
-        for key in ("note", "evidence_ref", "evidence_sha256", "verified_at"):
-            if key in task:
-                entry[key] = task[key]
-        tasks[task["id"]] = entry
+    for task in _contract_tasks(frontmatter):
+        task_id = task["id"]
+        tasks[task_id] = {"status": "pending"}
     return {
         "schema_version": 1,
         "kind": "work-governance-plan-state",
         "plan_id": plan_id,
         "state_sequence": 0,
         "event_sequence": 0,
-        "current_task": next(
-            (
-                f"task:{task_id}"
-                for task_id, value in tasks.items()
-                if value.get("status") == "in_progress"
-            ),
-            None,
-        ),
+        "current_task": None,
         "tasks": tasks,
         "priorities": {},
         "updated_at": updated_at,

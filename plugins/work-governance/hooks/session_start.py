@@ -428,13 +428,30 @@ def plugin_root() -> Path:
 
 def plugin_build(root: Path) -> str:
     """Read the exact build only from plugin.json."""
+    payload = plugin_manifest(root)
+    version = payload.get("version")
+    if not isinstance(version, str) or not version:
+        raise BootstrapError("PLUGIN_VERSION_MISSING")
+    return version
+
+
+def plugin_manifest(root: Path) -> Dict[str, Any]:
+    """Read the installed plugin manifest as a mapping."""
     try:
         payload = json.loads((root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         raise BootstrapError("PLUGIN_MANIFEST_INVALID") from exc
-    version = payload.get("version") if isinstance(payload, dict) else None
-    if not isinstance(version, str) or not version:
-        raise BootstrapError("PLUGIN_VERSION_MISSING")
+    if not isinstance(payload, dict):
+        raise BootstrapError("PLUGIN_MANIFEST_INVALID")
+    return payload
+
+
+def plugin_current_plan_schema_version(root: Path) -> int:
+    """Read the current Plan schema declared by the plugin manifest."""
+    plan = plugin_manifest(root).get("plan")
+    version = plan.get("current_schema_version") if isinstance(plan, dict) else None
+    if not isinstance(version, int) or version < 1:
+        raise BootstrapError("PLUGIN_PLAN_SCHEMA_VERSION_INVALID")
     return version
 
 
@@ -1218,6 +1235,7 @@ def validate_bootstrap_capability(governance: Path, capability: Path) -> None:
         "status",
         "plugin_build",
         "plugin_manifest_sha256",
+        "current_plan_schema_version",
         "project_input_sha256",
         "project_output_sha256",
         "layout_state",
@@ -1240,6 +1258,8 @@ def validate_bootstrap_capability(governance: Path, capability: Path) -> None:
         or payload.get("layout_state") != "BOOTSTRAPPING"
         or not isinstance(payload.get("updated_at"), str)
         or not isinstance(payload.get("plugin_build"), str)
+        or not isinstance(payload.get("current_plan_schema_version"), int)
+        or int(payload.get("current_plan_schema_version", 0)) < 1
         or not isinstance(payload.get("session_id"), str)
         or SESSION_ID_RE.fullmatch(str(payload.get("session_id"))) is None
     ):
@@ -1460,6 +1480,7 @@ def ready_receipt_is_reusable(
         "status",
         "plugin_build",
         "plugin_manifest_sha256",
+        "current_plan_schema_version",
         "layout_state",
         "session_id",
         "runtime_bundle_ref",
@@ -1498,6 +1519,7 @@ def runtime_bundle_payload(
     *,
     build: str,
     manifest_digest: str,
+    current_plan_schema_version: int,
     controller_sha256: str,
     lifecycle_sha256: str,
     module_files: Optional[List[Dict[str, str]]] = None,
@@ -1508,6 +1530,7 @@ def runtime_bundle_payload(
         "kind": "work-governance-runtime-bundle",
         "plugin_build": build,
         "plugin_manifest_sha256": manifest_digest,
+        "current_plan_schema_version": current_plan_schema_version,
         "controller_ref": (bundle / "workctl.py").relative_to(project_root).as_posix(),
         "controller_sha256": controller_sha256,
         "lifecycle_ref": (bundle / "work-lifecycle.SKILL.md").relative_to(project_root).as_posix(),
@@ -1570,6 +1593,7 @@ def validate_runtime_bundle(
     return {
         "runtime_bundle_ref": bundle.relative_to(project_root).as_posix(),
         "runtime_manifest_sha256": sha256_file(manifest),
+        "current_plan_schema_version": expected["current_plan_schema_version"],
         "controller_ref": expected["controller_ref"],
         "controller_sha256": expected["controller_sha256"],
         "lifecycle_ref": expected["lifecycle_ref"],
@@ -1583,6 +1607,7 @@ def install_runtime_bundle(
     *,
     build: str,
     manifest_digest: str,
+    current_plan_schema_version: int,
 ) -> Dict[str, Any]:
     """Durably snapshot the exact controller and lifecycle before issuing READY."""
     source_controller = installed_plugin / "scripts" / "workctl.py"
@@ -1615,6 +1640,7 @@ def install_runtime_bundle(
         bundle,
         build=build,
         manifest_digest=manifest_digest,
+        current_plan_schema_version=current_plan_schema_version,
         controller_sha256=sha256_file(source_controller),
         lifecycle_sha256=sha256_file(source_lifecycle),
         module_files=module_files or None,
@@ -2107,6 +2133,7 @@ def main() -> int:
         installed_plugin = plugin_root()
         build = plugin_build(installed_plugin)
         manifest_digest = plugin_manifest_digest(installed_plugin)
+        current_plan_schema_version = plugin_current_plan_schema_version(installed_plugin)
         controller_sha256 = sha256_file(installed_plugin / "scripts" / "workctl.py")
         claim_input_digest = bootstrap_claim_input_digest(project_root)
         governance = ensure_local_directories(
@@ -2119,6 +2146,7 @@ def main() -> int:
             installed_plugin,
             build=build,
             manifest_digest=manifest_digest,
+            current_plan_schema_version=current_plan_schema_version,
         )
         controller = project_root / str(runtime_bundle["controller_ref"])
         safe_session_id = session_id or "session-unavailable"
