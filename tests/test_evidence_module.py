@@ -17,6 +17,7 @@ append_capture_record = evidence_module.append_capture_record
 find_capture_record_by_idempotency_key = evidence_module.find_capture_record_by_idempotency_key
 persist_capture_blob = evidence_module.persist_capture_blob
 persist_capture_metadata = evidence_module.persist_capture_metadata
+persist_direct_evidence_bytes = evidence_module.persist_direct_evidence_bytes
 redact_capture_bytes = evidence_module.redact_capture_bytes
 validate_capture_args = evidence_module.validate_capture_args
 validate_evidence_payload = evidence_module.validate_evidence_payload
@@ -158,3 +159,70 @@ def test_direct_capture_redacts_binary_and_text_sources() -> None:
     payload = json.loads(binary)
     assert payload["kind"] == "work-governance-binary-evidence-placeholder"
     assert payload["source_size"] == 2
+
+
+def test_persist_direct_evidence_bytes_replays_idempotently(tmp_path: Path) -> None:
+    """Workflow direct evidence persistence replays matching idempotency keys."""
+    first = persist_direct_evidence_bytes(
+        tmp_path,
+        plan_id="PLAN-20260806-001",
+        task_id="T-001",
+        kind="command-output",
+        summary="pytest token=summary-secret",
+        raw_content=b"ok\nAuthorization: Bearer output-secret\n",
+        source_type="stdin",
+        source_ref=None,
+        idempotency_key="workflow:test",
+    )
+    replayed = persist_direct_evidence_bytes(
+        tmp_path,
+        plan_id="PLAN-20260806-001",
+        task_id="T-001",
+        kind="command-output",
+        summary="pytest token=summary-secret",
+        raw_content=b"ok\nAuthorization: Bearer output-secret\n",
+        source_type="stdin",
+        source_ref=None,
+        idempotency_key="workflow:test",
+    )
+
+    assert first["idempotent"] is False
+    assert replayed["idempotent"] is True
+    assert replayed["id"] == first["id"]
+    assert first["summary"] == "pytest token=[REDACTED]"
+    assert first["task_ref"] == "task:T-001"
+    assert first["validator"] == "workctl:workflow"
+    ledger = tmp_path / ".work-governance" / "evidence" / "ledger.ndjson"
+    assert "summary-secret" not in ledger.read_text(encoding="utf-8")
+    assert "output-secret" not in ledger.read_text(encoding="utf-8")
+
+
+def test_persist_direct_evidence_bytes_preserves_conflict_code(tmp_path: Path) -> None:
+    """Workflow direct evidence persistence keeps the idempotency conflict code."""
+    persist_direct_evidence_bytes(
+        tmp_path,
+        plan_id="PLAN-20260806-001",
+        task_id="T-001",
+        kind="command-output",
+        summary="same",
+        raw_content=b"first\n",
+        source_type="stdin",
+        source_ref=None,
+        idempotency_key="workflow:test",
+    )
+    try:
+        persist_direct_evidence_bytes(
+            tmp_path,
+            plan_id="PLAN-20260806-001",
+            task_id="T-001",
+            kind="command-output",
+            summary="same",
+            raw_content=b"changed\n",
+            source_type="stdin",
+            source_ref=None,
+            idempotency_key="workflow:test",
+        )
+    except ValueError as exc:
+        assert str(exc) == "EVIDENCE_CAPTURE_IDEMPOTENCY_CONFLICT"
+    else:
+        raise AssertionError("conflicting idempotent evidence was accepted")
