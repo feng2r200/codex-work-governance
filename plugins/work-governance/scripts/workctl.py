@@ -39,13 +39,11 @@ try:
     from workctl_modules import WORKFLOW_HELP_ALIASES as MODULE_WORKFLOW_HELP_ALIASES
     from workctl_modules import blocked_task_targets as MODULE_BLOCKED_TASK_TARGETS
     from workctl_modules import canonical_evidence_bytes as MODULE_CANONICAL_EVIDENCE_BYTES
+    from workctl_modules import evidence as module_evidence
     from workctl_modules import next_suggestion as MODULE_NEXT_SUGGESTION
     from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
     from workctl_modules import ready_task_targets as MODULE_READY_TASK_TARGETS
     from workctl_modules import yaml_compat as yaml
-    from workctl_modules.evidence import (
-        validate_evidence_payload as module_validate_evidence_payload,
-    )
     from workctl_modules.history import (
         PlanHistoryError as ModulePlanHistoryError,
     )
@@ -170,7 +168,7 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     module_action_reversibility = None  # type: ignore[assignment]
     module_risk_factors_for_action = None  # type: ignore[assignment]
     module_risk_inspection_payload = None  # type: ignore[assignment]
-    module_validate_evidence_payload = None  # type: ignore[assignment]
+    module_evidence = None  # type: ignore[assignment]
     redacted_copy = None  # type: ignore[assignment]
     module_append_worktree_event = None  # type: ignore[assignment]
     module_build_worktree_event = None  # type: ignore[assignment]
@@ -17619,9 +17617,9 @@ def validate_evidence_payload(
     expected_subject: str | None = None,
 ) -> None:
     """Validate bounded evidence metadata without accepting process output blobs."""
-    if module_validate_evidence_payload is not None:
+    if module_evidence is not None:
         try:
-            module_validate_evidence_payload(
+            module_evidence.validate_evidence_payload(
                 payload,
                 expected_plan_id=expected_plan_id,
                 expected_subject=expected_subject,
@@ -17735,159 +17733,133 @@ def evidence_payload_from_args(args: argparse.Namespace) -> dict[str, Any] | Non
     return parse_evidence_content(input_path.read_bytes())
 
 
+def capture_module_call(name: str) -> Any:
+    """Return one extracted evidence capture helper or fail with a stable code."""
+    if module_evidence is None:
+        raise WorkctlError(f"EVIDENCE_CAPTURE_MODULE_UNAVAILABLE: {name}")
+    try:
+        return getattr(module_evidence, name)
+    except AttributeError as exc:
+        raise WorkctlError(f"EVIDENCE_CAPTURE_MODULE_UNAVAILABLE: {name}") from exc
+
+
 def evidence_capture_root(root: Path) -> Path:
     """Return the project-local direct evidence store root."""
-    path = governance_root(root) / "evidence"
-    reject_symlink_components(root, path)
-    return path
+    try:
+        return capture_module_call("evidence_capture_root")(
+            root,
+            governance_dir_name=GOVERNANCE_DIR_NAME,
+        )
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def evidence_capture_blob_path(root: Path, digest: str) -> Path:
     """Return the content-addressed blob path for direct evidence capture."""
-    if SHA256_RE.fullmatch(digest) is None:
-        raise WorkctlError("EVIDENCE_CAPTURE_BLOB_DIGEST_INVALID")
-    return evidence_capture_root(root) / "blobs" / digest
+    try:
+        return capture_module_call("evidence_capture_blob_path")(
+            root,
+            digest,
+            governance_dir_name=GOVERNANCE_DIR_NAME,
+        )
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def evidence_capture_record_path(root: Path, digest: str) -> Path:
     """Return the content-addressed metadata record path for direct evidence capture."""
-    if SHA256_RE.fullmatch(digest) is None:
-        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_DIGEST_INVALID")
-    return evidence_capture_root(root) / "records" / f"{digest}.json"
+    try:
+        helper = capture_module_call("evidence_capture_record_path")
+        return helper(root, digest, governance_dir_name=GOVERNANCE_DIR_NAME)
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def evidence_capture_ledger_path(root: Path) -> Path:
     """Return the append-only direct evidence ledger path."""
-    return evidence_capture_root(root) / "ledger.ndjson"
+    try:
+        helper = capture_module_call("evidence_capture_ledger_path")
+        return helper(root, governance_dir_name=GOVERNANCE_DIR_NAME)
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def normalize_capture_task(task_value: str | None) -> str | None:
     """Normalize an optional task reference to a task ID."""
-    if task_value is None:
-        return None
-    normalized = task_value.removeprefix("task:")
-    if ENTRY_ID_PATTERNS["tasks"].fullmatch(normalized) is None:
-        raise WorkctlError("EVIDENCE_CAPTURE_TASK_INVALID")
-    return normalized
+    try:
+        return capture_module_call("normalize_capture_task")(task_value)
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def redact_capture_text(value: str) -> str:
     """Apply conservative text redaction before evidence bytes are persisted."""
-    redacted = value
-    redacted = re.sub(
-        r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+",
-        "Bearer [REDACTED]",
-        redacted,
-    )
-    redacted = re.sub(r"\bsk-[A-Za-z0-9._-]+", "sk-[REDACTED]", redacted)
-    redacted = re.sub(r"\bAKIA[0-9A-Z]{16}\b", "AKIA[REDACTED]", redacted)
-    redacted = re.sub(
-        r"(?i)\b(api[_-]?key|authorization|password|secret|token)\s*[:=]\s*[^\s,;]+",
-        lambda match: f"{match.group(1)}=[REDACTED]",
-        redacted,
-    )
-    return redacted
+    try:
+        return capture_module_call("redact_capture_text")(value)
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def redact_capture_bytes(content: bytes) -> tuple[bytes, bool]:
     """Return persistable evidence bytes and whether the source was textual."""
-    if len(content) > EVIDENCE_CAPTURE_MAX_BYTES:
-        raise WorkctlError("EVIDENCE_CAPTURE_TOO_LARGE")
     try:
-        text = content.decode("utf-8")
-    except UnicodeDecodeError:
-        placeholder = {
-            "schema_version": 1,
-            "kind": "work-governance-binary-evidence-placeholder",
-            "source_sha256": sha256_bytes(content),
-            "source_size": len(content),
-            "redaction_note": "binary source was not persisted verbatim",
-        }
-        return (
-            json.dumps(placeholder, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n",
-            False,
-        )
-    return redact_capture_text(text).encode("utf-8"), True
+        return capture_module_call("redact_capture_bytes")(content)
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def read_capture_source(root: Path, args: argparse.Namespace) -> tuple[bytes, str, str | None]:
     """Read direct evidence bytes from stdin or a project-local explicit file."""
-    raw_from_file = getattr(args, "from_file", None)
-    if isinstance(raw_from_file, str):
-        input_path = Path(raw_from_file)
-        candidate = input_path if input_path.is_absolute() else root / input_path
-        try:
-            resolved = candidate.resolve()
-            resolved.relative_to(root)
-        except ValueError as exc:
-            raise WorkctlError(f"PATH_OUTSIDE_PROJECT: {raw_from_file}") from exc
-        reject_symlink_components(root, candidate)
-        if candidate.is_symlink() or not candidate.is_file():
-            raise WorkctlError("EVIDENCE_CAPTURE_SOURCE_MISSING")
-        return candidate.read_bytes(), "file", relative_project_path(root, candidate)
-    return sys.stdin.buffer.read(), "stdin", None
+    try:
+        return capture_module_call("read_capture_source")(root, args)
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def capture_record_id(created_at: str) -> str:
     """Create a collision-resistant evidence ID from time and a random suffix."""
-    compact_time = (
-        datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-        .astimezone(UTC)
-        .strftime("%Y%m%dT%H%M%SZ")
-    )
-    return f"E-{compact_time}-{secrets.token_hex(6)}"
+    try:
+        return capture_module_call("capture_record_id")(created_at)
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def load_capture_records(root: Path) -> list[dict[str, Any]]:
     """Load the direct evidence ledger for idempotency checks."""
-    path = evidence_capture_ledger_path(root)
-    if not path.exists():
-        return []
-    if path.is_symlink() or not path.is_file():
-        raise WorkctlError("EVIDENCE_CAPTURE_LEDGER_INVALID")
-    records: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            value: object = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise WorkctlError("EVIDENCE_CAPTURE_LEDGER_INVALID") from exc
-        if not isinstance(value, dict):
-            raise WorkctlError("EVIDENCE_CAPTURE_LEDGER_INVALID")
-        records.append(cast(dict[str, Any], value))
-    return records
+    try:
+        return cast(
+            list[dict[str, Any]],
+            capture_module_call("load_capture_records")(
+                root,
+                governance_dir_name=GOVERNANCE_DIR_NAME,
+            ),
+        )
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def append_capture_record(root: Path, record: Mapping[str, Any]) -> None:
     """Append one canonical direct evidence record to the ledger."""
-    ledger = evidence_capture_ledger_path(root)
-    ensure_directory_durable(ledger.parent)
-    encoded = (
-        json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
-    ).encode("utf-8")
-    with ledger.open("ab") as handle:
-        handle.write(encoded)
-        handle.flush()
-        os.fsync(handle.fileno())
-    fsync_directory(ledger.parent)
+    try:
+        capture_module_call("append_capture_record")(
+            root,
+            record,
+            governance_dir_name=GOVERNANCE_DIR_NAME,
+        )
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def verify_capture_record_file(root: Path, record: Mapping[str, Any]) -> tuple[str, str]:
     """Verify the content-addressed metadata file named by a ledger record."""
-    ref = record.get("evidence_ref")
-    digest = record.get("evidence_sha256")
-    if not isinstance(ref, str) or not ref.startswith("evidence:"):
-        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_INVALID")
-    if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
-        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_INVALID")
-    expected_ref = f"evidence:{GOVERNANCE_DIR_NAME}/evidence/records/{digest}.json"
-    if ref != expected_ref:
-        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_INVALID")
-    record_path = evidence_capture_record_path(root, digest)
-    if record_path.is_symlink() or not record_path.is_file():
-        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_MISSING")
-    if sha256_file(record_path) != digest:
-        raise WorkctlError("EVIDENCE_CAPTURE_RECORD_HASH_MISMATCH")
-    return ref, digest
+    try:
+        return capture_module_call("verify_capture_record_file")(
+            root,
+            record,
+            governance_dir_name=GOVERNANCE_DIR_NAME,
+        )
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def find_capture_record_by_idempotency_key(
@@ -17897,54 +17869,50 @@ def find_capture_record_by_idempotency_key(
     key: str,
 ) -> dict[str, Any] | None:
     """Return the existing record for one idempotency key, if any."""
-    for record in load_capture_records(root):
-        if record.get("plan_id") == plan_id and record.get("idempotency_key") == key:
-            return record
-    return None
+    try:
+        return cast(
+            dict[str, Any] | None,
+            capture_module_call("find_capture_record_by_idempotency_key")(
+                root,
+                plan_id=plan_id,
+                key=key,
+                governance_dir_name=GOVERNANCE_DIR_NAME,
+            ),
+        )
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def validate_capture_args(args: argparse.Namespace) -> str | None:
     """Validate direct evidence capture arguments and return the normalized task."""
-    if getattr(args, "stdin", False) and getattr(args, "from_file", None) is not None:
-        raise WorkctlError("EVIDENCE_CAPTURE_SOURCE_CONFLICT")
-    if EVIDENCE_CAPTURE_KIND_RE.fullmatch(args.kind) is None:
-        raise WorkctlError("EVIDENCE_CAPTURE_KIND_INVALID")
-    if not isinstance(args.summary, str) or not args.summary.strip():
-        raise WorkctlError("EVIDENCE_CAPTURE_SUMMARY_REQUIRED")
-    if len(args.summary) > 512:
-        raise WorkctlError("EVIDENCE_CAPTURE_SUMMARY_TOO_LONG")
-    idempotency_key = getattr(args, "idempotency_key", None)
-    if (
-        idempotency_key is not None
-        and EVIDENCE_CAPTURE_IDEMPOTENCY_RE.fullmatch(idempotency_key) is None
-    ):
-        raise WorkctlError("EVIDENCE_CAPTURE_IDEMPOTENCY_KEY_INVALID")
-    return normalize_capture_task(args.task)
+    try:
+        return capture_module_call("validate_capture_args")(args)
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def persist_capture_blob(root: Path, content: bytes) -> tuple[str, str, int]:
     """Persist redacted direct evidence bytes as a content-addressed blob."""
-    digest = sha256_bytes(content)
-    blob = evidence_capture_blob_path(root, digest)
-    if blob.exists():
-        if blob.is_symlink() or blob.read_bytes() != content:
-            raise WorkctlError("EVIDENCE_CAPTURE_BLOB_CONFLICT")
-    else:
-        write_atomic_bytes(blob, content)
-    return f"evidence:{GOVERNANCE_DIR_NAME}/evidence/blobs/{digest}", digest, len(content)
+    try:
+        return capture_module_call("persist_capture_blob")(
+            root,
+            content,
+            governance_dir_name=GOVERNANCE_DIR_NAME,
+        )
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def persist_capture_metadata(root: Path, record: Mapping[str, Any]) -> tuple[str, str]:
     """Persist direct evidence metadata as a content-addressed record."""
-    canonical = canonical_evidence_bytes(record)
-    digest = sha256_bytes(canonical)
-    target = evidence_capture_record_path(root, digest)
-    if target.exists():
-        if target.is_symlink() or target.read_bytes() != canonical:
-            raise WorkctlError("EVIDENCE_CAPTURE_RECORD_CONFLICT")
-    else:
-        write_atomic_bytes(target, canonical)
-    return f"evidence:{GOVERNANCE_DIR_NAME}/evidence/records/{digest}.json", digest
+    try:
+        return capture_module_call("persist_capture_metadata")(
+            root,
+            record,
+            governance_dir_name=GOVERNANCE_DIR_NAME,
+        )
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def preflight_v5_capture_binding(

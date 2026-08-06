@@ -1,7 +1,27 @@
 """Testable boundaries for the Work Governance controller."""
 
 from .commands import WORKFLOW_HELP, WORKFLOW_HELP_ALIASES
-from .evidence import canonical_evidence_bytes, parse_evidence_bytes, validate_evidence_payload
+from .evidence import (
+    append_capture_record,
+    canonical_evidence_bytes,
+    capture_record_id,
+    evidence_capture_blob_path,
+    evidence_capture_ledger_path,
+    evidence_capture_record_path,
+    evidence_capture_root,
+    find_capture_record_by_idempotency_key,
+    load_capture_records,
+    normalize_capture_task,
+    parse_evidence_bytes,
+    persist_capture_blob,
+    persist_capture_metadata,
+    read_capture_source,
+    redact_capture_bytes,
+    redact_capture_text,
+    validate_capture_args,
+    validate_evidence_payload,
+    verify_capture_record_file,
+)
 from .migration import build_v5_contract, build_v5_state, migration_projection
 from .scheduler import (
     blocked_task_targets,
@@ -13,14 +33,30 @@ from .storage import canonical_json_bytes
 __all__ = [
     "WORKFLOW_HELP",
     "WORKFLOW_HELP_ALIASES",
+    "append_capture_record",
     "build_v5_contract",
     "build_v5_state",
     "canonical_evidence_bytes",
+    "capture_record_id",
+    "evidence_capture_blob_path",
+    "evidence_capture_ledger_path",
+    "evidence_capture_record_path",
+    "evidence_capture_root",
+    "find_capture_record_by_idempotency_key",
+    "load_capture_records",
+    "normalize_capture_task",
     "blocked_task_targets",
     "canonical_json_bytes",
     "next_suggestion",
     "parse_evidence_bytes",
+    "persist_capture_blob",
+    "persist_capture_metadata",
+    "read_capture_source",
     "ready_task_targets",
+    "redact_capture_bytes",
+    "redact_capture_text",
     "migration_projection",
+    "validate_capture_args",
     "validate_evidence_payload",
+    "verify_capture_record_file",
 ]
