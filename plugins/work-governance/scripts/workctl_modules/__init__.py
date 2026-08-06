@@ -22,6 +22,7 @@ from .evidence import (
     validate_capture_args,
     validate_evidence_payload,
     verify_capture_record_file,
+    workflow_evidence_payload,
 )
 from .migration import build_v5_contract, build_v5_state, migration_projection
 from .scheduler import (
@@ -61,4 +62,5 @@ __all__ = [
     "validate_capture_args",
     "validate_evidence_payload",
     "verify_capture_record_file",
+    "workflow_evidence_payload",
 ]
