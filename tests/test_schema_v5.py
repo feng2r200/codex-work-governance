@@ -8,14 +8,16 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 from test_workctl import (
     SCRIPT,
+    file_tree_snapshot,
     independent_validation_fixture,
     init_plan,
     read_plan,
+    read_plan_by_id,
     run_workctl,
     schema_v4_admission_plan,
     sha256_path,
@@ -25,11 +27,41 @@ from test_workctl import (
 STRICT_CONTROLLER_ENV = {"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"}
 
 
-def run_without_receipt(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def minimal_goal_contract(plan_id: str = "PLAN-20260806-101") -> dict[str, Any]:
+    """Return the smallest high-level goal contract accepted by goal init."""
+    return {
+        "plan_id": plan_id,
+        "title": "Minimal v5 goal",
+        "goal": "Prove the minimal v5 contract.",
+        "success_conditions": ["The task is verified with fresh evidence."],
+        "tasks": [{"id": "T-001", "description": "Complete the proof slice."}],
+    }
+
+
+def init_minimal_v5_goal(tmp_path: Path, plan_id: str = "PLAN-20260806-101") -> dict[str, Any]:
+    """Initialize layout and admit one minimal schema-v5 Plan."""
+    run_workctl(tmp_path, "layout", "migrate")
+    result = run_workctl(
+        tmp_path,
+        "goal",
+        "init",
+        "--stdin",
+        input_text=json.dumps(minimal_goal_contract(plan_id)),
+        env=STRICT_CONTROLLER_ENV,
+    )
+    return cast(dict[str, Any], json.loads(result.stdout))
+
+
+def run_without_receipt(
+    cwd: Path,
+    *args: str,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     """Run the real controller without the required SessionStart receipt argument."""
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
         cwd=cwd,
+        input=input_text,
         text=True,
         capture_output=True,
         check=False,
@@ -73,6 +105,179 @@ def issue_test_turn(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(turn, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return request_ref, turn_sha256
+
+
+def test_minimal_v5_contract_valid_without_legacy_required_fields(tmp_path: Path) -> None:
+    """A minimal active v5 Plan no longer requires v4-only contract fields."""
+    init_minimal_v5_goal(tmp_path)
+    frontmatter, _body = read_plan_by_id(tmp_path, "PLAN-20260806-101")
+
+    assert frontmatter["schema_version"] == 5
+    assert frontmatter["contract_revision"] == 1
+    assert "scope" not in frontmatter
+    assert "obligations" not in frontmatter
+    assert "validations" not in frontmatter
+    assert "artifacts" not in frontmatter
+    assert "revision_history" not in frontmatter
+    assert run_workctl(tmp_path, "plan", "validate", env=STRICT_CONTROLLER_ENV).stdout.strip() == (
+        "PLAN_VALID"
+    )
+
+
+def test_goal_init_stdin_creates_minimal_v5_plan(tmp_path: Path) -> None:
+    """The high-level goal init command writes the v5 Plan, runtime state, event, and index."""
+    admitted = init_minimal_v5_goal(tmp_path, "PLAN-20260806-102")
+    state_path = tmp_path / ".work-governance" / "runtime" / "plans" / "PLAN-20260806-102"
+
+    assert admitted["status"] == "GOAL_INITIALIZED"
+    assert admitted["schema_version"] == 5
+    assert (tmp_path / admitted["plan_path"]).is_file()
+    state = json.loads((state_path / "state.json").read_text(encoding="utf-8"))
+    events = (state_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    assert state["state_sequence"] == 0
+    assert state["event_sequence"] == 1
+    assert len(events) == 1
+    assert json.loads(events[0])["event"] == "plan.initialized"
+    status = json.loads(run_workctl(tmp_path, "plan", "status", env=STRICT_CONTROLLER_ENV).stdout)
+    assert status["plan_id"] == "PLAN-20260806-102"
+    assert status["ready"] == ["task:T-001"]
+
+
+def test_task_done_captures_raw_evidence_and_verifies_v5_task(tmp_path: Path) -> None:
+    """task done combines direct evidence capture and v5 task verification."""
+    init_minimal_v5_goal(tmp_path, "PLAN-20260806-103")
+
+    result = run_workctl(
+        tmp_path,
+        "task",
+        "done",
+        "--task-id",
+        "T-001",
+        "--expected-state-sequence",
+        "0",
+        "--evidence-stdin",
+        "--summary",
+        "pytest evidence",
+        input_text="pytest passed\n",
+        env=STRICT_CONTROLLER_ENV,
+    )
+    payload = json.loads(result.stdout)
+    state_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "plans"
+        / "PLAN-20260806-103"
+        / "state.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert payload["status"] == "TASK_DONE"
+    assert payload["state_sequence"] == 1
+    assert state["tasks"]["T-001"]["status"] == "verified"
+    assert state["tasks"]["T-001"]["evidence_ref"] == payload["evidence_ref"]
+    assert (tmp_path / payload["direct_evidence_ref"].removeprefix("evidence:")).is_file()
+    assert (tmp_path / payload["evidence_ref"].removeprefix("evidence:")).is_file()
+
+
+def test_plan_history_tolerates_malformed_historical_plan(tmp_path: Path) -> None:
+    """History inspection is loose and does not block active Plan status."""
+    init_minimal_v5_goal(tmp_path, "PLAN-20260806-104")
+    malformed = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260806-999.md"
+    malformed.write_text("---\nthis: [is not valid\n---\n# Bad\n", encoding="utf-8")
+
+    history = json.loads(
+        run_workctl(tmp_path, "plan", "history", "list", env=STRICT_CONTROLLER_ENV).stdout
+    )
+    bad = next(item for item in history["plans"] if item["path"].endswith("PLAN-20260806-999.md"))
+    status = json.loads(run_workctl(tmp_path, "plan", "status", env=STRICT_CONTROLLER_ENV).stdout)
+
+    assert bad["parse_state"] == "error"
+    assert status["plan_id"] == "PLAN-20260806-104"
+    assert status["ready"] == ["task:T-001"]
+
+
+def test_risk_inspect_is_read_only_model_decision_support(tmp_path: Path) -> None:
+    """risk inspect reports facts but never mutates controller state or decides confirmation."""
+    run_workctl(tmp_path, "layout", "migrate")
+    before = file_tree_snapshot(tmp_path / ".work-governance")
+    input_text = "deploy production\n"
+
+    result = run_without_receipt(
+        tmp_path,
+        "risk",
+        "inspect",
+        "--action-kind",
+        "production_change",
+        "--target-ref",
+        "deployment:test",
+        "--action-stdin",
+        input_text=input_text,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["decision_owner"] == "model"
+    assert payload["controller_decision"] == "facts_only"
+    assert payload["requires_confirmation_by_controller"] is False
+    assert payload["action_sha256"] == hashlib.sha256(input_text.encode("utf-8")).hexdigest()
+    assert file_tree_snapshot(tmp_path / ".work-governance") == before
+
+
+def test_worktree_ledger_is_non_authority(tmp_path: Path) -> None:
+    """Worktree ledgers stay runtime-only and do not become active Plan authority."""
+    init_minimal_v5_goal(tmp_path, "PLAN-20260806-105")
+
+    opened = json.loads(
+        run_workctl(
+            tmp_path,
+            "worktree",
+            "begin",
+            "--worktree-id",
+            "WT-pytest",
+            "--path",
+            ".work-governance/worktrees/pytest",
+            "--branch",
+            "feature/pytest",
+            "--summary",
+            "Inspect isolated implementation.",
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    recorded = json.loads(
+        run_workctl(
+            tmp_path,
+            "worktree",
+            "record",
+            "--worktree-id",
+            "WT-pytest",
+            "--event",
+            "checked",
+            "--summary",
+            "Collected evidence.",
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    closed = json.loads(
+        run_workctl(
+            tmp_path,
+            "worktree",
+            "close",
+            "--worktree-id",
+            "WT-pytest",
+            "--summary",
+            "Ready for parent evidence absorption.",
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    authority = json.loads(
+        run_workctl(tmp_path, "plan", "authority", "check", env=STRICT_CONTROLLER_ENV).stdout
+    )
+
+    assert opened["authority"] == "NON_AUTHORITY"
+    assert recorded["authority"] == "NON_AUTHORITY"
+    assert closed["close_summary"]["authority"] == "NON_AUTHORITY"
+    assert authority["authority_state"] == "GOVERNED_ACTIVE"
 
 
 def add_pending_v5_confirmation(tmp_path: Path, *, basis_sha256: str) -> None:

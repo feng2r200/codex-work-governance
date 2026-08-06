@@ -51,7 +51,10 @@ component, and the recovery condition.
   `.gitignore` by default. The exact `.work-governance/.gitignore` contract
   excludes only local runtime content.
 - High-impact, destructive, remote, production, data, structure-revision, and
-  substantive rollback decisions require confirmation before action.
+  substantive rollback decisions are confirmation-risk signals. The model owns
+  the ask/proceed judgment using current user authorization, project rules,
+  reversibility, blast radius, and fresh evidence; ask before action whenever
+  that authority is ambiguous or insufficient.
 - Communication is not waiting. Discuss and summarize frequently during
   discovery, then continue across every dependency-ready execution slice.
   Progress reports, completed-slice summaries, phase transitions, and a stated
@@ -68,9 +71,10 @@ component, and the recovery condition.
 - Never ask a decision-free continuation question such as "should I continue"
   or "confirm the next phase." `下一步` is information unless it names a real
   user-owned decision and its blocked targets.
-- Bulk or blanket authorization waives only repeated confirmation prompts. When
-  repeated work can amplify a shared defect, keep the pilot task and validation
-  as explicit dependencies; authorization cannot satisfy the pilot gate. Freeze
+- Bulk or blanket authorization may reduce repeated prompts only when the model
+  judges the current authorization still covers the repeated work. When repeated
+  work can amplify a shared defect, keep the pilot task and validation as
+  explicit dependencies; authorization cannot satisfy the pilot gate. Freeze
   downstream batches on observed quality drift and enter L5 before resuming.
 - When a current user decision becomes future authority, prefer
   `user:session/<SessionId>/turn/<TurnId>/sha256/<digest>` over a date-only
@@ -147,27 +151,37 @@ Classify the request:
   remote/data/production actions, structural governance changes, or work that
   must be handed to a future agent.
 
-Admit a Plan only through `plan admit apply --manifest`; recover interruption
-through `plan admit recover`. Do not create an empty Plan or index first. Use
-`plan confirmation add` for a new explicit gate. Schema v4 uses IDs
-`PLAN-YYYYMMDD-NNN`, `O-`, `T-`, `V-`, `A-`, and `U-`; tasks name linked
-unknowns and their expected evidence delta.
+For a new unmanaged project, prefer `goal init --stdin|--from-file` with a
+minimal goal contract; the controller writes the canonical schema-v5 Plan,
+runtime state, event ledger, and index. For strict legacy admission, use
+`plan admit apply --manifest`; recover interruption through `plan admit recover`.
+Do not create an empty Plan or index first. Use `plan confirmation add` for a
+new explicit gate when the model determines a decision must be durable.
+Schema v4 uses IDs `PLAN-YYYYMMDD-NNN`, `O-`, `T-`, `V-`, `A-`, and `U-`;
+tasks name linked unknowns and their expected evidence delta.
 
 Explore first when the missing fact is discoverable within the Agent's safe
 boundary. Promote the result to a Plan unknown only when it blocks a named
 target or proves a material contract decision is needed. Use the bounded
-`plan status` view for routine progress; pass `--full` only when history or
-closeout detail is needed. Use `evidence capture --task T-001 --kind ...`
-for command output or project-local artifact capture, and use
-`plan evidence record --stdin` or `task verify --evidence-stdin` for small
-structured compatibility evidence objects.
+`plan status` view for routine progress; pass `--full` only when closeout
+detail is needed. Use `plan history list|show` for loose historical Plan
+inspection; it must not validate old Plans against the active schema. Use
+`plan adapt --intent-stdin` to record adaptation intent without hand-writing a
+strict patch manifest. When the active Plan is still schema v4, that high-level
+intent path still requires `--expected-revision`, current turn receipt, and the
+latest matching `--expected-intake-sha256` because it bumps Plan revision. Use
+`task done --task-id T-001 --evidence-stdin` when raw evidence capture and task
+verification are the same workflow. Keep
+`evidence capture`, `plan evidence record`, and `task verify` for lower-level
+or compatibility cases.
 
-The public command aliases are generated from the controller parser. Use
-`docs/CLI_REFERENCE.md` in the repository for the complete option surface and
-`workctl help <workflow>` for the short runtime view; do not maintain a second
-handwritten option table in this Skill. Schema-v5 Plans keep the contract
-revision in the Plan and task, event, and evidence runtime state in the ignored
-bundle referenced by `state_ref`, `event_ref`, and `evidence_store_ref`.
+The public command aliases are generated from the controller parser. Read
+`docs/MODEL_FIRST.md` first for the short model-facing workflow, then use
+`docs/CLI_REFERENCE.md` for the complete option surface and `workctl help
+<workflow>` for the short runtime view; do not maintain a second handwritten
+option table in this Skill. Schema-v5 Plans keep the contract revision in the
+Plan and task, event, and evidence runtime state in the ignored bundle
+referenced by `state_ref`, `event_ref`, and `evidence_store_ref`.
 
 Never infer a second execution authority from a filename, Git history, a phase
 design, or text such as "next step" alone. A likely second authority requires
@@ -227,20 +241,18 @@ still require the turn digest plus the latest `expected_intake_sha256`. Never re
 a prior turn decision for v4 or a high-impact action.
 
 Schema-v4 and schema-v5 `plan confirm` decisions bind the exact current-turn
-`request_ref` and basis; only schema v4 additionally requires current Plan intake.
-Before remote write, production change, destructive work, secret handling, or
-substantive rollback, use `action authorize` and consume the returned capability for
-the exact kind, typed target, and action digest. Issuance also requires an accepted
-same-turn Plan confirmation with an exactly matching intervention action kind and basis.
-The capability expires quickly and is single-use. When a route has already been
-explicitly confirmed for repeated same-kind external work, use `action lease prepare`
-to compute the bounded lease basis, confirm that basis once, then `action lease issue`
-and `action lease authorize` to mint per-action single-use capabilities inside the
-confirmed scope. Authorization is idempotent by default; retrying the same target and
-action digest after consumption requires a new `--idempotency-key` and consumes
-another lease slot. A lease waives only repeated prompts; it does not waive pilot
-evidence, review/artifact blockers, Plan contract drift checks, action consumption,
-or success evidence.
+`request_ref` and basis; only schema v4 additionally requires current Plan
+intake. For remote write, production change, destructive work, secret handling,
+substantive rollback, and similar high-impact actions, use `risk inspect` when
+you want controller-normalized facts about action kind, target, reversibility,
+digest, evidence, and risk factors. The controller does not decide whether the
+model must ask the user. If the model judges durable authorization is required,
+use `plan confirm`, then `action authorize` and `action consume` for the exact
+kind, target, and action digest. `action lease prepare|issue|authorize` remains
+an advanced compatibility path for explicitly bounded repeated external work;
+it is not the default prompt-reduction mechanism and does not waive pilot
+evidence, review/artifact blockers, Plan contract drift checks, action
+consumption, or success evidence.
 
 The Plan keeps one bounded `intake.current` anchor and a digest/count summary.
 Complete canonical records live in ignored, project-local, content-addressed

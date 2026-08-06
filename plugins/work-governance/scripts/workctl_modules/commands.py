@@ -5,11 +5,23 @@ from __future__ import annotations
 from typing import Final
 
 WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
+    "goal": {
+        "commands": [
+            "goal show",
+            "goal init --stdin|--from-file",
+        ],
+        "note": (
+            "Use goal init to admit the minimal model-facing schema-v5 contract; "
+            "runtime task state, evidence, and event history are stored separately."
+        ),
+    },
     "plan": {
         "commands": [
             "goal show",
+            "goal init --stdin|--from-file",
             "plan create",
             "plan show [--full]",
+            "plan history list|show",
             "plan edit",
             "plan reorder",
             "plan status",
@@ -17,8 +29,13 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
             "plan next",
             "plan blocked",
             "plan activation-repair",
+            "plan adapt --intent-stdin|--intent-from-file",
         ],
-        "note": "Contract edits require their existing confirmation and revision guards.",
+        "note": (
+            "Start from the high-level goal/adapt/history commands when possible; "
+            "schema-v4 adapt intent still requires revision/current-intake guards; "
+            "strict manifest commands remain compatible for advanced controller work."
+        ),
     },
     "task": {
         "commands": [
@@ -26,11 +43,13 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
             "task block",
             "task unblock",
             "task verify [--evidence-stdin]",
+            "task done --task-id T-001 --evidence-stdin|--from-file",
             "task reprioritize",
         ],
         "note": (
-            "Schema-v5 runtime transitions use state_sequence and task gates without "
-            "current-turn intake; mutable v4 transitions retain their turn binding."
+            "Use task done when raw evidence capture and verification are the same "
+            "workflow; low-level transitions remain available when exact state control "
+            "is needed."
         ),
     },
     "gate": {
@@ -85,9 +104,31 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
             "action lease revoke",
         ],
         "note": (
-            "High-impact actions still consume single-use capabilities; a route "
-            "lease only mints those capabilities inside a confirmed bounded scope; "
-            "use a new idempotency key for a consumed same-action retry."
+            "Single-use capabilities and leases remain compatibility/advanced tools; "
+            "confirmation judgment belongs to the model using current user authority, "
+            "project rules, reversibility, risk, and evidence."
+        ),
+    },
+    "risk": {
+        "commands": [
+            "risk inspect --action-kind KIND --target-ref REF",
+            "risk inspect --action-kind KIND --target-ref REF --action-stdin",
+        ],
+        "note": (
+            "Read-only facts only: the controller reports action kind, target, "
+            "reversibility, evidence digest, and risk factors without deciding "
+            "whether the model must ask the user."
+        ),
+    },
+    "worktree": {
+        "commands": [
+            "worktree begin --worktree-id WT-ID --path PATH --branch BRANCH",
+            "worktree record --worktree-id WT-ID --event EVENT --summary TEXT",
+            "worktree close --worktree-id WT-ID --summary TEXT",
+        ],
+        "note": (
+            "Worktree ledgers are runtime-only NON_AUTHORITY execution logs; only "
+            "their close summary should be absorbed into the parent Plan evidence."
         ),
     },
     "migration": {

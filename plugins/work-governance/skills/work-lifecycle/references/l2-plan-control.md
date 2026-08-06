@@ -248,9 +248,16 @@ Allowed structural changes:
   gate, and resolved exclusion decisions cannot be silently removed or
   rewritten. Existing artifact records are immutable to generic revision so
   their state confirmation and evidence cannot be rebound.
-- `plan adapt --manifest ...`: preserve the confirmed goal while changing the
-  evidence-backed execution method and recording an immutable revision-history
-  entry.
+- `goal init --stdin|--from-file`: in an unmanaged project, read a minimal goal
+  contract and let the controller generate the canonical schema-v5 Plan,
+  runtime state, initial event ledger, and index.
+- `plan adapt --intent-stdin|--intent-from-file`: record a high-level
+  adaptation intent and generated evidence without requiring the model to
+  hand-write a strict patch manifest. Schema-v4 Plans still require the
+  expected revision, current turn receipt, and latest matching intake record
+  before this command can persist evidence or bump revision. Use
+  `plan adapt --manifest ...` when an exact low-level route patch is still
+  needed.
 - `plan contract revise --manifest ...`: revise goal or demand-contract
   authority only through its explicit confirmation binding.
 - `plan unknown add|resolve`: make an unresolved question explicit, then close
@@ -270,6 +277,9 @@ Allowed structural changes:
   evidence metadata under the active Plan and return its exact path and SHA256.
   `task verify --evidence-stdin` performs the same bounded record and task
   transition as one controller command.
+- `task done --task-id T-001 --evidence-stdin|--from-file`: capture raw
+  evidence into the direct evidence store, generate a canonical Plan evidence
+  pointer, and verify the task as one high-level workflow.
 - `evidence capture --task T-001 --kind ... --summary ...`: capture stdin or a
   project-local file directly into the evidence store, with redaction, blob
   hashing, ledger append, optional idempotency key, and schema-v5 runtime task
@@ -278,6 +288,9 @@ Allowed structural changes:
   Schema-v5 compact status includes `parallel_ready` and `blocked_details`
   so dependency waits, explicit blocks, artifact states, independent review
   blocks, and pending task confirmations are visible before task advancement.
+- `plan history list|show`: read historical Plan files loosely for id, title,
+  status, task counts, and parse errors. This command must not validate
+  historical records against the active schema.
 - `plan confirm`: resolve a pending gate as `accepted` or `declined` with a
   typed authority reference and the exact basis digest. Generic Plan patches
   cannot edit confirmations, unclassified gates cannot decide, and a pending
@@ -354,6 +367,12 @@ Allowed structural changes:
   runtime transactions. `doctor --clean-stale-transactions` is receipt-bound
   and removes only stale generic transaction directories that have no journal;
   it never deletes schema-v5 migration journals or backup/staging bundles.
+- `risk inspect`: return read-only action kind, target, reversibility, digest,
+  and risk factors. The controller reports facts only; the model decides
+  whether current authority is enough or a user confirmation is needed.
+- `worktree begin|record|close`: keep a runtime-only sub-execution ledger with
+  `authority: NON_AUTHORITY`. The parent Plan may cite the close summary as
+  evidence, but the ledger never becomes a second Plan authority.
 - `task start|block|verify|skip`: update task state.
 - `log append`: preserve local process detail without granting it completion
   authority.

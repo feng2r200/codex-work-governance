@@ -17,25 +17,24 @@ assumption being tested, expected evidence delta, and observed evidence delta.
 Do not repeat an action after failure when the relevant inputs and state are
 materially identical.
 
-Immediately before remote write, production change, destructive operation, secret
-handling, or substantive rollback, hash the exact bounded action description and run
-`plan confirm` to accept a same-turn Plan confirmation whose intervention binds that
-exact action kind, target, and digest, then run `action authorize` with its confirmation
-ID, kind, target, request reference, and current turn receipt. Execute only after
-`action consume` succeeds for the same digest and target. Consumption is atomic and
-single-use; missing, expired, superseded, mismatched,
-or replayed authority fails closed. The record authorizes the attempt but is never
-evidence that the external action succeeded.
+Before remote write, production change, destructive operation, secret handling,
+substantive rollback, or similar high-impact work, make the confirmation
+judgment explicitly. Consider current user authorization, project rules,
+reversibility, blast radius, existing evidence, and whether the exact action is
+already covered. Use `risk inspect` when a normalized read-only risk summary
+would help; it reports facts and does not decide for the model.
 
-For a repeated high-impact route that the user has explicitly authorized as a
-bounded batch, first run `action lease prepare` and confirm the printed lease basis
-through the same current-turn Plan confirmation path. After `action lease issue`,
-each concrete action still needs `action lease authorize` and `action consume`.
-The default authorization key is idempotent; pass a new `--idempotency-key` only
-when a consumed same-target/same-digest attempt must be retried inside the same
-bounded route. The lease freezes on Plan contract drift and, by default, review or
-artifact blockers. It can waive repeated prompts only; it cannot satisfy pilot
-evidence, quality gates, action success evidence, or activation evidence.
+When the model judges durable authorization is required, hash the exact bounded
+action description and run `plan confirm` to accept a same-turn Plan
+confirmation whose intervention binds that exact action kind, target, and
+digest. Then use `action authorize` and `action consume` for the same digest
+and target. The record authorizes the attempt but is never evidence that the
+external action succeeded.
+
+`action lease prepare|issue|authorize` is an advanced compatibility path for a
+user-confirmed repeated external route. It can document a bounded scope, but it
+does not decide whether to ask, waive pilot evidence, release quality gates,
+prove action success, or replace activation evidence.
 
 During execution:
 
@@ -43,7 +42,7 @@ During execution:
 - avoid parallel writes to the same data or remote surface;
 - use deterministic scripts for repeated fragile work;
 - continue through every dependency-ready task, validation, and evidence
-  transition covered by the current route-level `proceed` basis;
+  transition covered by the current contract and current authorization;
 - treat progress updates, completed-slice summaries, phase changes, and stated
   next steps as communication only; never pause for a decision-free
   continuation response;
