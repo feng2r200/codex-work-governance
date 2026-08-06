@@ -236,9 +236,10 @@ def test_bulk_authorization_preserves_pilot_and_quality_drift_stop_loss() -> Non
     normalized_execution = " ".join(execution.split())
     normalized_deviation = " ".join(deviation.split())
 
-    assert "Bulk or blanket authorization waives only repeated confirmation prompts" in (
+    assert "Bulk or blanket authorization can reduce repeated prompts only when the model" in (
         normalized_demand
     )
+    assert "judges it still covers the concrete repeated work" in normalized_demand
     assert "pilot task and validation remain explicit dependencies" in normalized_demand
     assert "cannot satisfy or bypass the pilot gate" in normalized_demand
     assert "QUALITY_DRIFT_DETECTED" in normalized_execution

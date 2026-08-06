@@ -11,7 +11,9 @@ Define:
 - task slices `T-###` that each have a verification point;
 - validations `V-###` that directly prove obligations;
 - artifacts `A-###` and their expected, suspect, quarantined, or final state;
-- confirmation gates for high-impact choices.
+- durable confirmation gates only when the model judges the current
+  authorization, project rules, reversibility, risk, or evidence are
+  insufficient for a high-impact choice.
 
 Do not model conversation as a gate. A new confirmation must carry an
 `intervention` contract with:
@@ -76,15 +78,15 @@ Define future gates against their exact targets without making them the current
 route state. A pending live authority may block `task:T-NNN`, `activation`, and
 `route` while all earlier local tasks remain active and dependency-ready.
 
-Bulk or blanket authorization waives only repeated confirmation prompts; it
-does not waive acceptance evidence. When repeated work can amplify a shared
-defect, the pilot task and validation remain explicit dependencies of every
-downstream batch. The authorization cannot satisfy or bypass the pilot gate.
-Name the confirmed pilot evidence, the invariant checked at later batch
-boundaries, and the downstream freeze condition before bulk execution starts.
-Use a route authority lease only after that boundary is explicit: its scope
-must name kind, target refs or typed prefixes, digest policy, expiry, max
-authorizations, blocked targets, and drift/freeze conditions.
+Bulk or blanket authorization can reduce repeated prompts only when the model
+judges it still covers the concrete repeated work; it does not waive acceptance
+evidence. When repeated work can amplify a shared defect, the pilot task and
+validation remain explicit dependencies of every downstream batch. The
+authorization cannot satisfy or bypass the pilot gate. Name the pilot evidence,
+the invariant checked at later batch boundaries, and the downstream freeze
+condition before bulk execution starts. `action lease` remains an advanced
+compatibility record for an explicitly bounded repeated external route, not a
+default controller rule for deciding whether to ask.
 
 Do not treat examples, candidate designs, logs, or memory as confirmed facts.
 If a future agent must obey the contract, write it into the Plan frontmatter.
@@ -92,5 +94,5 @@ If the contract is still a proposal, keep it in the reply or logs and ask for
 confirmation before making it authority.
 
 Validation standard: every must-have obligation has at least one planned check,
-each check has a provenance class, and each high-impact action has an explicit
-confirmation reference.
+each check has a provenance class, and each high-impact action has either clear
+current authority or an explicit confirmation reference.

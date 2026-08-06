@@ -1,0 +1,49 @@
+schema_version: 1
+kind: rollover
+rollover_id: ROL-20260806-001
+status: committed
+created_at: "2026-08-06T08:27:48+00:00"
+updated_at: "2026-08-06T08:27:48+00:00"
+source_plan:
+  path: .work-governance/_Plan/PLAN-20260804-001.md
+  plan_id: PLAN-20260804-001
+  revision: 80
+  sha256: af340717aceeee349730562688de7f9e7cb52ed1ec5bd983ac977fbe4ad41e3e
+index_baseline:
+  active_plan_id: PLAN-20260804-001
+  sha256: 19051fea82df86db01554192d3340cbb3269e6aa0a987b7b47ff9ed7654ff47b
+target_plan_id: PLAN-20260806-001
+target_path: .work-governance/_Plan/PLAN-20260806-001.md
+staged_prepared_plan: .work-governance/_Plan/.rollovers/ROL-20260806-001/staging/prepared-plan.md
+staged_plan: .work-governance/_Plan/.rollovers/ROL-20260806-001/staging/target-plan.md
+target_sha256: c1c1d0f566f333c8833ff78c5e5b9b25d40f1435bfb2e87a39449bbc36440119
+staged_index: .work-governance/_Plan/.rollovers/ROL-20260806-001/staging/target-index.yaml
+target_index_sha256: 793e18f973630157c50a57c9f493b4596d15c8e936bf2f3982f26d2752f16880
+prepared_plan_sha256: 1b840db417fc384b13973b895fa5254f7284a85f34f74a150ea22af411486021
+proposal_sha256: 8a6da666f43b73ced724e520252a9bbe6a80c1c37ed5fa51f3fac72c318ef74d
+confirmation_payload_version: 2
+rollover_confirmation:
+  id: C-PLAN-ROLLOVER
+  description: Approve the terminal predecessor and exact successor Plan contract.
+  status: accepted
+  ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019fd628-866a-7a30-86ac-4ad644f8f449/sha256/e78ca93088d4915c5fafe5c70fc3373b850257b133bdd3dde1c5988b930afa3a
+  accepted_at: "2026-08-06T08:20:17Z"
+  evidence_sha256: 8a6da666f43b73ced724e520252a9bbe6a80c1c37ed5fa51f3fac72c318ef74d
+  intervention:
+    kind: plan_contract
+    blocks:
+      - route
+    basis_ref: project:confirmation-basis/8a6da666f43b73ced724e520252a9bbe6a80c1c37ed5fa51f3fac72c318ef74d
+    basis_sha256: 8a6da666f43b73ced724e520252a9bbe6a80c1c37ed5fa51f3fac72c318ef74d
+completed_operations:
+  - rollover-target-plan
+  - rollover-index-activation
+intake_binding:
+  request_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019fd628-866a-7a30-86ac-4ad644f8f449/sha256/e78ca93088d4915c5fafe5c70fc3373b850257b133bdd3dde1c5988b930afa3a
+  request_sha256: e78ca93088d4915c5fafe5c70fc3373b850257b133bdd3dde1c5988b930afa3a
+  turn_receipt_sha256: d8e63f2f4dac9db8355f0abe787e82aa8602d2aa7345a473d7ce657a8b163752
+  decision_basis_sha256: 6658a47b0e813a2898e38e775ab00118bdbcbbde5a058c5ea26840ceecc32952
+  intake_proposal_sha256: db6af4045050fded1c59d0293923db348b72c65ef308a033fa535dc323beb704
+  intake_record_sha256: d37938c38fb5f82334f410d38edc62a30171a303b486d7339bc49c2755c844b8
+target_contract_sha256: 106f03b132e33e61021b354dd0adb9584ac3b16be9f6ae3e005c6467ec44d07b
+transaction_binding_sha256: b9f83cb306d319c1f04de65ba5070d5a8abe220be73f52712ee7cf59486fd029

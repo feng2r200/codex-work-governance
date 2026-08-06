@@ -147,6 +147,21 @@ def read_json_object(path: Path) -> dict[str, object]:
     return cast(dict[str, object], payload)
 
 
+def evidence_tree_snapshot(project: Path) -> dict[str, str]:
+    """Return a digest snapshot of governance evidence files."""
+    snapshot: dict[str, str] = {}
+    for root in (
+        project / ".work-governance" / "evidence",
+        project / ".work-governance" / "_Plan" / ".evidence",
+    ):
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if path.is_file():
+                snapshot[path.relative_to(project).as_posix()] = sha256_bytes(path.read_bytes())
+    return snapshot
+
+
 def read_plan_frontmatter(project: Path, plan_id: str) -> dict[str, object]:
     """Read one admitted Markdown Plan frontmatter mapping."""
     plan = project / ".work-governance" / "_Plan" / f"{plan_id}.md"
@@ -2825,6 +2840,83 @@ def test_non_task_advancement_commands_enforce_their_exact_targets(tmp_path: Pat
         )
         assert result.returncode == 2, label
         assert "INTAKE_TARGET_MISMATCH" in result.stderr, label
+
+
+def test_schema_v4_plan_adapt_intent_requires_current_intake_before_evidence(
+    tmp_path: Path,
+) -> None:
+    """High-level v4 adaptation keeps the v4 turn and revision gates."""
+    project, session_id = prepare_admitted_project(tmp_path)
+    plan_id = "PLAN-20260729-001"
+    intent_path = project / "adapt-intent.txt"
+    intent_path.write_text("Prefer the shorter controller workflow.\n", encoding="utf-8")
+    before = evidence_tree_snapshot(project)
+
+    missing_revision = run_controller(
+        project,
+        "plan",
+        "adapt",
+        "--intent-from-file",
+        str(intent_path),
+        "--summary",
+        "Record route adaptation intent.",
+        check=False,
+    )
+    assert missing_revision.returncode == 2
+    assert "EXPECTED_REVISION_REQUIRED" in missing_revision.stderr
+    assert evidence_tree_snapshot(project) == before
+
+    missing_intake = run_controller(
+        project,
+        "plan",
+        "adapt",
+        "--intent-from-file",
+        str(intent_path),
+        "--summary",
+        "Record route adaptation intent.",
+        "--expected-revision",
+        "1",
+        check=False,
+    )
+    assert missing_intake.returncode == 2
+    assert "TURN_RECEIPT_REQUIRED" in missing_intake.stderr
+    assert evidence_tree_snapshot(project) == before
+
+    _proposal, _manifest, turn_sha256 = issue_intake(
+        project,
+        session_id=session_id,
+        turn_id="turn-adapt-intent",
+        decision="proceed",
+        targets=["route"],
+        expected_revision=1,
+    )
+    frontmatter = read_plan_frontmatter(project, plan_id)
+    intake_sha256 = cast(str, intake_records_for_assertion(frontmatter)[-1]["record_sha256"])
+
+    completed = run_controller(
+        project,
+        "plan",
+        "adapt",
+        "--intent-from-file",
+        str(intent_path),
+        "--summary",
+        "Record route adaptation intent.",
+        "--expected-revision",
+        "2",
+        "--turn-receipt-sha256",
+        turn_sha256,
+        "--expected-intake-sha256",
+        intake_sha256,
+    )
+    payload: object = json.loads(completed.stdout)
+    assert isinstance(payload, dict)
+    revised = read_plan_frontmatter(project, plan_id)
+
+    assert payload["status"] == "PLAN_ADAPT_INTENT_RECORDED"
+    assert payload["revision"] == 3
+    assert revised["revision"] == 3
+    assert cast(list[dict[str, object]], revised["revision_history"])[-1]["kind"] == "adaptation"
+    assert evidence_tree_snapshot(project) != before
 
 
 def prepare_activation_repair_project(
