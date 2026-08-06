@@ -72,6 +72,12 @@ try:
         risk_inspection_payload as module_risk_inspection_payload,
     )
     from workctl_modules.storage import canonical_event_bytes, redacted_copy
+    from workctl_modules.workflow_input import (
+        WorkflowInputError as ModuleWorkflowInputError,
+    )
+    from workctl_modules.workflow_input import (
+        read_workflow_input_bytes as module_read_workflow_input_bytes,
+    )
     from workctl_modules.worktree import (
         WorktreeLedgerError as ModuleWorktreeLedgerError,
     )
@@ -103,6 +109,9 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
         """Fallback exception for legacy single-file runtime bundles."""
 
     class ModulePlanHistoryError(ValueError):  # type: ignore[no-redef]
+        """Fallback exception for legacy single-file runtime bundles."""
+
+    class ModuleWorkflowInputError(ValueError):  # type: ignore[no-redef]
         """Fallback exception for legacy single-file runtime bundles."""
 
     MODULE_WORKFLOW_HELP = None  # type: ignore[assignment,misc]
@@ -145,6 +154,7 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     module_load_worktree_ledger = None  # type: ignore[assignment]
     module_open_worktree_ledger = None  # type: ignore[assignment]
     module_worktree_ledger_path = None  # type: ignore[assignment]
+    module_read_workflow_input_bytes = None  # type: ignore[assignment]
 
 PLAN_ID_RE = re.compile(r"^PLAN-\d{8}-\d{3}$")
 MIGRATION_ID_RE = re.compile(r"^MIG-\d{8}-\d{3}$")
@@ -11578,22 +11588,33 @@ def read_workflow_input_bytes(
     """Read one bounded high-level workflow input from stdin or a file."""
     use_stdin = bool(getattr(args, stdin_attr, False))
     raw_path = getattr(args, file_attr, None)
-    if use_stdin and isinstance(raw_path, str):
-        raise WorkctlError("WORKFLOW_INPUT_SOURCE_CONFLICT")
-    if use_stdin:
-        content = sys.stdin.buffer.read(max_bytes + 1)
-    elif isinstance(raw_path, str):
-        source = Path(raw_path)
-        if source.is_symlink() or not source.is_file():
-            raise WorkctlError("WORKFLOW_INPUT_MISSING")
-        content = source.read_bytes()
-    elif required:
-        raise WorkctlError("WORKFLOW_INPUT_REQUIRED")
-    else:
-        return None
-    if len(content) > max_bytes:
-        raise WorkctlError("WORKFLOW_INPUT_TOO_LARGE")
-    return content
+    if module_read_workflow_input_bytes is None:
+        if use_stdin and isinstance(raw_path, str):
+            raise WorkctlError("WORKFLOW_INPUT_SOURCE_CONFLICT")
+        if use_stdin:
+            content = sys.stdin.buffer.read(max_bytes + 1)
+        elif isinstance(raw_path, str):
+            source = Path(raw_path)
+            if source.is_symlink() or not source.is_file():
+                raise WorkctlError("WORKFLOW_INPUT_MISSING")
+            content = source.read_bytes()
+        elif required:
+            raise WorkctlError("WORKFLOW_INPUT_REQUIRED")
+        else:
+            return None
+        if len(content) > max_bytes:
+            raise WorkctlError("WORKFLOW_INPUT_TOO_LARGE")
+        return content
+    try:
+        return module_read_workflow_input_bytes(
+            use_stdin=use_stdin,
+            raw_path=raw_path,
+            required=required,
+            max_bytes=max_bytes,
+            stdin_reader=sys.stdin.buffer.read,
+        )
+    except ModuleWorkflowInputError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def parse_workflow_mapping(content: bytes, *, error_prefix: str) -> dict[str, Any]:
