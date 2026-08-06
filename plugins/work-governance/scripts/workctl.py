@@ -53,6 +53,15 @@ try:
     )
     from workctl_modules.model import TaskProjection
     from workctl_modules.plan_schema import CURRENT_PLAN_SCHEMA_VERSION
+    from workctl_modules.risk import (
+        action_reversibility as module_action_reversibility,
+    )
+    from workctl_modules.risk import (
+        risk_factors_for_action as module_risk_factors_for_action,
+    )
+    from workctl_modules.risk import (
+        risk_inspection_payload as module_risk_inspection_payload,
+    )
     from workctl_modules.storage import canonical_event_bytes, redacted_copy
     from workctl_modules.worktree import (
         WorktreeLedgerError as ModuleWorktreeLedgerError,
@@ -111,6 +120,9 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
         "next current-schema task."
     )
     canonical_event_bytes = None  # type: ignore[assignment]
+    module_action_reversibility = None  # type: ignore[assignment]
+    module_risk_factors_for_action = None  # type: ignore[assignment]
+    module_risk_inspection_payload = None  # type: ignore[assignment]
     redacted_copy = None  # type: ignore[assignment]
     module_append_worktree_event = None  # type: ignore[assignment]
     module_build_worktree_event = None  # type: ignore[assignment]
@@ -12399,64 +12411,40 @@ def cmd_plan_history(args: argparse.Namespace) -> None:
 
 def risk_factors_for_action(action_kind: str) -> list[str]:
     """Return factual risk categories for one proposed action kind."""
-    factors: list[str] = []
-    if action_kind in HIGH_IMPACT_ACTION_KINDS:
-        factors.append("high_impact_action")
-    if action_kind in {"remote_write", "remote_read"}:
-        factors.append("remote_state")
-    if action_kind == "production_change":
-        factors.append("production_surface")
-    if action_kind == "destructive_operation":
-        factors.append("destructive_or_hard_to_reverse")
-    if action_kind == "secret_handling":
-        factors.append("secret_or_credential_exposure")
-    if action_kind in {"data_read", "data_write"}:
-        factors.append("data_boundary")
-    if action_kind in {"local_edit", "local_commit"}:
-        factors.append("local_repository_state")
-    return factors
+    if module_risk_factors_for_action is None:
+        raise WorkctlError("RISK_MODULE_UNAVAILABLE")
+    return module_risk_factors_for_action(action_kind, HIGH_IMPACT_ACTION_KINDS)
 
 
 def action_reversibility(action_kind: str) -> str:
     """Classify reversibility facts without making a confirmation decision."""
-    if action_kind in {"local_edit", "data_read", "remote_read"}:
-        return "usually_reversible_or_read_only"
-    if action_kind == "local_commit":
-        return "locally_reversible_with_git_history"
-    if action_kind in {"remote_write", "production_change", "destructive_operation"}:
-        return "may_be_irreversible_or_externally_visible"
-    if action_kind in {"secret_handling", "data_write", "substantive_rollback"}:
-        return "context_dependent_high_impact"
-    return "unknown"
+    if module_action_reversibility is None:
+        raise WorkctlError("RISK_MODULE_UNAVAILABLE")
+    return module_action_reversibility(action_kind)
 
 
 def cmd_risk_inspect(args: argparse.Namespace) -> None:
     """Return read-only risk facts while leaving confirmation judgment to the model."""
+    if module_risk_inspection_payload is None:
+        raise WorkctlError("RISK_MODULE_UNAVAILABLE")
     content = read_workflow_input_bytes(
         args,
         stdin_attr="action_stdin",
         file_attr="action_from_file",
         required=False,
     )
-    output: dict[str, Any] = {
-        "decision_owner": "model",
-        "controller_decision": "facts_only",
-        "requires_confirmation_by_controller": False,
-        "action_kind": args.action_kind,
-        "target_ref": args.target_ref,
-        "risk_factors": risk_factors_for_action(args.action_kind),
-        "reversibility": action_reversibility(args.action_kind),
-        "model_confirmation_considerations": [
-            "current user authorization",
-            "project rules",
-            "impact on remote, production, data, secrets, destructive state, or rollback",
-            "reversibility and blast radius",
-            "fresh evidence already available",
-        ],
-    }
+    action_sha256: str | None = None
+    action_size: int | None = None
     if content is not None:
-        output["action_sha256"] = sha256_bytes(content)
-        output["action_size"] = len(content)
+        action_sha256 = sha256_bytes(content)
+        action_size = len(content)
+    output = module_risk_inspection_payload(
+        action_kind=str(args.action_kind),
+        target_ref=str(args.target_ref),
+        high_impact_action_kinds=HIGH_IMPACT_ACTION_KINDS,
+        action_sha256=action_sha256,
+        action_size=action_size,
+    )
     print(json.dumps(output, indent=2, sort_keys=True))
 
 
