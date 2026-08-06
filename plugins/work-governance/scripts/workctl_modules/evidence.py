@@ -492,6 +492,29 @@ def persist_direct_evidence_bytes(
     return {**ledger_record, "idempotent": False}
 
 
+def workflow_evidence_payload(
+    *,
+    plan_id: str,
+    subject: str,
+    producer_ref: str,
+    direct_record: Mapping[str, object],
+) -> dict[str, object]:
+    """Create a canonical Plan evidence payload from a direct capture record."""
+    evidence_ref = direct_record.get("evidence_ref")
+    evidence_sha256 = direct_record.get("evidence_sha256")
+    if not isinstance(evidence_ref, str) or not isinstance(evidence_sha256, str):
+        raise ValueError("DIRECT_EVIDENCE_RECORD_INVALID")
+    return {
+        "schema_version": 1,
+        "kind": "work-governance-evidence",
+        "plan_id": plan_id,
+        "subject": subject,
+        "created_at": utc_now(),
+        "producer_ref": producer_ref,
+        "items": [{"ref": evidence_ref, "sha256": evidence_sha256}],
+    }
+
+
 def validate_evidence_payload(
     payload: Mapping[str, object],
     *,

@@ -22,6 +22,7 @@ redact_capture_bytes = evidence_module.redact_capture_bytes
 validate_capture_args = evidence_module.validate_capture_args
 validate_evidence_payload = evidence_module.validate_evidence_payload
 verify_capture_record_file = evidence_module.verify_capture_record_file
+workflow_evidence_payload = evidence_module.workflow_evidence_payload
 
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -226,3 +227,44 @@ def test_persist_direct_evidence_bytes_preserves_conflict_code(tmp_path: Path) -
         assert str(exc) == "EVIDENCE_CAPTURE_IDEMPOTENCY_CONFLICT"
     else:
         raise AssertionError("conflicting idempotent evidence was accepted")
+
+
+def test_workflow_evidence_payload_builds_plan_evidence_record() -> None:
+    """Workflow evidence payload construction is testable without Plan writes."""
+    payload = workflow_evidence_payload(
+        plan_id="PLAN-20260806-001",
+        subject="task:T-001",
+        producer_ref="runtime:workflow",
+        direct_record={
+            "evidence_ref": "evidence:.work-governance/evidence/records/" + "a" * 64 + ".json",
+            "evidence_sha256": "a" * 64,
+        },
+    )
+
+    assert payload["schema_version"] == 1
+    assert payload["kind"] == "work-governance-evidence"
+    assert payload["plan_id"] == "PLAN-20260806-001"
+    assert payload["subject"] == "task:T-001"
+    assert payload["producer_ref"] == "runtime:workflow"
+    assert payload["items"] == [
+        {
+            "ref": "evidence:.work-governance/evidence/records/" + "a" * 64 + ".json",
+            "sha256": "a" * 64,
+        }
+    ]
+    assert isinstance(payload["created_at"], str)
+
+
+def test_workflow_evidence_payload_preserves_invalid_record_code() -> None:
+    """Workflow evidence payload construction keeps the invalid direct-record code."""
+    try:
+        workflow_evidence_payload(
+            plan_id="PLAN-20260806-001",
+            subject="task:T-001",
+            producer_ref="runtime:workflow",
+            direct_record={"evidence_ref": "evidence:missing-sha"},
+        )
+    except ValueError as exc:
+        assert str(exc) == "DIRECT_EVIDENCE_RECORD_INVALID"
+    else:
+        raise AssertionError("invalid direct evidence record was accepted")

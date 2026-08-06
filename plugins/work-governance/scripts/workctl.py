@@ -12072,19 +12072,18 @@ def canonical_workflow_evidence(
     direct_record: Mapping[str, Any],
 ) -> tuple[str, str]:
     """Create a canonical Plan evidence record from a direct evidence capture."""
-    evidence_ref = direct_record.get("evidence_ref")
-    evidence_sha256 = direct_record.get("evidence_sha256")
-    if not isinstance(evidence_ref, str) or not isinstance(evidence_sha256, str):
-        raise WorkctlError("DIRECT_EVIDENCE_RECORD_INVALID")
-    payload = {
-        "schema_version": 1,
-        "kind": "work-governance-evidence",
-        "plan_id": plan_id,
-        "subject": subject,
-        "created_at": utc_now(),
-        "producer_ref": producer_ref,
-        "items": [{"ref": evidence_ref, "sha256": evidence_sha256}],
-    }
+    try:
+        payload = cast(
+            dict[str, Any],
+            capture_module_call("workflow_evidence_payload")(
+                plan_id=plan_id,
+                subject=subject,
+                producer_ref=producer_ref,
+                direct_record=direct_record,
+            ),
+        )
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
     return record_evidence_payload(root, plan_id=plan_id, payload=payload, expected_subject=subject)
 
 
