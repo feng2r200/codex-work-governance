@@ -184,14 +184,12 @@ validation evidence, pilot evidence, activation evidence, or drift checks.
 
 ## Migration
 
-Use explicit schema-v5 migration commands:
+Use explicit current-schema refresh commands:
 
 ```sh
 <workctl> migrate inspect
 <workctl> migrate apply --dry-run
-<workctl> migrate apply \
-  --confirmation C-MIGRATION-SCHEMA-V5 \
-  --expected-contract-revision <revision>
+<workctl> migrate apply --expected-contract-revision <revision>
 <workctl> migrate recover --migration-id MIG-YYYYMMDD-NNN
 <workctl> migrate rollback-info --migration-id MIG-YYYYMMDD-NNN
 <workctl> doctor
@@ -201,16 +199,18 @@ Use explicit schema-v5 migration commands:
 default `doctor` report do not write project state and do not require a
 SessionStart READY receipt. Durable `migrate apply`, `migrate recover`,
 `evidence capture`, and `doctor --clean-stale-transactions` are receipt-bound
-mutations. Apply writes backup, staging, runtime state, event ledger, and
-journal data before replacing the active Plan. Durable apply accepts only the
-exact `C-MIGRATION-SCHEMA-V5` gate; unrelated accepted confirmations cannot
-authorize migration. Recovery rolls forward only the authenticated migration
-journal. `rollback-info` exposes backup paths and manual recovery boundaries;
-it is not an automatic rollback command.
+mutations. Apply treats outdated active Plans as read-only legacy input: it
+writes backup, staging, a versioned archive of the legacy Plan, fresh runtime
+state, event ledger, and journal data before replacing the active Plan with the
+current schema contract. Durable apply requires the expected contract revision
+guard, but it does not require a fixed migration confirmation gate and does not
+adapt legacy task status into runtime state. Recovery rolls forward only the
+authenticated refresh journal. `rollback-info` exposes archive and backup paths
+plus manual recovery boundaries; it is not an automatic rollback command.
 
 `doctor --clean-stale-transactions` cleans only stale generic runtime
-transaction directories that have no journal. It never deletes schema-v5
-migration journals or backup/staging bundles; incomplete migration journals
+transaction directories that have no journal. It never deletes schema refresh
+journals, legacy archives, or backup/staging bundles; incomplete refresh journals
 must be recovered or investigated.
 
 ## Validation

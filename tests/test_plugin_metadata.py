@@ -54,6 +54,12 @@ def test_plugin_manifest_describes_goal_driven_runtime() -> None:
     typed_manifest = cast(Mapping[str, object], manifest)
     assert cast(str, typed_manifest["version"]).startswith("1.1.0+codex.")
     assert "goal-driven" in cast(str, typed_manifest["description"])
+    plan = cast(Mapping[str, object], typed_manifest["plan"])
+    assert plan["current_schema_version"] == 5
+    plan_schema = runpy.run_path(
+        str(PLUGIN_ROOT / "scripts" / "workctl_modules" / "plan_schema.py")
+    )
+    assert plan["current_schema_version"] == plan_schema["CURRENT_PLAN_SCHEMA_VERSION"]
     interface = cast(Mapping[str, object], typed_manifest["interface"])
     assert "durable Plan contracts" in cast(str, interface["longDescription"])
 

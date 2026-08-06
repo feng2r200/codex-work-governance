@@ -220,6 +220,82 @@ def runtime_controller(project: Path) -> tuple[Path, str]:
     )
 
 
+def patch_runtime_controller_for_legacy_schema_tests(project: Path) -> None:
+    """Patch the runtime controller copy so legacy v4 intake tests stay scoped."""
+    receipt_path = project / ".work-governance" / "bootstrap-state.json"
+    receipt = read_json_object(receipt_path)
+    controller = project / cast(str, receipt["controller_ref"])
+    bundle = project / cast(str, receipt["runtime_bundle_ref"])
+    manifest_path = bundle / "manifest.json"
+    controller_source = controller.read_text(encoding="utf-8")
+    contract_state_marker = (
+        "def contract_state(frontmatter: dict[str, Any]) -> str:\n"
+        '    """Return the current-schema state independently from Plan authority."""\n'
+        '    schema_version = frontmatter.get("schema_version")\n'
+        '    status = frontmatter.get("status")\n'
+        "    if schema_version == CURRENT_PLAN_SCHEMA_VERSION:\n"
+        '        return "PLAN_CONTRACT_READY"\n'
+        '    if status not in {"complete", "retired"}:\n'
+        '        return "PLAN_SCHEMA_REFRESH_REQUIRED"\n'
+        '    return "PLAN_CONTRACT_LEGACY_READABLE"\n'
+    )
+    legacy_contract_state = (
+        "def contract_state(frontmatter: dict[str, Any]) -> str:\n"
+        '    """Return the schema-cutover state independently from Plan authority."""\n'
+        '    schema_version = frontmatter.get("schema_version")\n'
+        "    if schema_version == 5:\n"
+        '        return "PLAN_CONTRACT_READY"\n'
+        "    if schema_version == 4:\n"
+        '        return "PLAN_CONTRACT_READY"\n'
+        "    if (\n"
+        "        schema_version == 3\n"
+        '        and frontmatter.get("status") not in {"complete", "retired"}\n'
+        "    ):\n"
+        '        return "PLAN_CONTRACT_UPGRADE_REQUIRED"\n'
+        '    return "PLAN_CONTRACT_LEGACY_READABLE"\n'
+    )
+    gate_marker = (
+        "def enforce_active_contract_gate(args: argparse.Namespace, root: Path) -> None:\n"
+        '    """Allow only current-schema refresh writes for an outdated active Plan."""\n'
+    )
+    ready_marker = (
+        "def require_plan_contract_ready(frontmatter: dict[str, Any]) -> None:\n"
+        '    """Block ordinary writes from silently trusting an outdated active contract."""\n'
+    )
+    if contract_state_marker not in controller_source:
+        raise AssertionError("turn-intake contract-state patch marker drifted")
+    if gate_marker not in controller_source:
+        raise AssertionError("turn-intake gate patch marker drifted")
+    if ready_marker not in controller_source:
+        raise AssertionError("turn-intake contract-ready patch marker drifted")
+    controller_source = controller_source.replace(contract_state_marker, legacy_contract_state, 1)
+    controller_source = controller_source.replace(gate_marker, gate_marker + "    return\n", 1)
+    controller_source = controller_source.replace(ready_marker, ready_marker + "    return\n", 1)
+    controller.write_text(controller_source, encoding="utf-8")
+    controller_sha256 = sha256_bytes(controller.read_bytes())
+    manifest = read_json_object(manifest_path)
+    manifest["controller_sha256"] = controller_sha256
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    manifest_sha256 = sha256_bytes(manifest_path.read_bytes())
+    receipt_paths = [
+        receipt_path,
+        *(
+            project / ".work-governance" / "runtime" / "sessions"
+        ).glob("*/bootstrap-state.json"),
+    ]
+    for candidate in receipt_paths:
+        payload = read_json_object(candidate)
+        payload["controller_sha256"] = controller_sha256
+        payload["runtime_manifest_sha256"] = manifest_sha256
+        candidate.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+
 def run_controller(
     project: Path,
     *arguments: str,
@@ -372,6 +448,7 @@ def prepare_admitted_project(
     prepared_plan: dict[str, object] | None = None,
     admission_env: dict[str, str] | None = None,
     expect_admission_success: bool = True,
+    legacy_contract_compat: bool = True,
 ) -> tuple[Path, str]:
     """Bootstrap and transactionally admit one schema-v4 test Plan."""
     fake_bin = tmp_path / "bin"
@@ -381,6 +458,8 @@ def prepare_admitted_project(
     project.mkdir()
     session_id = "session-intake"
     run_session_hook(project, fake_bin, session_id)
+    if legacy_contract_compat:
+        patch_runtime_controller_for_legacy_schema_tests(project)
     plan = prepared_plan or strict_admission_plan("PLAN-20260729-001", unknowns=unknowns)
     plan_id = cast(str, plan["plan_id"])
     unknown_items = cast(list[dict[str, object]], plan.get("unknowns", []))
@@ -663,6 +742,7 @@ def prepare_strict_contract_upgrade(
     project.mkdir()
     session_id = "session-upgrade"
     run_session_hook(project, fake_bin, session_id)
+    patch_runtime_controller_for_legacy_schema_tests(project)
     plan_id = "PLAN-20260729-001"
     source = strict_admission_plan(plan_id)
     source["schema_version"] = 3
@@ -1141,7 +1221,7 @@ def test_turn_hook_stays_trusted_after_pyyaml_continuation_plan_resume(
     tmp_path: Path,
 ) -> None:
     """A PyYAML-wrapped active Plan must not cause SESSION_RECEIPT_MISMATCH."""
-    project, session_id = prepare_admitted_project(tmp_path)
+    project, session_id = prepare_admitted_project(tmp_path, legacy_contract_compat=False)
     rewrite_plan_with_pyyaml_escaped_continuation(project, "PLAN-20260729-001")
     fake_bin = tmp_path / "resume-bin"
     fake_bin.mkdir()

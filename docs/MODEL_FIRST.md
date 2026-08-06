@@ -19,6 +19,11 @@
   evidence、生成 canonical Plan evidence，并完成 task verify。
 - 查旧 Plan 时，用 `plan history list|show`。这是宽松只读读取，不用旧历史
   格式约束当前 active schema。
+- active Plan 只有插件当前声明的 schema-v5 可继续写。遇到 V3/V4 或任何
+  非当前 schema 的 active Plan 时，只做只读摘要，然后用
+  `migrate apply --expected-contract-revision <revision>` 归档旧 Plan 并重建
+  schema-v5 contract；不要做状态适配、旧 task 状态迁移或
+  `plan contract upgrade`。
 - 判断高影响动作前，可用 `risk inspect --action-kind KIND --target-ref REF`
   获取风险事实。controller 不替模型决定是否必须向用户确认。
 - 子 worktree 执行只记录

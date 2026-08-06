@@ -268,12 +268,12 @@ gates) from ignored runtime state (task status, dynamic priority, current task,
 state sequence, event ledger, and redacted evidence snapshots). Reads accept
 v1-v4 and v5; new writes use v5. `migrate inspect`, `migrate apply --dry-run`,
 `migrate rollback-info`, and default `doctor` are read-only. Durable
-`migrate apply` requires an explicit confirmation, expected contract revision,
-backup, atomic replacement, and recoverable staging; `migrate recover` is also
-receipt-bound because it can finish an interrupted replacement. Schema-v5
-durable migration accepts only the exact `C-MIGRATION-SCHEMA-V5` gate, either
-as a legacy accepted migration gate or as a strict route-bound
-`plan_contract` intervention.
+`migrate apply` requires the expected contract revision, archives the legacy
+Plan, replaces the active contract atomically, and stages recoverable runtime
+state and event bytes. It does not require a fixed migration confirmation and
+does not adapt legacy task status into the refreshed runtime state.
+`migrate recover` is receipt-bound because it can finish an interrupted
+replacement.
 
 Run only the exact `intake_command` emitted by the current SessionStart. It uses
 `controller_ref`, `controller_sha256`, and `receipt_sha256` from the READY
@@ -446,7 +446,7 @@ patches.
 New Plans use schema v5 to separate durable contract concerns from runtime state:
 
 - a stable goal statement and measurable success conditions;
-- a revisioned demand contract bound to an accepted confirmation;
+- a revisioned demand contract with confirmations recorded only when needed;
 - a bounded current intake anchor backed by project-local immutable,
   hash-linked records for trusted user turns;
 - open or resolved unknowns with `owner`, `impact`, authoritative `blocks`,
@@ -460,14 +460,14 @@ New Plans use schema v5 to separate durable contract concerns from runtime state
 - structured exclusions that are not required, deferred, confirmation-bound,
   transferred, or forbidden.
 
-An active schema-v3 Plan is readable but reports
-`PLAN_CONTRACT_UPGRADE_REQUIRED`; ordinary writes remain blocked until
-`plan contract upgrade apply --manifest <upgrade.yaml>` completes or
-`plan contract upgrade recover` deterministically rolls the transaction
-forward. The upgrade manifest embeds the current-turn intake proposal, and the
-staged schema-v4 target binds its first record in the recovery journal.
-Completed inactive schema-v3 Plans remain readable historical
-records. Goal or contract changes use `plan contract revise`; evidence-backed
+The Plugin release declares one current active Plan schema. This release uses
+schema v5. An active V3/V4 or otherwise outdated Plan is readable but reports
+`PLAN_SCHEMA_REFRESH_REQUIRED`; ordinary writes remain blocked until
+`migrate apply --expected-contract-revision <revision>` archives the legacy Plan
+and rebuilds a fresh current-schema contract. The refresh does not adapt legacy
+task status, evidence notes, or runtime state. Completed inactive legacy Plans
+remain readable historical records. Goal or contract changes use
+`plan contract revise`; evidence-backed
 method changes that preserve the goal use `plan adapt`. Unknowns are managed
 through `plan unknown add`, `plan unknown classify`, and
 `plan unknown resolve`. `plan status` reports independent contract, intake,
@@ -603,8 +603,15 @@ to any exact `AGENTS.md` routing diff digest. It archives exact source bytes,
 writes non-authoritative pointers with path-correct links, and activates the
 new index last. Recovery rechecks staged hashes and the Git baseline.
 
-When one user decision must both reconcile schema-v3 authority and immediately
-upgrade that exact result to schema v4, use the composed controller entry:
+The historical schema-v3-to-v4 upgrade and composed reconcile-upgrade entries
+remain only for recovering or auditing journals created by older releases. New
+work must not route active legacy Plans through state-preserving upgrade.
+When the active Plan is older than the Plugin-declared current schema, treat it
+as read-only input, archive its exact bytes, and rebuild the current schema with
+`migrate apply --expected-contract-revision <revision>`.
+
+For historical recovery only, the composed schema-v3 reconciliation plus
+schema-v4 upgrade entry remains available:
 
 ```sh
 <receipt-bound-workctl> plan reconcile-upgrade apply \

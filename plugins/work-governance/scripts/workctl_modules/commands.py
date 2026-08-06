@@ -139,7 +139,11 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
             "migrate rollback-info",
             "doctor",
         ],
-        "note": "Migration is explicit, backed up, and recovery-bound.",
+        "note": (
+            "Outdated active Plans are read-only inputs: migrate apply archives the "
+            "legacy Plan, rebuilds the current schema contract, and starts fresh "
+            "runtime state without adapting legacy task status."
+        ),
     },
     "doctor": {
         "commands": ["doctor", "doctor --clean-stale-transactions"],

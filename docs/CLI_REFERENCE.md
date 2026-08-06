@@ -67,7 +67,7 @@ Use goal init to admit the minimal model-facing schema-v5 contract; runtime task
 - `migrate rollback-info`
 - `doctor`
 
-Migration is explicit, backed up, and recovery-bound.
+Outdated active Plans are read-only inputs: migrate apply archives the legacy Plan, rebuilds the current schema contract, and starts fresh runtime state without adapting legacy task status.
 
 ### `plan`
 
@@ -595,8 +595,13 @@ usage: workctl migrate apply [-h] [--confirmation CONFIRMATION]
 options:
   -h, --help            show this help message and exit
   --confirmation CONFIRMATION
+                        Deprecated compatibility argument; current-schema
+                        refresh does not require it.
   --expected-contract-revision EXPECTED_CONTRACT_REVISION
-  --dry-run
+                        Required for durable refresh; guards the archived
+                        legacy source revision.
+  --dry-run             Preview the archive and rebuild boundary without
+                        writing project state.
 ```
 
 ### `migrate inspect`
@@ -876,6 +881,9 @@ options:
 ```text
 usage: workctl plan contract upgrade apply [-h] --manifest MANIFEST
 
+Historical schema-v3-to-v4 upgrade transaction. New work must archive and
+rebuild through `migrate apply` instead.
+
 options:
   -h, --help           show this help message and exit
   --manifest MANIFEST
@@ -887,6 +895,8 @@ options:
 usage: workctl plan contract upgrade recover [-h]
                                              [--transaction-id TRANSACTION_ID]
 
+Recover only an already staged historical schema-v3-to-v4 upgrade journal.
+
 options:
   -h, --help            show this help message and exit
   --transaction-id TRANSACTION_ID
@@ -896,6 +906,9 @@ options:
 
 ```text
 usage: workctl plan contract upgrade status [-h]
+
+Historical schema-v3-to-v4 upgrade status. Current active Plans older than the
+plugin-declared schema use `migrate inspect`.
 
 options:
   -h, --help  show this help message and exit
@@ -1099,6 +1112,9 @@ options:
 ```text
 usage: workctl plan reconcile-upgrade apply [-h] --manifest MANIFEST
 
+Historical composed schema-v3/v4 transaction. Current active legacy Plans are
+archived and rebuilt through `migrate apply`.
+
 options:
   -h, --help           show this help message and exit
   --manifest MANIFEST
@@ -1108,6 +1124,8 @@ options:
 
 ```text
 usage: workctl plan reconcile-upgrade recover [-h] [--workflow-id WORKFLOW_ID]
+
+Recover only an already staged historical reconcile-upgrade workflow.
 
 options:
   -h, --help            show this help message and exit

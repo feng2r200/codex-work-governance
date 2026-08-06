@@ -12,6 +12,9 @@
     "planning",
     "validation"
   ],
+  "plan": {
+    "current_schema_version": 5
+  },
   "skills": "./skills/",
   "interface": {
     "displayName": "Work Governance",
