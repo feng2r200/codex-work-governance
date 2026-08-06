@@ -79,6 +79,12 @@ try:
         non_empty_string as module_non_empty_string,
     )
     from workctl_modules.workflow_contract import (
+        normalize_goal_confirmations as module_normalize_goal_confirmations,
+    )
+    from workctl_modules.workflow_contract import (
+        normalize_goal_tasks as module_normalize_goal_tasks,
+    )
+    from workctl_modules.workflow_contract import (
         parse_workflow_mapping as module_parse_workflow_mapping,
     )
     from workctl_modules.workflow_contract import (
@@ -170,6 +176,8 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     module_open_worktree_ledger = None  # type: ignore[assignment]
     module_worktree_ledger_path = None  # type: ignore[assignment]
     module_non_empty_string = None  # type: ignore[assignment]
+    module_normalize_goal_confirmations = None  # type: ignore[assignment]
+    module_normalize_goal_tasks = None  # type: ignore[assignment]
     module_parse_workflow_mapping = None  # type: ignore[assignment]
     module_read_workflow_input_bytes = None  # type: ignore[assignment]
     module_workflow_string_list = None  # type: ignore[assignment]
@@ -11709,6 +11717,17 @@ def next_available_plan_id(root: Path) -> str:
 
 def normalize_goal_tasks(raw_tasks: object) -> list[dict[str, Any]]:
     """Normalize a minimal task list into v5 contract task mappings."""
+    if module_normalize_goal_tasks is not None:
+        try:
+            return cast(
+                list[dict[str, Any]],
+                module_normalize_goal_tasks(
+                    raw_tasks,
+                    task_id_pattern=ENTRY_ID_PATTERNS["tasks"],
+                ),
+            )
+        except ModuleWorkflowContractError as exc:
+            raise WorkctlError(str(exc)) from exc
     if not isinstance(raw_tasks, list) or not raw_tasks:
         raise WorkctlError("GOAL_TASKS_REQUIRED")
     tasks: list[dict[str, Any]] = []
@@ -11762,6 +11781,14 @@ def normalize_goal_tasks(raw_tasks: object) -> list[dict[str, Any]]:
 
 def normalize_goal_confirmations(raw_confirmations: object) -> dict[str, list[dict[str, Any]]]:
     """Normalize the optional minimal confirmation mapping."""
+    if module_normalize_goal_confirmations is not None:
+        try:
+            return cast(
+                dict[str, list[dict[str, Any]]],
+                module_normalize_goal_confirmations(raw_confirmations),
+            )
+        except ModuleWorkflowContractError as exc:
+            raise WorkctlError(str(exc)) from exc
     if raw_confirmations is None:
         return {"required": [], "accepted": []}
     if not isinstance(raw_confirmations, dict):
