@@ -62,6 +62,12 @@ try:
         legacy_plan_summary,
         migration_projection,
     )
+    from workctl_modules.migration import (
+        archive_path_for_source as module_archive_path_for_source,
+    )
+    from workctl_modules.migration import (
+        pointer_text as module_pointer_text,
+    )
     from workctl_modules.model import TaskProjection
     from workctl_modules.plan_schema import CURRENT_PLAN_SCHEMA_VERSION
     from workctl_modules.risk import (
@@ -146,6 +152,8 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     MODULE_READY_TASK_TARGETS = None  # type: ignore[assignment]
     build_v5_contract = None  # type: ignore[assignment]
     build_v5_state = None  # type: ignore[assignment]
+    module_archive_path_for_source = None  # type: ignore[assignment]
+    module_pointer_text = None  # type: ignore[assignment]
     module_find_plan_history_target = None  # type: ignore[assignment]
     module_tolerant_plan_history_summary = None  # type: ignore[assignment]
     legacy_plan_summary = None  # type: ignore[assignment]
@@ -19181,11 +19189,17 @@ def accepted_confirmation(
 
 def archive_path_for_source(migration_id: str, source_path: str) -> str:
     """Return the deterministic archive location for a migration source."""
-    canonical_prefix = plan_relative_path() + "/"
-    if source_path.startswith(canonical_prefix):
-        suffix = source_path.removeprefix(canonical_prefix)
-        return plan_relative_path("archive", migration_id, "unmerged", suffix)
-    return plan_relative_path("archive", migration_id, "legacy", source_path)
+    if module_archive_path_for_source is None:
+        raise WorkctlError("MIGRATION_MODULE_UNAVAILABLE: archive_path_for_source")
+    try:
+        return module_archive_path_for_source(
+            migration_id,
+            source_path,
+            governance_dir_name=GOVERNANCE_DIR_NAME,
+            plan_dir_name=PLAN_DIR_NAME,
+        )
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def pointer_text(
@@ -19196,17 +19210,18 @@ def pointer_text(
     archive_path: str,
 ) -> str:
     """Build the non-authoritative pointer that replaces a migrated source."""
-    source_parent = Path(source_path).parent
-    canonical_href = os.path.relpath(canonical_path, start=source_parent).replace(os.sep, "/")
-    archive_href = os.path.relpath(archive_path, start=source_parent).replace(os.sep, "/")
-    return (
-        "# Non-authoritative migration pointer\n\n"
-        "This path no longer controls current or future execution.\n\n"
-        f"- Canonical Plan: [{canonical_path}]({canonical_href})\n"
-        f"- Migration: `{migration_id}`\n"
-        f"- Archived source: [{archive_path}]({archive_href})\n"
-        f"- Marker: `{POINTER_MARKER}`\n"
-    )
+    if module_pointer_text is None:
+        raise WorkctlError("MIGRATION_MODULE_UNAVAILABLE: pointer_text")
+    try:
+        return module_pointer_text(
+            source_path=source_path,
+            canonical_path=canonical_path,
+            migration_id=migration_id,
+            archive_path=archive_path,
+            pointer_marker=POINTER_MARKER,
+        )
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def current_git_baseline(root: Path) -> str | None:

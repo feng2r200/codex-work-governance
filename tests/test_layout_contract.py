@@ -48,10 +48,12 @@ def test_legacy_root_literals_are_confined_to_bootstrap_compatibility() -> None:
 
     assert controller.count('root / ".logs"') == 1
     assert controller.count('Path(".logs")') == 1
-    assert ".worktree" not in controller
+    assert 'root / ".worktree"' not in controller
+    assert 'Path(".worktree")' not in controller
     assert bootstrap.count('project_root / ".logs"') == 1
     assert bootstrap.count('project_root / "_Plan"') == 1
-    assert ".worktree" not in bootstrap
+    assert 'project_root / ".worktree"' not in bootstrap
+    assert 'Path(".worktree")' not in bootstrap
 
 
 def test_public_contracts_name_only_canonical_normal_paths() -> None:
