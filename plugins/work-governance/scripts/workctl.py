@@ -39,6 +39,7 @@ try:
     from workctl_modules import WORKFLOW_HELP_ALIASES as MODULE_WORKFLOW_HELP_ALIASES
     from workctl_modules import blocked_task_targets as MODULE_BLOCKED_TASK_TARGETS
     from workctl_modules import canonical_evidence_bytes as MODULE_CANONICAL_EVIDENCE_BYTES
+    from workctl_modules import confirmation as module_confirmation
     from workctl_modules import evidence as module_evidence
     from workctl_modules import next_suggestion as MODULE_NEXT_SUGGESTION
     from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
@@ -168,6 +169,7 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     module_action_reversibility = None  # type: ignore[assignment]
     module_risk_factors_for_action = None  # type: ignore[assignment]
     module_risk_inspection_payload = None  # type: ignore[assignment]
+    module_confirmation = None  # type: ignore[assignment]
     module_evidence = None  # type: ignore[assignment]
     redacted_copy = None  # type: ignore[assignment]
     module_append_worktree_event = None  # type: ignore[assignment]
@@ -19116,12 +19118,22 @@ def cmd_plan_complete(args: argparse.Namespace) -> None:
         print(f"PLAN_COMPLETED revision={doc.frontmatter['revision']}")
 
 
+def confirmation_module_call(name: str) -> Any:
+    """Return one extracted confirmation helper or fail with a stable code."""
+    if module_confirmation is None:
+        raise WorkctlError(f"CONFIRMATION_MODULE_UNAVAILABLE: {name}")
+    try:
+        return getattr(module_confirmation, name)
+    except AttributeError as exc:
+        raise WorkctlError(f"CONFIRMATION_MODULE_UNAVAILABLE: {name}") from exc
+
+
 def manifest_input_path(manifest_path: Path, raw_path: str) -> Path:
     """Resolve a read-only manifest input relative to the manifest directory."""
-    path = Path(raw_path)
-    if not path.is_absolute():
-        path = manifest_path.parent / path
-    return path.resolve()
+    try:
+        return confirmation_module_call("manifest_input_path")(manifest_path, raw_path)
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def confirmation_from_manifest(
@@ -19131,24 +19143,14 @@ def confirmation_from_manifest(
     required: bool,
 ) -> tuple[str, str, str, str] | None:
     """Read one accepted confirmation reference from a reconciliation manifest."""
-    raw = confirmations_value.get(key)
-    if raw is None and not required:
-        return None
-    if not isinstance(raw, dict):
-        raise WorkctlError(f"MANIFEST_CONFIRMATION_REQUIRED: {key}")
-    confirmation_id = raw.get("id")
-    ref = raw.get("ref")
-    accepted_at = raw.get("accepted_at")
-    evidence_sha256 = raw.get("evidence_sha256")
-    if not isinstance(confirmation_id, str) or not confirmation_id.startswith("C-"):
-        raise WorkctlError(f"INVALID_MANIFEST_CONFIRMATION_ID: {key}")
-    if not isinstance(ref, str) or not ref:
-        raise WorkctlError(f"MANIFEST_CONFIRMATION_REF_REQUIRED: {key}")
-    if not isinstance(accepted_at, str) or not accepted_at:
-        raise WorkctlError(f"MANIFEST_CONFIRMATION_ACCEPTED_AT_REQUIRED: {key}")
-    if not isinstance(evidence_sha256, str) or SHA256_RE.fullmatch(evidence_sha256) is None:
-        raise WorkctlError(f"MANIFEST_CONFIRMATION_EVIDENCE_REQUIRED: {key}")
-    return confirmation_id, ref, accepted_at, evidence_sha256
+    try:
+        return confirmation_module_call("confirmation_from_manifest")(
+            confirmations_value,
+            key,
+            required=required,
+        )
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def accepted_confirmation(
@@ -19161,29 +19163,20 @@ def accepted_confirmation(
     intervention_kind: str = "plan_contract",
 ) -> dict[str, Any]:
     """Build a confirmed or dry-run-pending entry for the canonical Plan."""
-    intervention = {
-        "kind": intervention_kind,
-        "blocks": ["route"],
-        "basis_ref": f"project:confirmation-basis/{evidence_sha256}",
-        "basis_sha256": evidence_sha256,
-    }
-    if ref == "PENDING":
-        return {
-            "id": confirmation_id,
-            "description": description,
-            "status": "pending",
-            "evidence_sha256": evidence_sha256,
-            "intervention": intervention,
-        }
-    return {
-        "id": confirmation_id,
-        "description": description,
-        "status": "accepted",
-        "ref": ref,
-        "accepted_at": accepted_at,
-        "evidence_sha256": evidence_sha256,
-        "intervention": intervention,
-    }
+    try:
+        return cast(
+            dict[str, Any],
+            confirmation_module_call("accepted_confirmation")(
+                confirmation_id,
+                ref,
+                accepted_at,
+                evidence_sha256,
+                description,
+                intervention_kind=intervention_kind,
+            ),
+        )
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def archive_path_for_source(migration_id: str, source_path: str) -> str:
