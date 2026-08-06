@@ -72,6 +72,18 @@ try:
         risk_inspection_payload as module_risk_inspection_payload,
     )
     from workctl_modules.storage import canonical_event_bytes, redacted_copy
+    from workctl_modules.workflow_contract import (
+        WorkflowContractError as ModuleWorkflowContractError,
+    )
+    from workctl_modules.workflow_contract import (
+        non_empty_string as module_non_empty_string,
+    )
+    from workctl_modules.workflow_contract import (
+        parse_workflow_mapping as module_parse_workflow_mapping,
+    )
+    from workctl_modules.workflow_contract import (
+        workflow_string_list as module_workflow_string_list,
+    )
     from workctl_modules.workflow_input import (
         WorkflowInputError as ModuleWorkflowInputError,
     )
@@ -114,6 +126,9 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     class ModuleWorkflowInputError(ValueError):  # type: ignore[no-redef]
         """Fallback exception for legacy single-file runtime bundles."""
 
+    class ModuleWorkflowContractError(ValueError):  # type: ignore[no-redef]
+        """Fallback exception for legacy single-file runtime bundles."""
+
     MODULE_WORKFLOW_HELP = None  # type: ignore[assignment,misc]
     MODULE_WORKFLOW_HELP_ALIASES = None  # type: ignore[assignment,misc]
     MODULE_BLOCKED_TASK_TARGETS = None  # type: ignore[assignment]
@@ -154,7 +169,10 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     module_load_worktree_ledger = None  # type: ignore[assignment]
     module_open_worktree_ledger = None  # type: ignore[assignment]
     module_worktree_ledger_path = None  # type: ignore[assignment]
+    module_non_empty_string = None  # type: ignore[assignment]
+    module_parse_workflow_mapping = None  # type: ignore[assignment]
     module_read_workflow_input_bytes = None  # type: ignore[assignment]
+    module_workflow_string_list = None  # type: ignore[assignment]
 
 PLAN_ID_RE = re.compile(r"^PLAN-\d{8}-\d{3}$")
 MIGRATION_ID_RE = re.compile(r"^MIG-\d{8}-\d{3}$")
@@ -11619,6 +11637,14 @@ def read_workflow_input_bytes(
 
 def parse_workflow_mapping(content: bytes, *, error_prefix: str) -> dict[str, Any]:
     """Parse a bounded JSON/YAML workflow mapping."""
+    if module_parse_workflow_mapping is not None:
+        try:
+            return cast(
+                dict[str, Any],
+                module_parse_workflow_mapping(content, error_prefix=error_prefix),
+            )
+        except ModuleWorkflowContractError as exc:
+            raise WorkctlError(str(exc)) from exc
     try:
         payload: object = json.loads(content)
     except json.JSONDecodeError:
@@ -11633,6 +11659,11 @@ def parse_workflow_mapping(content: bytes, *, error_prefix: str) -> dict[str, An
 
 def non_empty_string(value: object, *, field: str) -> str:
     """Return a non-empty string field or raise a workflow contract error."""
+    if module_non_empty_string is not None:
+        try:
+            return module_non_empty_string(value, field=field)
+        except ModuleWorkflowContractError as exc:
+            raise WorkctlError(str(exc)) from exc
     if not isinstance(value, str) or not value.strip():
         raise WorkctlError(f"{field}_REQUIRED")
     return value.strip()
@@ -11640,6 +11671,11 @@ def non_empty_string(value: object, *, field: str) -> str:
 
 def workflow_string_list(value: object, *, field: str) -> list[str]:
     """Validate one non-empty list of strings for high-level contracts."""
+    if module_workflow_string_list is not None:
+        try:
+            return module_workflow_string_list(value, field=field)
+        except ModuleWorkflowContractError as exc:
+            raise WorkctlError(str(exc)) from exc
     if (
         not isinstance(value, list)
         or not value
