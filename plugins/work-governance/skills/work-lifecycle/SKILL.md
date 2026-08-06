@@ -24,12 +24,14 @@ component, and the recovery condition.
 - Keep root `AGENTS.md` thin: route and hard constraints live there; reusable
   method lives in this plugin.
 - Use the receipt-bound runtime `workctl.py` for deterministic Plan mutations.
-- Require the current SessionStart context and its emitted session-scoped
-  bootstrap receipt to report `READY` for the exact
-  Plugin build, `session_id`, `runtime_bundle_ref`, `controller_ref`,
-  `controller_sha256`, and `receipt_sha256` before Plan-controlled work. If the hook is
-  untrusted, disabled, skipped by managed policy, absent, or stale, report
-  `ENVIRONMENT_BLOCKED` and the recovery condition.
+- Treat the current SessionStart context and its emitted session-scoped
+  bootstrap receipt as lightweight runtime identity: it proves the exact Plugin
+  build, `session_id`, `runtime_bundle_ref`, `controller_ref`,
+  `controller_sha256`, and `receipt_sha256` for receipt-bound controller
+  mutations, but it never creates, revises, or authorizes a Plan. If this
+  identity is untrusted, disabled, skipped by managed policy, absent, or stale
+  for a required mutation, report `ENVIRONMENT_BLOCKED` and the recovery
+  condition.
 - Treat the emitted session-scoped bootstrap capability as a separate,
   SessionStart-only authority for exact layout migration or recovery commands.
   It never authorizes Plan-controlled work or satisfies the READY requirement.
@@ -44,9 +46,12 @@ component, and the recovery condition.
 - Separate local slice completion, delivery completion, and route-level
   activation. Missing authority for a required future action creates a
   confirmation gate; it does not make that action disappear from the route.
-- Before Plan-controlled work, inspect Plan authority. Continue real work only
-  in `GOVERNED_ACTIVE`; use only inspect, validation, reconciliation, or
-  recovery commands in every other authority state.
+- Before Plan-controlled work, inspect Plan authority. Continue ordinary real
+  work only in current-schema `GOVERNED_ACTIVE`; when authority reports
+  `PLAN_SCHEMA_REFRESH_REQUIRED`, use only read-only inspection and
+  `migrate inspect|apply|recover` to archive the legacy Plan and rebuild the
+  current contract. Use only inspect, validation, reconciliation, or recovery
+  commands in every other authority state.
 - In Git projects, version `.work-governance/_Plan/`, `version.yaml`, and
   `.gitignore` by default. The exact `.work-governance/.gitignore` contract
   excludes only local runtime content.
@@ -206,12 +211,15 @@ receipt digest for every command in this session; pass `--receipt-sha256`
 before the command domain. A replacement SessionStart in the same session
 supersedes the digest when its trusted runtime identity changes; a different
 session has its own receipt and cannot supersede this one. All controller commands require `LAYOUT_READY`
-except for layout inspection/recovery. A blocked SessionStart may inject an exact
+except for layout inspection/recovery. SessionStart does not decide Plan
+authority; it only supplies the receipt-bound controller identity. A blocked
+SessionStart may inject an exact
 capability-bound `layout_command_prefix`; use it only for the reported layout
 recovery, never for Plan writes. The Plugin release declares one current active
 Plan schema. In this release that schema is v5. Any active V3/V4 or otherwise
-outdated Plan reports `PLAN_SCHEMA_REFRESH_REQUIRED`; treat it as read-only
-legacy input, then use `migrate inspect`, `migrate apply --dry-run`, and
+outdated Plan reports `PLAN_SCHEMA_REFRESH_REQUIRED` in `plan authority check`
+and `plan status`; treat it as read-only legacy input, then use
+`migrate inspect`, `migrate apply --dry-run`, and
 receipt-bound `migrate apply --expected-contract-revision <revision>` to archive
 the legacy Plan and rebuild a fresh v5 contract. Do not adapt legacy task state
 or use `plan contract upgrade`/`plan reconcile-upgrade` for new work. Incomplete

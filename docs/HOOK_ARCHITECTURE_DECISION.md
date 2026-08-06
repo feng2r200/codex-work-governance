@@ -22,7 +22,9 @@ runtime task transitions behind a per-turn governance pipeline.
 
 These are bootstrap and runtime-identity responsibilities. They do not require a
 per-user-turn event, but the current controller has no other trusted source for the
-official session identity or exact installed build.
+official session identity or exact installed build. The Hook does not decide Plan
+authority, Plan schema compatibility, task readiness, or confirmation necessity;
+those remain controller/model responsibilities.
 
 ### `UserPromptSubmit`
 
@@ -60,7 +62,8 @@ Two compatibility/security constraints prevent immediate deletion:
 
 1. Keep a minimal `SessionStart` Hook for session/build identity, runtime-bundle
    discovery, layout readiness, and recovery capability. It must not create or revise a
-   Plan, record ordinary intake, or authorize high-impact actions.
+   Plan, record ordinary intake, authorize high-impact actions, or adapt old Plan
+   state.
 2. Remove `UserPromptSubmit` receipts and intake records from the authorization path for
    ordinary schema-v5 exploration, continuation, scheduling, evidence recording, and
    runtime-state transitions. During compatibility, the Hook may still issue an ignored
@@ -93,6 +96,9 @@ Two compatibility/security constraints prevent immediate deletion:
 - A missing `UserPromptSubmit` Hook does not block ordinary local work.
 - Mutable v4 compatibility either retains its trusted turn receipt or fails with an
   explicit migration/retirement condition; it is never silently weakened.
+- Old active Plan schemas are surfaced by the controller as
+  `PLAN_SCHEMA_REFRESH_REQUIRED`; Hook output must not present them as runnable
+  active authority or decide state adaptation.
 - A missing bootstrap trust source still blocks Plan mutation with a precise recovery
   condition.
 - Fresh-session and compaction tests prove the exact runtime bundle remains stable and

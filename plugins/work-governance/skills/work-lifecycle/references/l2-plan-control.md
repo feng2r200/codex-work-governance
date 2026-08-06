@@ -42,7 +42,10 @@ journals. Its states are:
   metadata.
 - `AUTHORITY_REVIEW_REQUIRED`: a likely second authority needs human review.
 - `RECONCILIATION_REQUIRED`: confirmed authorities compete.
-- `GOVERNED_ACTIVE`: exactly one canonical authority and valid lineage exist.
+- `GOVERNED_ACTIVE`: exactly one current-schema canonical authority and valid
+  lineage exist.
+- `PLAN_SCHEMA_REFRESH_REQUIRED`: the indexed active Plan is readable legacy
+  input, but its schema is older than the Plugin-declared current active schema.
 - `MIGRATION_RECOVERY_REQUIRED`: a journal is incomplete or deterministic
   migration evidence is invalid.
 
@@ -52,9 +55,10 @@ the exact user message bytes or an immutable evidence manifest. Existing typed
 references remain valid; this is a provenance-strength preference, not a
 retroactive schema migration.
 
-Only `GOVERNED_ACTIVE` permits ordinary Plan writes or real task progress. All
-other states are fail-closed and permit only inspection, schema/full
-validation, reconciliation, and recovery.
+Only current-schema `GOVERNED_ACTIVE` permits ordinary Plan writes or real task
+progress. `PLAN_SCHEMA_REFRESH_REQUIRED` permits read-only inspection and the
+explicit current-schema refresh path only; all other states are fail-closed and
+permit only inspection, schema/full validation, reconciliation, and recovery.
 
 Plan files:
 
@@ -115,7 +119,8 @@ Schema-v4 Plans carry:
 Schema version is immutable through ordinary Plan revision. The Plugin release
 declares one current active Plan schema; this release uses schema-v5. An active
 V3/V4 or otherwise outdated Plan is readable but ordinary writes fail closed
-with `PLAN_SCHEMA_REFRESH_REQUIRED`; use `migrate inspect`,
+with `PLAN_SCHEMA_REFRESH_REQUIRED` in both authority and status views; use
+`migrate inspect`,
 `migrate apply --dry-run`, then receipt-bound
 `migrate apply --expected-contract-revision <revision>` to archive the legacy
 Plan and rebuild a fresh v5 contract. Do not adapt legacy task state or use
@@ -132,7 +137,7 @@ disposition.
 
 Controller gates:
 
-- authority state must be `GOVERNED_ACTIVE` for ordinary writes;
+- authority state must be current-schema `GOVERNED_ACTIVE` for ordinary writes;
 - expected revision must match before writes;
 - active Plan scope must not conflict with the requested Plan;
 - task dependencies must be `verified` before dependent task start;
