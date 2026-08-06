@@ -54,8 +54,35 @@ try:
     from workctl_modules.model import TaskProjection
     from workctl_modules.plan_schema import CURRENT_PLAN_SCHEMA_VERSION
     from workctl_modules.storage import canonical_event_bytes, redacted_copy
+    from workctl_modules.worktree import (
+        WorktreeLedgerError as ModuleWorktreeLedgerError,
+    )
+    from workctl_modules.worktree import (
+        append_worktree_event as module_append_worktree_event,
+    )
+    from workctl_modules.worktree import (
+        build_worktree_event as module_build_worktree_event,
+    )
+    from workctl_modules.worktree import (
+        close_worktree_ledger as module_close_worktree_ledger,
+    )
+    from workctl_modules.worktree import (
+        encode_worktree_ledger as module_encode_worktree_ledger,
+    )
+    from workctl_modules.worktree import (
+        load_worktree_ledger as module_load_worktree_ledger,
+    )
+    from workctl_modules.worktree import (
+        open_worktree_ledger as module_open_worktree_ledger,
+    )
+    from workctl_modules.worktree import (
+        worktree_ledger_path as module_worktree_ledger_path,
+    )
 except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     import yaml  # type: ignore[no-redef]
+
+    class ModuleWorktreeLedgerError(ValueError):  # type: ignore[no-redef]
+        """Fallback exception for legacy single-file runtime bundles."""
 
     MODULE_WORKFLOW_HELP = None  # type: ignore[assignment,misc]
     MODULE_WORKFLOW_HELP_ALIASES = None  # type: ignore[assignment,misc]
@@ -85,6 +112,13 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     )
     canonical_event_bytes = None  # type: ignore[assignment]
     redacted_copy = None  # type: ignore[assignment]
+    module_append_worktree_event = None  # type: ignore[assignment]
+    module_build_worktree_event = None  # type: ignore[assignment]
+    module_close_worktree_ledger = None  # type: ignore[assignment]
+    module_encode_worktree_ledger = None  # type: ignore[assignment]
+    module_load_worktree_ledger = None  # type: ignore[assignment]
+    module_open_worktree_ledger = None  # type: ignore[assignment]
+    module_worktree_ledger_path = None  # type: ignore[assignment]
 
 PLAN_ID_RE = re.compile(r"^PLAN-\d{8}-\d{3}$")
 MIGRATION_ID_RE = re.compile(r"^MIG-\d{8}-\d{3}$")
@@ -12428,59 +12462,54 @@ def cmd_risk_inspect(args: argparse.Namespace) -> None:
 
 def worktree_ledger_path(root: Path, worktree_id: str) -> Path:
     """Return the non-authoritative worktree ledger path for one sub-execution."""
-    if WORKTREE_LEDGER_ID_RE.fullmatch(worktree_id) is None:
-        raise WorkctlError("WORKTREE_ID_INVALID")
-    path = runtime_dir(root) / "worktrees" / f"{worktree_id}.json"
+    if module_worktree_ledger_path is None:
+        raise WorkctlError("WORKTREE_MODULE_UNAVAILABLE")
+    try:
+        path = module_worktree_ledger_path(
+            runtime_dir(root),
+            worktree_id,
+            WORKTREE_LEDGER_ID_RE,
+        )
+    except ModuleWorktreeLedgerError as exc:
+        raise WorkctlError(str(exc)) from exc
     reject_symlink_components(root, path)
     return path
 
 
 def load_worktree_ledger(root: Path, worktree_id: str) -> dict[str, Any]:
     """Load one non-authoritative worktree ledger."""
+    if module_load_worktree_ledger is None:
+        raise WorkctlError("WORKTREE_MODULE_UNAVAILABLE")
     path = worktree_ledger_path(root, worktree_id)
-    if path.is_symlink() or not path.is_file():
-        raise WorkctlError("WORKTREE_LEDGER_MISSING")
     try:
-        payload: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise WorkctlError("WORKTREE_LEDGER_INVALID") from exc
-    if (
-        not isinstance(payload, dict)
-        or payload.get("schema_version") != 1
-        or payload.get("kind") != "work-governance-worktree-ledger"
-        or payload.get("authority") != "NON_AUTHORITY"
-        or payload.get("worktree_id") != worktree_id
-        or not isinstance(payload.get("events"), list)
-    ):
-        raise WorkctlError("WORKTREE_LEDGER_INVALID")
-    return cast(dict[str, Any], payload)
+        return module_load_worktree_ledger(path, worktree_id)
+    except ModuleWorktreeLedgerError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def write_worktree_ledger(root: Path, worktree_id: str, payload: Mapping[str, Any]) -> None:
     """Persist one non-authoritative worktree ledger."""
-    write_atomic(
-        worktree_ledger_path(root, worktree_id),
-        json.dumps(payload, indent=2, sort_keys=True) + "\n",
-    )
+    if module_encode_worktree_ledger is None:
+        raise WorkctlError("WORKTREE_MODULE_UNAVAILABLE")
+    write_atomic(worktree_ledger_path(root, worktree_id), module_encode_worktree_ledger(payload))
 
 
-def worktree_event(args: argparse.Namespace, sequence: int) -> dict[str, Any]:
+def worktree_event(args: argparse.Namespace, *, event_name: str | None = None) -> dict[str, Any]:
     """Build one bounded worktree ledger event."""
-    event: dict[str, Any] = {
-        "sequence": sequence,
-        "event": args.event,
-        "summary": args.summary,
-        "recorded_at": utc_now(),
-    }
-    if args.evidence_ref is not None:
-        if not valid_reference(args.evidence_ref):
-            raise WorkctlError("WORKTREE_EVIDENCE_REF_INVALID")
-        event["evidence_ref"] = args.evidence_ref
-    if args.evidence_sha256 is not None:
-        if SHA256_RE.fullmatch(args.evidence_sha256) is None:
-            raise WorkctlError("WORKTREE_EVIDENCE_SHA256_INVALID")
-        event["evidence_sha256"] = args.evidence_sha256
-    return event
+    if module_build_worktree_event is None:
+        raise WorkctlError("WORKTREE_MODULE_UNAVAILABLE")
+    try:
+        return module_build_worktree_event(
+            event=str(event_name if event_name is not None else args.event),
+            summary=str(args.summary),
+            recorded_at=utc_now(),
+            evidence_ref=args.evidence_ref,
+            evidence_sha256=args.evidence_sha256,
+            valid_reference=valid_reference,
+            sha256_pattern=SHA256_RE,
+        )
+    except ModuleWorktreeLedgerError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def cmd_worktree_begin(args: argparse.Namespace) -> None:
@@ -12488,30 +12517,19 @@ def cmd_worktree_begin(args: argparse.Namespace) -> None:
     root = project_root()
     ledger_id = str(vars(args)["worktree_id"])
     with lock(root):
+        if module_open_worktree_ledger is None:
+            raise WorkctlError("WORKTREE_MODULE_UNAVAILABLE")
         path = worktree_ledger_path(root, ledger_id)
         if path.exists() or path.is_symlink():
             raise WorkctlError("WORKTREE_LEDGER_ALREADY_EXISTS")
         now = utc_now()
-        payload = {
-            "schema_version": 1,
-            "kind": "work-governance-worktree-ledger",
-            "authority": "NON_AUTHORITY",
-            "worktree_id": ledger_id,
-            "status": "open",
-            "path": args.path,
-            "branch": args.branch,
-            "summary": args.summary,
-            "opened_at": now,
-            "updated_at": now,
-            "events": [
-                {
-                    "sequence": 1,
-                    "event": "begin",
-                    "summary": args.summary,
-                    "recorded_at": now,
-                }
-            ],
-        }
+        payload = module_open_worktree_ledger(
+            worktree_id=ledger_id,
+            path=str(args.path),
+            branch=str(args.branch),
+            summary=str(args.summary),
+            opened_at=now,
+        )
         write_worktree_ledger(root, ledger_id, payload)
         print(
             json.dumps(
@@ -12532,11 +12550,13 @@ def cmd_worktree_record(args: argparse.Namespace) -> None:
     root = project_root()
     ledger_id = str(vars(args)["worktree_id"])
     with lock(root):
+        if module_append_worktree_event is None:
+            raise WorkctlError("WORKTREE_MODULE_UNAVAILABLE")
         payload = load_worktree_ledger(root, ledger_id)
-        if payload.get("status") == "closed":
-            raise WorkctlError("WORKTREE_LEDGER_CLOSED")
-        events = cast(list[Any], payload["events"])
-        events.append(worktree_event(args, len(events) + 1))
+        try:
+            event_count = module_append_worktree_event(payload, worktree_event(args))
+        except ModuleWorktreeLedgerError as exc:
+            raise WorkctlError(str(exc)) from exc
         payload["updated_at"] = utc_now()
         write_worktree_ledger(root, ledger_id, payload)
         print(
@@ -12545,7 +12565,7 @@ def cmd_worktree_record(args: argparse.Namespace) -> None:
                     "status": "WORKTREE_LEDGER_RECORDED",
                     "authority": "NON_AUTHORITY",
                     "worktree_id": ledger_id,
-                    "event_count": len(events),
+                    "event_count": event_count,
                 },
                 indent=2,
                 sort_keys=True,
@@ -12558,21 +12578,19 @@ def cmd_worktree_close(args: argparse.Namespace) -> None:
     root = project_root()
     ledger_id = str(vars(args)["worktree_id"])
     with lock(root):
+        if module_close_worktree_ledger is None:
+            raise WorkctlError("WORKTREE_MODULE_UNAVAILABLE")
         payload = load_worktree_ledger(root, ledger_id)
-        if payload.get("status") == "closed":
-            raise WorkctlError("WORKTREE_LEDGER_ALREADY_CLOSED")
-        events = cast(list[Any], payload["events"])
-        args.event = "close"
-        events.append(worktree_event(args, len(events) + 1))
         now = utc_now()
-        payload["status"] = "closed"
-        payload["updated_at"] = now
-        payload["closed_at"] = now
-        payload["close_summary"] = {
-            "summary": args.summary,
-            "authority": "NON_AUTHORITY",
-            "event_count": len(events),
-        }
+        try:
+            close_summary = module_close_worktree_ledger(
+                payload,
+                worktree_event(args, event_name="close"),
+                summary=str(args.summary),
+                closed_at=now,
+            )
+        except ModuleWorktreeLedgerError as exc:
+            raise WorkctlError(str(exc)) from exc
         write_worktree_ledger(root, ledger_id, payload)
         print(
             json.dumps(
@@ -12580,7 +12598,7 @@ def cmd_worktree_close(args: argparse.Namespace) -> None:
                     "status": "WORKTREE_LEDGER_CLOSED",
                     "authority": "NON_AUTHORITY",
                     "worktree_id": ledger_id,
-                    "close_summary": payload["close_summary"],
+                    "close_summary": close_summary,
                 },
                 indent=2,
                 sort_keys=True,
