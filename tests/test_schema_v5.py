@@ -273,11 +273,96 @@ def test_worktree_ledger_is_non_authority(tmp_path: Path) -> None:
     authority = json.loads(
         run_workctl(tmp_path, "plan", "authority", "check", env=STRICT_CONTROLLER_ENV).stdout
     )
+    inspect = json.loads(
+        run_without_receipt(
+            tmp_path,
+            "worktree",
+            "merge",
+            "inspect",
+            "--worktree-id",
+            "WT-pytest",
+        ).stdout
+    )
+    ledger = json.loads(
+        (
+            tmp_path / ".work-governance" / "runtime" / "worktrees" / "WT-pytest.json"
+        ).read_text(encoding="utf-8")
+    )
 
     assert opened["authority"] == "NON_AUTHORITY"
+    assert opened["fork_base"]["plan_id"] == "PLAN-20260806-105"
+    assert opened["fork_base"]["plan_sha256"] == sha256_path(
+        tmp_path / ".work-governance" / "_Plan" / "PLAN-20260806-105.md"
+    )
     assert recorded["authority"] == "NON_AUTHORITY"
     assert closed["close_summary"]["authority"] == "NON_AUTHORITY"
+    assert closed["close_summary"]["fork_base"] == opened["fork_base"]
+    assert closed["close_summary"]["merge_basis_sha256"] == ledger["close_summary"][
+        "merge_basis_sha256"
+    ]
+    assert inspect["authority"] == "NON_AUTHORITY"
+    assert inspect["controller_decision"] == "inspect_only"
+    assert inspect["parent_mutated"] is False
+    assert inspect["merge_state"] == "READY_FOR_PARENT_REVIEW"
+    assert inspect["drift_detected"] is False
+    assert inspect["close_summary"]["fork_base"] == opened["fork_base"]
     assert authority["authority_state"] == "GOVERNED_ACTIVE"
+
+
+def test_worktree_merge_inspect_reports_parent_drift(tmp_path: Path) -> None:
+    """A worktree fork requires parent review when the active Plan changed since begin."""
+    init_minimal_v5_goal(tmp_path, "PLAN-20260806-106")
+    run_workctl(
+        tmp_path,
+        "worktree",
+        "begin",
+        "--worktree-id",
+        "WT-drift",
+        "--path",
+        ".work-governance/worktrees/drift",
+        "--branch",
+        "feature/drift",
+        "--summary",
+        "Fork before parent drift.",
+        env=STRICT_CONTROLLER_ENV,
+    )
+    run_workctl(
+        tmp_path,
+        "worktree",
+        "close",
+        "--worktree-id",
+        "WT-drift",
+        "--summary",
+        "Closed isolated work.",
+        env=STRICT_CONTROLLER_ENV,
+    )
+    plan_path = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260806-106.md"
+    frontmatter, body = read_plan_by_id(tmp_path, "PLAN-20260806-106")
+    frontmatter["title"] = "Minimal v5 goal after parent drift"
+    plan_path.write_text(
+        f"---\n{yaml.safe_dump(frontmatter, sort_keys=False)}---\n{body}",
+        encoding="utf-8",
+    )
+
+    result = run_without_receipt(
+        tmp_path,
+        "worktree",
+        "merge",
+        "inspect",
+        "--worktree-id",
+        "WT-drift",
+    )
+    payload = json.loads(result.stdout)
+
+    assert result.returncode == 0
+    assert payload["authority"] == "NON_AUTHORITY"
+    assert payload["controller_decision"] == "inspect_only"
+    assert payload["parent_mutated"] is False
+    assert payload["merge_state"] == "MERGE_REVIEW_REQUIRED"
+    assert payload["drift_detected"] is True
+    assert "parent_plan_sha_changed" in payload["drift_reasons"]
+    assert payload["fork_base"]["plan_id"] == "PLAN-20260806-106"
+    assert payload["current_parent"]["plan_sha256"] == sha256_path(plan_path)
 
 
 def add_pending_v5_confirmation(tmp_path: Path, *, basis_sha256: str) -> None:

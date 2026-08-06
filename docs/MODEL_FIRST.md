@@ -33,8 +33,11 @@
 - 判断高影响动作前，可用 `risk inspect --action-kind KIND --target-ref REF`
   获取风险事实。controller 不替模型决定是否必须向用户确认。
 - 子 worktree 执行只记录
-  `worktree begin|record|close`。这些 ledger 永远是 `NON_AUTHORITY`，父 Plan
-  只吸收 close summary 和证据。
+  `worktree begin|record|close`。`begin` 会记录父 Plan `fork_base`；`close`
+  会输出带 fork 基线的 close summary。完成后先运行
+  `worktree merge inspect --worktree-id WT-ID`，让 controller 只读报告父 Plan
+  是否相对 fork 基线漂移；无漂移时再由模型显式把 close summary/证据吸收到父
+  Plan。ledger 永远是 `NON_AUTHORITY`，不能成为第二 Plan 权威。
 
 ## 确认判断
 

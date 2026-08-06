@@ -377,8 +377,13 @@ Allowed structural changes:
   and risk factors. The controller reports facts only; the model decides
   whether current authority is enough or a user confirmation is needed.
 - `worktree begin|record|close`: keep a runtime-only sub-execution ledger with
-  `authority: NON_AUTHORITY`. The parent Plan may cite the close summary as
-  evidence, but the ledger never becomes a second Plan authority.
+  `authority: NON_AUTHORITY`. `begin` captures the parent Plan `fork_base`, and
+  `close` emits a close summary that carries that basis.
+- `worktree merge inspect`: read the worktree ledger and current parent Plan,
+  then report whether the parent drifted since `fork_base`. It never mutates the
+  parent Plan and never upgrades the ledger into a second Plan authority. The
+  model decides how to absorb reviewed close summary/evidence into the parent
+  Plan.
 - `task start|block|verify|skip`: update task state.
 - `log append`: preserve local process detail without granting it completion
   authority.

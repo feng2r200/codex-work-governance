@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping
@@ -49,6 +50,13 @@ def encode_worktree_ledger(payload: Mapping[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
+def stable_payload_sha256(payload: Mapping[str, Any]) -> str:
+    """Return a deterministic digest for one bounded ledger payload."""
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def build_worktree_event(
     *,
     event: str,
@@ -83,6 +91,7 @@ def open_worktree_ledger(
     branch: str,
     summary: str,
     opened_at: str,
+    fork_base: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Create the initial non-authoritative ledger payload."""
     return {
@@ -96,6 +105,7 @@ def open_worktree_ledger(
         "summary": summary,
         "opened_at": opened_at,
         "updated_at": opened_at,
+        "fork_base": dict(fork_base),
         "events": [
             {
                 "sequence": 1,
@@ -138,7 +148,14 @@ def close_worktree_ledger(
     close_summary = {
         "summary": summary,
         "authority": "NON_AUTHORITY",
+        "worktree_id": ledger["worktree_id"],
+        "path": ledger.get("path"),
+        "branch": ledger.get("branch"),
+        "fork_base": ledger.get("fork_base"),
         "event_count": event_count,
+        "closed_at": closed_at,
+        "next_parent_action": "Run worktree merge inspect before parent Plan absorption.",
     }
+    close_summary["merge_basis_sha256"] = stable_payload_sha256(close_summary)
     ledger["close_summary"] = close_summary
     return close_summary
