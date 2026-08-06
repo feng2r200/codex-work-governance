@@ -67,7 +67,7 @@ Use goal init to admit the minimal model-facing schema-v5 contract; runtime task
 - `migrate rollback-info`
 - `doctor`
 
-Outdated active Plans are read-only inputs: migrate apply archives the legacy Plan, rebuilds the current schema contract, and starts fresh runtime state without adapting legacy task status.
+Outdated active Plans are read-only inputs: migrate apply archives the legacy Plan, rebuilds the current schema contract, and starts fresh runtime state without adapting legacy task status. legacy_summary and legacy_refresh are NON_AUTHORITY guidance for selecting the next task.
 
 ### `plan`
 
@@ -592,6 +592,9 @@ usage: workctl migrate apply [-h] [--confirmation CONFIRMATION]
                              [--expected-contract-revision EXPECTED_CONTRACT_REVISION]
                              [--dry-run]
 
+Preview or perform current-schema refresh. Output includes state_reset,
+legacy_state_migrated=false, not_migrated, and legacy_summary.
+
 options:
   -h, --help            show this help message and exit
   --confirmation CONFIRMATION
@@ -608,6 +611,9 @@ options:
 
 ```text
 usage: workctl migrate inspect [-h]
+
+Read-only refresh boundary plus NON_AUTHORITY legacy_summary for an outdated
+active Plan.
 
 options:
   -h, --help  show this help message and exit

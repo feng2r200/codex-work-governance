@@ -204,9 +204,13 @@ writes backup, staging, a versioned archive of the legacy Plan, fresh runtime
 state, event ledger, and journal data before replacing the active Plan with the
 current schema contract. Durable apply requires the expected contract revision
 guard, but it does not require a fixed migration confirmation gate and does not
-adapt legacy task status into runtime state. Recovery rolls forward only the
-authenticated refresh journal. `rollback-info` exposes archive and backup paths
-plus manual recovery boundaries; it is not an automatic rollback command.
+adapt legacy task status into runtime state. Refresh inspection, dry-run, and
+apply expose `legacy_summary`, `state_reset`, `legacy_state_migrated: false`,
+`not_migrated`, and `next_model_action` as `NON_AUTHORITY` model guidance.
+After refresh, `plan status` exposes `legacy_refresh` with archive health and
+the same state-reset boundary. Recovery rolls forward only the authenticated
+refresh journal. `rollback-info` exposes archive and backup paths plus manual
+recovery boundaries; it is not an automatic rollback command.
 
 `doctor --clean-stale-transactions` cleans only stale generic runtime
 transaction directories that have no journal. It never deletes schema refresh

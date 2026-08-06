@@ -142,7 +142,8 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
         "note": (
             "Outdated active Plans are read-only inputs: migrate apply archives the "
             "legacy Plan, rebuilds the current schema contract, and starts fresh "
-            "runtime state without adapting legacy task status."
+            "runtime state without adapting legacy task status. legacy_summary and "
+            "legacy_refresh are NON_AUTHORITY guidance for selecting the next task."
         ),
     },
     "doctor": {

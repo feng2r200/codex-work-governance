@@ -71,6 +71,27 @@ BLOCKED_RECEIPT_KEYS = {
     "evidence_ref",
     "evidence_sha256",
 }
+READY_RECEIPT_KEYS = {
+    "schema_version",
+    "bootstrap_contract_version",
+    "action_revision",
+    "updated_at",
+    "status",
+    "plugin_build",
+    "plugin_manifest_sha256",
+    "current_plan_schema_version",
+    "project_input_sha256",
+    "project_output_sha256",
+    "layout_state",
+    "evidence_ref",
+    "session_id",
+    "runtime_bundle_ref",
+    "runtime_manifest_sha256",
+    "controller_ref",
+    "controller_sha256",
+    "lifecycle_ref",
+    "lifecycle_sha256",
+}
 BLOCKED_EVIDENCE_CONTEXT_KEYS = {"hook_source", "session_id"}
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 HOOK_SOURCES = {"startup", "resume", "clear", "compact"}
@@ -1227,30 +1248,9 @@ def validate_bootstrap_capability(governance: Path, capability: Path) -> None:
         payload = json.loads(capability.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         raise BootstrapError("UNCOMMITTED_GOVERNANCE_FOOTPRINT_INVALID") from exc
-    required = {
-        "schema_version",
-        "bootstrap_contract_version",
-        "action_revision",
-        "updated_at",
-        "status",
-        "plugin_build",
-        "plugin_manifest_sha256",
-        "current_plan_schema_version",
-        "project_input_sha256",
-        "project_output_sha256",
-        "layout_state",
-        "evidence_ref",
-        "session_id",
-        "runtime_bundle_ref",
-        "runtime_manifest_sha256",
-        "controller_ref",
-        "controller_sha256",
-        "lifecycle_ref",
-        "lifecycle_sha256",
-    }
     if (
         not isinstance(payload, dict)
-        or set(payload) != required
+        or set(payload) != READY_RECEIPT_KEYS
         or payload.get("schema_version") != 2
         or payload.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
         or payload.get("action_revision") != BOOTSTRAP_ACTION_REVISION

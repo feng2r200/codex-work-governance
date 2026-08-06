@@ -43,7 +43,14 @@ try:
     from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
     from workctl_modules import ready_task_targets as MODULE_READY_TASK_TARGETS
     from workctl_modules import yaml_compat as yaml
-    from workctl_modules.migration import build_v5_contract, build_v5_state, migration_projection
+    from workctl_modules.migration import (
+        REFRESH_NEXT_MODEL_ACTION,
+        REFRESH_NOT_MIGRATED,
+        build_v5_contract,
+        build_v5_state,
+        legacy_plan_summary,
+        migration_projection,
+    )
     from workctl_modules.model import TaskProjection
     from workctl_modules.plan_schema import CURRENT_PLAN_SCHEMA_VERSION
     from workctl_modules.storage import canonical_event_bytes, redacted_copy
@@ -59,9 +66,23 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     MODULE_READY_TASK_TARGETS = None  # type: ignore[assignment]
     build_v5_contract = None  # type: ignore[assignment]
     build_v5_state = None  # type: ignore[assignment]
+    legacy_plan_summary = None  # type: ignore[assignment]
     migration_projection = None  # type: ignore[assignment]
     TaskProjection = None  # type: ignore[assignment,misc]
     CURRENT_PLAN_SCHEMA_VERSION = 5
+    REFRESH_NOT_MIGRATED = (
+        "task.status",
+        "task.note",
+        "task.evidence",
+        "confirmations",
+        "runtime_state",
+        "current_task",
+        "revision_history",
+    )
+    REFRESH_NEXT_MODEL_ACTION = (
+        "Review legacy_summary and the archived legacy Plan before selecting the "
+        "next current-schema task."
+    )
     canonical_event_bytes = None  # type: ignore[assignment]
     redacted_copy = None  # type: ignore[assignment]
 
@@ -306,6 +327,27 @@ LAYOUT_SCHEMA_VERSION = 1
 LAYOUT_VERSION = 1
 BOOTSTRAP_CONTRACT_VERSION = 1
 READY_RECEIPT_SCHEMA_VERSION = 2
+READY_RECEIPT_KEYS = {
+    "schema_version",
+    "bootstrap_contract_version",
+    "action_revision",
+    "updated_at",
+    "status",
+    "plugin_build",
+    "plugin_manifest_sha256",
+    "current_plan_schema_version",
+    "project_input_sha256",
+    "project_output_sha256",
+    "layout_state",
+    "evidence_ref",
+    "session_id",
+    "runtime_bundle_ref",
+    "runtime_manifest_sha256",
+    "controller_ref",
+    "controller_sha256",
+    "lifecycle_ref",
+    "lifecycle_sha256",
+}
 PLUGIN_COMPATIBILITY = ">=1.0.0,<2.0.0"
 LEGACY_MIGRATION_ACTION_REVISION = 4
 SUPPORTED_LEGACY_MIGRATION_ACTION_REVISIONS = {
@@ -771,30 +813,9 @@ def load_controller_receipt_v2(
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
-    required = {
-        "schema_version",
-        "bootstrap_contract_version",
-        "action_revision",
-        "updated_at",
-        "status",
-        "plugin_build",
-        "plugin_manifest_sha256",
-        "current_plan_schema_version",
-        "project_input_sha256",
-        "project_output_sha256",
-        "layout_state",
-        "evidence_ref",
-        "session_id",
-        "runtime_bundle_ref",
-        "runtime_manifest_sha256",
-        "controller_ref",
-        "controller_sha256",
-        "lifecycle_ref",
-        "lifecycle_sha256",
-    }
     if (
         not isinstance(payload, dict)
-        or set(payload) != required
+        or set(payload) != READY_RECEIPT_KEYS
         or payload.get("schema_version") != READY_RECEIPT_SCHEMA_VERSION
         or payload.get("bootstrap_contract_version") != BOOTSTRAP_CONTRACT_VERSION
         or payload.get("action_revision") != BOOTSTRAP_ACTION_REVISION
@@ -896,6 +917,66 @@ def checked_project_path(root: Path, raw_path: str) -> Path:
     return resolved
 
 
+def runtime_bundle_manifest_payload(
+    *,
+    plugin_build: object,
+    plugin_manifest_sha256: object,
+    current_plan_schema_version: object,
+    controller_ref: object,
+    controller_sha256: object,
+    lifecycle_ref: object,
+    lifecycle_sha256: object,
+    module_files: object | None = None,
+) -> dict[str, object]:
+    """Build the canonical runtime bundle manifest projection."""
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "kind": "work-governance-runtime-bundle",
+        "plugin_build": plugin_build,
+        "plugin_manifest_sha256": plugin_manifest_sha256,
+        "current_plan_schema_version": current_plan_schema_version,
+        "controller_ref": controller_ref,
+        "controller_sha256": controller_sha256,
+        "lifecycle_ref": lifecycle_ref,
+        "lifecycle_sha256": lifecycle_sha256,
+    }
+    if module_files is not None:
+        payload["module_files"] = module_files
+    return payload
+
+
+def validated_runtime_bundle_module_files(
+    bundle: Path,
+    manifest: Mapping[str, Any],
+) -> list[dict[str, str]] | None:
+    """Validate the optional module file manifest and return it unchanged."""
+    module_files = manifest.get("module_files")
+    if module_files is None:
+        return None
+    if not isinstance(module_files, list):
+        raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
+    typed_files: list[dict[str, str]] = []
+    for entry in module_files:
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"path", "sha256"}
+            or not isinstance(entry.get("path"), str)
+            or not isinstance(entry.get("sha256"), str)
+            or not SHA256_RE.fullmatch(entry["sha256"])
+        ):
+            raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
+        module_path = bundle / entry["path"]
+        if (
+            module_path.parent.parent != bundle
+            or module_path.is_symlink()
+            or not module_path.is_file()
+            or sha256_file(module_path) != entry["sha256"]
+        ):
+            raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
+        typed_files.append({"path": entry["path"], "sha256": entry["sha256"]})
+    return typed_files
+
+
 def validate_current_ready_receipt(
     root: Path,
     supplied_sha256: str | None,
@@ -949,41 +1030,19 @@ def validate_current_ready_receipt(
         runtime_manifest = json.loads(manifest.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID") from exc
-    expected_manifest = {
-        "schema_version": 1,
-        "kind": "work-governance-runtime-bundle",
-        "plugin_build": receipt["plugin_build"],
-        "plugin_manifest_sha256": receipt["plugin_manifest_sha256"],
-        "current_plan_schema_version": CURRENT_PLAN_SCHEMA_VERSION,
-        "controller_ref": receipt["controller_ref"],
-        "controller_sha256": receipt["controller_sha256"],
-        "lifecycle_ref": receipt["lifecycle_ref"],
-        "lifecycle_sha256": receipt["lifecycle_sha256"],
-    }
-    module_files = (
-        runtime_manifest.get("module_files") if isinstance(runtime_manifest, dict) else None
+    if not isinstance(runtime_manifest, dict):
+        raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
+    module_files = validated_runtime_bundle_module_files(bundle, runtime_manifest)
+    expected_manifest = runtime_bundle_manifest_payload(
+        plugin_build=receipt["plugin_build"],
+        plugin_manifest_sha256=receipt["plugin_manifest_sha256"],
+        current_plan_schema_version=CURRENT_PLAN_SCHEMA_VERSION,
+        controller_ref=receipt["controller_ref"],
+        controller_sha256=receipt["controller_sha256"],
+        lifecycle_ref=receipt["lifecycle_ref"],
+        lifecycle_sha256=receipt["lifecycle_sha256"],
+        module_files=module_files,
     )
-    if module_files is not None:
-        if not isinstance(module_files, list):
-            raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
-        for entry in module_files:
-            if (
-                not isinstance(entry, dict)
-                or set(entry) != {"path", "sha256"}
-                or not isinstance(entry.get("path"), str)
-                or not isinstance(entry.get("sha256"), str)
-                or not SHA256_RE.fullmatch(entry["sha256"])
-            ):
-                raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
-            module_path = bundle / str(entry["path"])
-            if (
-                module_path.parent.parent != bundle
-                or module_path.is_symlink()
-                or not module_path.is_file()
-                or sha256_file(module_path) != entry["sha256"]
-            ):
-                raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
-        expected_manifest["module_files"] = module_files
     if runtime_manifest != expected_manifest:
         raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
     if require_current_controller and Path(__file__).resolve() != controller:
@@ -1223,56 +1282,39 @@ def uncommitted_governance_footprint_errors(root: Path) -> list[str]:
                     except (json.JSONDecodeError, OSError):
                         errors.append("uncommitted runtime plugin manifest is invalid")
                         continue
+                    if not isinstance(payload, dict):
+                        errors.append("uncommitted runtime plugin manifest is invalid")
+                        continue
                     controller = bundle / "workctl.py"
                     lifecycle = bundle / "work-lifecycle.SKILL.md"
-                    expected = {
-                        "schema_version": 1,
-                        "kind": "work-governance-runtime-bundle",
-                        "plugin_build": payload.get("plugin_build")
-                        if isinstance(payload, dict)
-                        else None,
-                        "plugin_manifest_sha256": bundle.name,
-                        "controller_ref": relative_project_path(root, controller),
-                        "controller_sha256": sha256_file(controller)
-                        if controller.is_file() and not controller.is_symlink()
-                        else None,
-                        "lifecycle_ref": relative_project_path(root, lifecycle),
-                        "lifecycle_sha256": sha256_file(lifecycle)
-                        if lifecycle.is_file() and not lifecycle.is_symlink()
-                        else None,
-                    }
-                    if isinstance(payload, dict) and "current_plan_schema_version" in payload:
+                    if "current_plan_schema_version" in payload:
                         version = payload["current_plan_schema_version"]
                         if not isinstance(version, int) or version < 1:
                             errors.append("uncommitted runtime plugin manifest is invalid")
                             continue
-                        expected["current_plan_schema_version"] = version
-                    if isinstance(payload, dict) and "module_files" in payload:
-                        module_files = payload["module_files"]
-                        if not isinstance(module_files, list):
-                            errors.append("uncommitted runtime plugin manifest is invalid")
-                            continue
-                        for entry in module_files:
-                            if (
-                                not isinstance(entry, dict)
-                                or set(entry) != {"path", "sha256"}
-                                or not isinstance(entry.get("path"), str)
-                                or not isinstance(entry.get("sha256"), str)
-                                or not SHA256_RE.fullmatch(entry["sha256"])
-                            ):
-                                errors.append("uncommitted runtime plugin manifest is invalid")
-                                break
-                            module_path = bundle / entry["path"]
-                            if (
-                                module_path.parent.parent != bundle
-                                or module_path.is_symlink()
-                                or not module_path.is_file()
-                                or sha256_file(module_path) != entry["sha256"]
-                            ):
-                                errors.append("uncommitted runtime plugin module is invalid")
-                                break
-                        else:
-                            expected["module_files"] = module_files
+                    else:
+                        version = None
+                    try:
+                        module_files = validated_runtime_bundle_module_files(bundle, payload)
+                    except WorkctlError:
+                        errors.append("uncommitted runtime plugin module is invalid")
+                        continue
+                    expected = runtime_bundle_manifest_payload(
+                        plugin_build=payload.get("plugin_build"),
+                        plugin_manifest_sha256=bundle.name,
+                        current_plan_schema_version=version,
+                        controller_ref=relative_project_path(root, controller),
+                        controller_sha256=sha256_file(controller)
+                        if controller.is_file() and not controller.is_symlink()
+                        else None,
+                        lifecycle_ref=relative_project_path(root, lifecycle),
+                        lifecycle_sha256=sha256_file(lifecycle)
+                        if lifecycle.is_file() and not lifecycle.is_symlink()
+                        else None,
+                        module_files=module_files,
+                    )
+                    if version is None:
+                        expected.pop("current_plan_schema_version", None)
                     if payload != expected:
                         errors.append("uncommitted runtime plugin bundle is invalid")
         capability = runtime / BOOTSTRAP_CAPABILITY_NAME
@@ -4525,6 +4567,53 @@ def pending_confirmation_ids(frontmatter: Mapping[str, Any]) -> list[str]:
     ]
 
 
+def legacy_refresh_projection(
+    root: Path,
+    frontmatter: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Project archive-backed refresh guidance for a rebuilt current-schema Plan."""
+    archive = frontmatter.get("legacy_archive")
+    if not isinstance(archive, dict):
+        return None
+    archive_path = archive.get("path")
+    projection: dict[str, Any] = {
+        "from_schema_version": archive.get("from_schema_version"),
+        "archive_path": archive_path,
+        "archive_sha256": archive.get("sha256"),
+        "migration_mode": archive.get("mode", "archive_legacy_and_rebuild_current_plan"),
+        "runtime_state": archive.get("runtime_state", "fresh"),
+        "state_reset": True,
+        "legacy_state_migrated": False,
+        "not_migrated": list(archive.get("not_migrated", REFRESH_NOT_MIGRATED))
+        if isinstance(archive.get("not_migrated"), list)
+        else list(REFRESH_NOT_MIGRATED),
+        "next_model_action": archive.get("next_model_action", REFRESH_NEXT_MODEL_ACTION),
+        "archive_status": "not_checked",
+    }
+    if not isinstance(archive_path, str) or not archive_path:
+        projection["archive_status"] = "missing_path"
+        return projection
+    try:
+        archive_file = checked_project_path(root, archive_path)
+        reject_symlink_components(root, archive_file)
+        if not archive_file.is_file():
+            projection["archive_status"] = "missing"
+            return projection
+        expected_sha256 = archive.get("sha256")
+        actual_sha256 = sha256_file(archive_file)
+        if isinstance(expected_sha256, str) and expected_sha256 != actual_sha256:
+            projection["archive_status"] = "sha256_mismatch"
+            projection["actual_archive_sha256"] = actual_sha256
+            return projection
+        projection["archive_status"] = "readable"
+        if callable(legacy_plan_summary):
+            projection["legacy_summary"] = legacy_plan_summary(load_plan(archive_file).frontmatter)
+    except WorkctlError as exc:
+        projection["archive_status"] = "unreadable"
+        projection["archive_error"] = str(exc)
+    return projection
+
+
 def compact_plan_status(
     root: Path,
     frontmatter: Mapping[str, Any],
@@ -4571,7 +4660,7 @@ def compact_plan_status(
         next_suggestion = "Resolve a blocked task before advancing."
     else:
         next_suggestion = "Inspect the route handoff for the next governed action."
-    return {
+    payload = {
         "plan_id": frontmatter.get("plan_id"),
         "goal": frontmatter.get("goal", {}),
         "current_task": current_task,
@@ -4582,6 +4671,10 @@ def compact_plan_status(
         "confirmation_gates": confirmation_gates,
         "next_suggestion": next_suggestion,
     }
+    legacy_refresh = legacy_refresh_projection(root, frontmatter)
+    if legacy_refresh is not None:
+        payload["legacy_refresh"] = legacy_refresh
+    return payload
 
 
 def user_intervention_projection(frontmatter: Mapping[str, Any]) -> dict[str, Any]:
@@ -13755,6 +13848,9 @@ def cmd_plan_status(args: argparse.Namespace) -> None:
     }
     if v5_state is not None:
         summary["events"] = v5_read_events(root, str(doc.frontmatter["plan_id"]))
+    legacy_refresh = legacy_refresh_projection(root, doc.frontmatter)
+    if legacy_refresh is not None:
+        summary["legacy_refresh"] = legacy_refresh
     if args.expected_intake_sha256 is not None:
         summary["current_request_match"] = current_request_matches(
             root,
@@ -13933,7 +14029,8 @@ def cmd_workflow_help(args: argparse.Namespace) -> None:
             "note": (
                 "Outdated active Plans are read-only inputs: migrate apply archives the "
                 "legacy Plan, rebuilds the current schema contract, and starts fresh "
-                "runtime state without adapting legacy task status."
+                "runtime state without adapting legacy task status. legacy_summary and "
+                "legacy_refresh are NON_AUTHORITY guidance for selecting the next task."
             ),
         },
         "doctor": {
@@ -14882,6 +14979,10 @@ def current_schema_refresh_body(contract: Mapping[str, Any]) -> str:
                 if isinstance(archive_path, str) and archive_path
                 else "Legacy Plan bytes are archived in the schema refresh journal."
             ),
+            (
+                "Legacy runtime state was not migrated; review `plan status` "
+                "legacy_refresh before selecting the next task."
+            ),
             "",
         ]
     )
@@ -14907,12 +15008,26 @@ def prepare_v5_migration(
     source_sha256 = sha256_bytes(source_bytes)
     archive_path = v5_legacy_archive_path(root, migration_id, source.path.name)
     archive_relative = relative_project_path(root, archive_path)
+    summary = (
+        legacy_plan_summary(source.frontmatter)
+        if callable(legacy_plan_summary)
+        else {
+            "authority": "NON_AUTHORITY",
+            "schema_version": from_schema_version,
+            "not_migrated": list(REFRESH_NOT_MIGRATED),
+        }
+    )
     contract = build_v5_contract(source.frontmatter)
     contract["legacy_archive"] = {
         "path": archive_relative,
         "sha256": source_sha256,
         "from_schema_version": from_schema_version,
         "mode": "archive_legacy_and_rebuild_current_plan",
+        "runtime_state": "fresh",
+        "state_reset": True,
+        "legacy_state_migrated": False,
+        "not_migrated": list(REFRESH_NOT_MIGRATED),
+        "next_model_action": REFRESH_NEXT_MODEL_ACTION,
     }
     if redacted_copy is not None:
         contract = cast(dict[str, Any], redacted_copy(contract))
@@ -14942,6 +15057,10 @@ def prepare_v5_migration(
             "archive_path": archive_relative,
             "archive_sha256": source_sha256,
             "state_mapping": "not_performed",
+            "legacy_summary": summary,
+            "legacy_state_migrated": False,
+            "not_migrated": list(REFRESH_NOT_MIGRATED),
+            "next_model_action": REFRESH_NEXT_MODEL_ACTION,
         },
         "recorded_at": timestamp,
     }
@@ -15198,10 +15317,21 @@ def cmd_migrate_apply(args: argparse.Namespace) -> None:
         write_v5_migration_staging(root, paths, source_bytes, target_bytes, state, event_bytes)
         write_atomic(paths["journal"], json.dumps(journal, indent=2, sort_keys=True) + "\n")
         finish_v5_migration(root, paths["journal"])
-    print(
-        f"CURRENT_PLAN_SCHEMA_REFRESH_COMMITTED {migration_id} "
-        f"plan={source.frontmatter['plan_id']}"
-    )
+    payload = {
+        "status": "CURRENT_PLAN_SCHEMA_REFRESH_COMMITTED",
+        "migration_id": migration_id,
+        "plan_id": source.frontmatter["plan_id"],
+        "archive_path": journal.get("archive_path"),
+        "archive_sha256": journal.get("archive_sha256"),
+        "state_reset": True,
+        "legacy_state_migrated": False,
+        "not_migrated": list(REFRESH_NOT_MIGRATED),
+        "next_model_action": REFRESH_NEXT_MODEL_ACTION,
+        "legacy_summary": legacy_plan_summary(source.frontmatter)
+        if callable(legacy_plan_summary)
+        else None,
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def migration_rollback_entry(root: Path, journal_path: Path) -> dict[str, Any]:
@@ -21538,11 +21668,29 @@ def build_parser() -> argparse.ArgumentParser:
     action_lease_revoke.add_argument("--ref", required=True)
     action_lease_revoke.set_defaults(func=cmd_action_lease_revoke)
 
-    migrate = sub.add_parser("migrate")
+    migrate = sub.add_parser(
+        "migrate",
+        description=(
+            "Archive outdated active Plans and rebuild the plugin-declared current "
+            "schema without adapting legacy runtime state."
+        ),
+    )
     migrate_sub = migrate.add_subparsers(dest="migration_action", required=True)
-    migrate_inspect = migrate_sub.add_parser("inspect")
+    migrate_inspect = migrate_sub.add_parser(
+        "inspect",
+        description=(
+            "Read-only refresh boundary plus NON_AUTHORITY legacy_summary for an "
+            "outdated active Plan."
+        ),
+    )
     migrate_inspect.set_defaults(func=cmd_migrate_inspect)
-    migrate_apply = migrate_sub.add_parser("apply")
+    migrate_apply = migrate_sub.add_parser(
+        "apply",
+        description=(
+            "Preview or perform current-schema refresh. Output includes state_reset, "
+            "legacy_state_migrated=false, not_migrated, and legacy_summary."
+        ),
+    )
     migrate_apply.add_argument(
         "--confirmation",
         help="Deprecated compatibility argument; current-schema refresh does not require it.",

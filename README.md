@@ -272,8 +272,13 @@ v1-v4 and v5; new writes use v5. `migrate inspect`, `migrate apply --dry-run`,
 Plan, replaces the active contract atomically, and stages recoverable runtime
 state and event bytes. It does not require a fixed migration confirmation and
 does not adapt legacy task status into the refreshed runtime state.
-`migrate recover` is receipt-bound because it can finish an interrupted
-replacement.
+`migrate inspect`, dry-run, and durable apply include a non-authoritative
+`legacy_summary`, `state_reset`, `legacy_state_migrated: false`,
+`not_migrated`, and `next_model_action` so the model can read old progress
+without treating it as current runtime authority. After refresh, `plan status`
+exposes `legacy_refresh` with the archive path, archive health, and the same
+state-reset warning. `migrate recover` is receipt-bound because it can finish
+an interrupted replacement.
 
 Run only the exact `intake_command` emitted by the current SessionStart. It uses
 `controller_ref`, `controller_sha256`, and `receipt_sha256` from the READY
@@ -465,8 +470,10 @@ schema v5. An active V3/V4 or otherwise outdated Plan is readable but reports
 `PLAN_SCHEMA_REFRESH_REQUIRED`; ordinary writes remain blocked until
 `migrate apply --expected-contract-revision <revision>` archives the legacy Plan
 and rebuilds a fresh current-schema contract. The refresh does not adapt legacy
-task status, evidence notes, or runtime state. Completed inactive legacy Plans
-remain readable historical records. Goal or contract changes use
+task status, evidence notes, or runtime state. Controller outputs surface
+`legacy_summary` before refresh and `legacy_refresh` after refresh only as
+`NON_AUTHORITY` guidance for choosing the next current-schema task. Completed
+inactive legacy Plans remain readable historical records. Goal or contract changes use
 `plan contract revise`; evidence-backed
 method changes that preserve the goal use `plan adapt`. Unknowns are managed
 through `plan unknown add`, `plan unknown classify`, and

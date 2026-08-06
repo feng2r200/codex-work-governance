@@ -119,7 +119,10 @@ with `PLAN_SCHEMA_REFRESH_REQUIRED`; use `migrate inspect`,
 `migrate apply --dry-run`, then receipt-bound
 `migrate apply --expected-contract-revision <revision>` to archive the legacy
 Plan and rebuild a fresh v5 contract. Do not adapt legacy task state or use
-`plan contract upgrade`/`plan reconcile-upgrade` for new work. Completed
+`plan contract upgrade`/`plan reconcile-upgrade` for new work. The controller
+may expose `legacy_summary` before refresh and `legacy_refresh` after refresh;
+both are `NON_AUTHORITY` read-only guidance and never current runtime state.
+Completed
 inactive legacy Plans remain readable historical evidence.
 
 `deferred`, `pending_confirmation`, and `in_progress` activation block terminal
@@ -355,6 +358,8 @@ Allowed structural changes:
   versioned legacy archive, fresh runtime state, event ledger, and journal data,
   then replace the active Plan. It is receipt-bound; it does not require a fixed
   migration confirmation gate and does not carry legacy task status into runtime.
+  Its output includes `legacy_summary`, `state_reset`, `legacy_state_migrated:
+  false`, `not_migrated`, and `next_model_action`.
 - `migrate recover`: finish only the authenticated current-schema refresh
   journal and is receipt-bound because it can replace Plan/runtime files.
 - `migrate rollback-info`: show archive, backup, staging, recovery command and

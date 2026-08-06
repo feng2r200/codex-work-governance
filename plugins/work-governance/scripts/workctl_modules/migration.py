@@ -9,18 +9,140 @@ from typing import Any
 from .model import V5ContractProjection
 from .plan_schema import CURRENT_PLAN_SCHEMA_VERSION
 
+REFRESH_NOT_MIGRATED = (
+    "task.status",
+    "task.note",
+    "task.evidence",
+    "confirmations",
+    "runtime_state",
+    "current_task",
+    "revision_history",
+)
+REFRESH_NEXT_MODEL_ACTION = (
+    "Review legacy_summary and the archived legacy Plan before selecting the "
+    "next current-schema task."
+)
+
+
+def _add_unique(values: list[str], seen: set[str], value: object) -> None:
+    """Append one non-empty string once."""
+    if isinstance(value, str) and value and value not in seen:
+        seen.add(value)
+        values.append(value)
+
+
+def _collect_evidence_refs_from_value(
+    value: object,
+    refs: list[str],
+    seen: set[str],
+) -> None:
+    """Collect typed evidence references from a bounded legacy value."""
+    if isinstance(value, str):
+        _add_unique(refs, seen, value)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _collect_evidence_refs_from_value(item, refs, seen)
+        return
+    if not isinstance(value, dict):
+        return
+    for key in ("ref", "evidence_ref"):
+        _add_unique(refs, seen, value.get(key))
+    for key in ("evidence", "evidence_refs"):
+        _collect_evidence_refs_from_value(value.get(key), refs, seen)
+
+
+def _collect_evidence_refs(frontmatter: Mapping[str, Any]) -> list[str]:
+    """Collect legacy evidence references without copying evidence payloads."""
+    refs: list[str] = []
+    seen: set[str] = set()
+    for key in ("evidence_ref", "evidence_refs", "evidence"):
+        _collect_evidence_refs_from_value(frontmatter.get(key), refs, seen)
+    for key in (
+        "tasks",
+        "validations",
+        "obligations",
+        "delivery",
+        "activation",
+        "artifacts",
+    ):
+        _collect_evidence_refs_from_value(frontmatter.get(key), refs, seen)
+    return refs
+
+
+def _legacy_confirmation_ids(frontmatter: Mapping[str, Any]) -> list[str]:
+    """Return stable IDs for pending legacy confirmations."""
+    confirmations = frontmatter.get("confirmations", {})
+    required = confirmations.get("required", []) if isinstance(confirmations, dict) else []
+    ids: list[str] = []
+    for item in required if isinstance(required, list) else []:
+        if (
+            isinstance(item, dict)
+            and isinstance(item.get("id"), str)
+            and item.get("status", "pending") == "pending"
+        ):
+            ids.append(str(item["id"]))
+    return ids
+
+
+def _legacy_open_unknown_ids(frontmatter: Mapping[str, Any]) -> list[str]:
+    """Return stable IDs for open legacy unknowns."""
+    unknowns = frontmatter.get("unknowns", [])
+    ids: list[str] = []
+    for item in unknowns if isinstance(unknowns, list) else []:
+        if (
+            isinstance(item, dict)
+            and isinstance(item.get("id"), str)
+            and item.get("status", "open") == "open"
+        ):
+            ids.append(str(item["id"]))
+    return ids
+
+
+def legacy_plan_summary(frontmatter: Mapping[str, Any]) -> dict[str, object]:
+    """Summarize legacy state as non-authoritative read-only guidance."""
+    raw_tasks = frontmatter.get("tasks", [])
+    tasks = raw_tasks if isinstance(raw_tasks, list) else []
+    tasks_by_status: dict[str, int] = {}
+    in_progress_task_ids: list[str] = []
+    task_ids: list[str] = []
+    for item in tasks:
+        if not isinstance(item, dict):
+            continue
+        task_id = item.get("id")
+        status = item.get("status", "unspecified")
+        status_name = status if isinstance(status, str) and status else "unspecified"
+        tasks_by_status[status_name] = tasks_by_status.get(status_name, 0) + 1
+        if isinstance(task_id, str):
+            task_ids.append(task_id)
+            if status_name == "in_progress":
+                in_progress_task_ids.append(task_id)
+    return {
+        "authority": "NON_AUTHORITY",
+        "schema_version": frontmatter.get("schema_version"),
+        "plan_status": frontmatter.get("status"),
+        "tasks_total": len(task_ids),
+        "tasks_by_status": dict(sorted(tasks_by_status.items())),
+        "in_progress_task_ids": in_progress_task_ids,
+        "open_confirmation_ids": _legacy_confirmation_ids(frontmatter),
+        "open_unknown_ids": _legacy_open_unknown_ids(frontmatter),
+        "evidence_refs": _collect_evidence_refs(frontmatter),
+        "not_migrated": list(REFRESH_NOT_MIGRATED),
+    }
+
 
 def migration_projection(frontmatter: Mapping[str, object]) -> dict[str, object]:
     """Describe one Plan's read-only current-schema refresh boundary."""
     version = frontmatter.get("schema_version")
+    requires_migration = version != CURRENT_PLAN_SCHEMA_VERSION
     tasks_value = frontmatter.get("tasks", [])
     tasks = tasks_value if isinstance(tasks_value, list) else []
     truth_refs_value = frontmatter.get("truth_refs", [])
     truth_refs = truth_refs_value if isinstance(truth_refs_value, list) else []
-    return {
+    projection: dict[str, object] = {
         "from_schema_version": version,
         "to_schema_version": CURRENT_PLAN_SCHEMA_VERSION,
-        "requires_migration": version != CURRENT_PLAN_SCHEMA_VERSION,
+        "requires_migration": requires_migration,
         "migration_mode": "archive_legacy_and_rebuild_current_plan",
         "write": False,
         "contract_fields": [
@@ -45,6 +167,17 @@ def migration_projection(frontmatter: Mapping[str, object]) -> dict[str, object]
         "evidence_mapping": "canonical Plan evidence remains addressable by content hash",
         "truth_refs": list(truth_refs),
     }
+    if requires_migration:
+        projection.update(
+            {
+                "legacy_summary": legacy_plan_summary(frontmatter),
+                "state_reset": True,
+                "legacy_state_migrated": False,
+                "not_migrated": list(REFRESH_NOT_MIGRATED),
+                "next_model_action": REFRESH_NEXT_MODEL_ACTION,
+            }
+        )
+    return projection
 
 
 def v5_contract_projection(frontmatter: Mapping[str, Any]) -> V5ContractProjection:
