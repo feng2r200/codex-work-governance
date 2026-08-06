@@ -4,8 +4,9 @@ Execute only the next authorized slice.
 
 Before edits:
 
-- require `plan authority check` to return `GOVERNED_ACTIVE` for
-  Plan-controlled work;
+- require `plan authority check` to return current-schema `GOVERNED_ACTIVE` for
+  ordinary Plan-controlled work; if it returns `PLAN_SCHEMA_REFRESH_REQUIRED`,
+  run only the current-schema refresh path before selecting a task;
 - read the current authority files and relevant current code/docs;
 - protect user changes and unrelated dirty worktree state;
 - identify the exact files to edit and why those are the authority locations;

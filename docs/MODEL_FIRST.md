@@ -5,6 +5,9 @@
 
 ## 快速路径
 
+- SessionStart Hook 只提供 receipt-bound controller 身份、layout readiness 和恢复
+  提示；Plan authority、旧 schema refresh、风险事实和写入边界都以 controller
+  命令输出为准。
 - 无 active Plan 且需要治理执行时，优先用
   `goal init --stdin|--from-file`。输入最小目标契约，controller 生成
   schema-v5 Plan、runtime state、event ledger 和 index。

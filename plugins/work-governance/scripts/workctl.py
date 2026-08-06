@@ -388,6 +388,7 @@ AUTHORITY_STATES = {
     "AUTHORITY_REVIEW_REQUIRED",
     "RECONCILIATION_REQUIRED",
     "GOVERNED_ACTIVE",
+    "PLAN_SCHEMA_REFRESH_REQUIRED",
     "MIGRATION_RECOVERY_REQUIRED",
 }
 AUTHORITY_CLASSIFICATIONS = {
@@ -416,6 +417,23 @@ AUTHORITY_BLOCKED_COMMANDS = [
     "plan rollover recover",
     "plan retire apply",
     "plan retire recover",
+]
+SCHEMA_REFRESH_ALLOWED_COMMANDS = [
+    "plan authority inspect",
+    "plan authority check",
+    "plan schema-validate",
+    "plan validate",
+    "plan status",
+    "plan show",
+    "plan history list|show",
+    "goal show",
+    "gate list|check",
+    "truth list|conflicts",
+    "review status|request",
+    "risk inspect",
+    "migrate inspect|apply|recover",
+    "migrate rollback-info",
+    "doctor",
 ]
 GOVERNANCE_DIR_NAME = ".work-governance"
 PLAN_DIR_NAME = "_Plan"
@@ -3429,6 +3447,8 @@ def authority_metadata_errors(
 
 def allowed_commands_for_state(state: str) -> list[str]:
     """Return commands that may run in an authority state."""
+    if state == "PLAN_SCHEMA_REFRESH_REQUIRED":
+        return list(SCHEMA_REFRESH_ALLOWED_COMMANDS)
     commands = list(AUTHORITY_BLOCKED_COMMANDS)
     if state == "UNMANAGED_EMPTY":
         commands.append("plan admit apply")
@@ -3615,6 +3635,7 @@ def inspect_authority(
         and candidate.classification == "LIKELY_AUTHORITY"
         and "migration-pointer" not in candidate.signals
     ]
+    active_contract_state = contract_state(active_doc.frontmatter)
     if external_confirmed:
         blockers.extend(
             f"unreconciled confirmed authority: {candidate.path}"
@@ -3627,6 +3648,9 @@ def inspect_authority(
             for candidate in external_likely
         )
         state = "AUTHORITY_REVIEW_REQUIRED"
+    elif active_contract_state == "PLAN_SCHEMA_REFRESH_REQUIRED":
+        blockers.append("active Plan requires current-schema refresh")
+        state = active_contract_state
     elif not has_authority_metadata and not uses_minimal_v5_authority:
         blockers.append("active Plan requires authority metadata registration")
         state = "AUTHORITY_REGISTRATION_REQUIRED"
@@ -3642,6 +3666,16 @@ def require_governed_authority(root: Path) -> AuthorityReport:
     """Fail closed unless the project has one valid governed active Plan."""
     report = inspect_authority(root)
     if report.state != "GOVERNED_ACTIVE":
+        raise WorkctlError(
+            f"AUTHORITY_BLOCKED: {report.state}; allowed={','.join(report.allowed_commands)}"
+        )
+    return report
+
+
+def require_current_schema_refresh_authority(root: Path) -> AuthorityReport:
+    """Allow only ordinary governed state or the explicit old-Plan refresh state."""
+    report = inspect_authority(root)
+    if report.state not in {"GOVERNED_ACTIVE", "PLAN_SCHEMA_REFRESH_REQUIRED"}:
         raise WorkctlError(
             f"AUTHORITY_BLOCKED: {report.state}; allowed={','.join(report.allowed_commands)}"
         )
@@ -4708,6 +4742,51 @@ def legacy_refresh_projection(
         projection["archive_status"] = "unreadable"
         projection["archive_error"] = str(exc)
     return projection
+
+
+def current_schema_refresh_status(
+    root: Path,
+    frontmatter: Mapping[str, Any],
+    report: AuthorityReport,
+    *,
+    full: bool,
+) -> dict[str, Any]:
+    """Build a status view for an outdated active Plan without scheduling tasks."""
+    projection: dict[str, Any] = (
+        dict(migration_projection(frontmatter)) if callable(migration_projection) else {}
+    )
+    contract = frontmatter.get("contract")
+    expected_revision = (
+        contract.get("revision")
+        if isinstance(contract, dict)
+        else frontmatter.get("revision")
+    )
+    payload: dict[str, Any] = {
+        "authority_state": report.state,
+        "blocking_reasons": report.blockers,
+        "contract_state": contract_state(dict(frontmatter)),
+        "current_schema_version": CURRENT_PLAN_SCHEMA_VERSION,
+        "expected_contract_revision": expected_revision,
+        "plan_id": frontmatter.get("plan_id"),
+        "schema_version": frontmatter.get("schema_version"),
+        "status": frontmatter.get("status"),
+        "next_suggestion": (
+            "Run migrate inspect and migrate apply --expected-contract-revision "
+            f"{expected_revision}."
+            if isinstance(expected_revision, int)
+            else "Run migrate inspect before rebuilding the active Plan."
+        ),
+    }
+    payload.update(projection)
+    if full:
+        payload["authority_candidates"] = [
+            candidate_to_dict(item) for item in report.candidates
+        ]
+        payload["allowed_commands"] = report.allowed_commands
+        payload["goal"] = frontmatter.get("goal", {})
+        payload["tasks"] = frontmatter.get("tasks", [])
+        payload["confirmations"] = frontmatter.get("confirmations", {})
+    return payload
 
 
 def compact_plan_status(
@@ -6463,7 +6542,7 @@ def cmd_intake_status(args: argparse.Namespace) -> None:
     if layout.state == "LAYOUT_READY":
         authority = inspect_authority(root)
         authority_state = authority.state
-        if authority.state == "GOVERNED_ACTIVE":
+        if authority.state in {"GOVERNED_ACTIVE", "PLAN_SCHEMA_REFRESH_REQUIRED"}:
             doc = load_plan(active_plan_path(root))
             plan_contract_state = contract_state(doc.frontmatter)
             plan_id = doc.frontmatter.get("plan_id")
@@ -10608,7 +10687,7 @@ def cmd_plan_contract_upgrade_status(_args: argparse.Namespace) -> None:
         "plan_id": None,
         "schema_version": None,
     }
-    if report.state == "GOVERNED_ACTIVE":
+    if report.state in {"GOVERNED_ACTIVE", "PLAN_SCHEMA_REFRESH_REQUIRED"}:
         doc = load_plan(active_plan_path(root))
         payload.update(
             {
@@ -13842,6 +13921,16 @@ def cmd_plan_status(args: argparse.Namespace) -> None:
         }
         print(json.dumps(summary, indent=2, sort_keys=True))
         return
+    if contract_state(doc.frontmatter) == "PLAN_SCHEMA_REFRESH_REQUIRED":
+        print(
+            json.dumps(
+                current_schema_refresh_status(root, doc.frontmatter, report, full=args.full),
+                indent=None if not args.full else 2,
+                separators=(",", ":") if not args.full else None,
+                sort_keys=True,
+            )
+        )
+        return
     runtime_doc = doc.frontmatter
     v5_state: dict[str, Any] | None = None
     if doc.frontmatter.get("schema_version") == 5:
@@ -14945,7 +15034,7 @@ def cmd_migrate_inspect(_args: argparse.Namespace) -> None:
         "to_schema_version": CURRENT_PLAN_SCHEMA_VERSION,
         "write": False,
     }
-    if report.state == "GOVERNED_ACTIVE":
+    if report.state in {"GOVERNED_ACTIVE", "PLAN_SCHEMA_REFRESH_REQUIRED"}:
         doc = load_plan(active_plan_path(root))
         payload["plan_id"] = doc.frontmatter.get("plan_id")
         payload["from_schema_version"] = doc.frontmatter.get("schema_version")
@@ -15283,7 +15372,7 @@ def cmd_migrate_apply(args: argparse.Namespace) -> None:
     """Archive an outdated active Plan and rebuild the current-schema contract."""
     root = project_root()
     if args.dry_run:
-        require_governed_authority(root)
+        require_current_schema_refresh_authority(root)
         source = load_plan(active_plan_path(root))
         if source.frontmatter.get("schema_version") == CURRENT_PLAN_SCHEMA_VERSION:
             print(
@@ -15340,7 +15429,7 @@ def cmd_migrate_apply(args: argparse.Namespace) -> None:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return
     with lock(root):
-        require_governed_authority(root)
+        require_current_schema_refresh_authority(root)
         source = load_plan(active_plan_path(root))
         if source.frontmatter.get("schema_version") == CURRENT_PLAN_SCHEMA_VERSION:
             print(
@@ -22339,6 +22428,11 @@ def enforce_active_contract_gate(args: argparse.Namespace, root: Path) -> None:
     if not command_mutates_state(args) or args.domain == "layout":
         return
     report = inspect_authority(root)
+    if report.state == "PLAN_SCHEMA_REFRESH_REQUIRED":
+        allowed = args.domain == "migrate" and args.migration_action in {"apply", "recover"}
+        if allowed:
+            return
+        raise WorkctlError("PLAN_SCHEMA_REFRESH_REQUIRED")
     if report.state != "GOVERNED_ACTIVE":
         return
     doc = load_plan(active_plan_path(root))

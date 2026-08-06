@@ -4,13 +4,13 @@
 
 ## Invocation contract
 
-Use the exact receipt-bound controller emitted by SessionStart. The placeholder below is intentional:
+Use the exact receipt-bound controller emitted by SessionStart. The SessionStart receipt is bootstrap/runtime identity, not Plan authority; the controller's authority and contract states decide writable Plan work. The placeholder below is intentional:
 
 ```sh
 <receipt-bound-workctl> <domain> <command> [options]
 ```
 
-Mutable schema-v4 Plan commands and high-impact authorization require the current turn receipt. Ordinary schema-v5 runtime commands use the expected state guard without turn intake. `plan status`, `plan show`, queue views, `help`, `migrate inspect`, `migrate apply --dry-run`, `migrate rollback-info`, and default `doctor` are read-only views.
+Mutable schema-v4 Plan commands and high-impact authorization require the current turn receipt. Ordinary schema-v5 runtime commands use the expected state guard without turn intake. Outdated active Plans report `PLAN_SCHEMA_REFRESH_REQUIRED` and allow only read-only inspection plus explicit current-schema refresh. `plan status`, `plan show`, queue views, `help`, `migrate inspect`, `migrate apply --dry-run`, `migrate rollback-info`, and default `doctor` are read-only views.
 
 ## Stable workflow aliases
 

@@ -1774,7 +1774,7 @@ def test_plan_init_writes_only_canonical_governance_root(tmp_path: Path) -> None
     assert not (tmp_path / "_Plan").exists()
     status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
     assert status["layout_state"] == "LAYOUT_READY"
-    assert status["plan_authority_state"] == "GOVERNED_ACTIVE"
+    assert status["plan_authority_state"] == "PLAN_SCHEMA_REFRESH_REQUIRED"
 
 
 def test_layout_migrates_strict_legacy_authority_and_commits_version(
@@ -1796,7 +1796,7 @@ def test_layout_migrates_strict_legacy_authority_and_commits_version(
     assert status["legacy"]["classification"] == "MIGRATABLE"
     assert migrated.stdout.startswith("LAYOUT_COMMITTED LAY-")
     assert final["layout_state"] == "LAYOUT_READY"
-    assert final["plan_authority_state"] == "GOVERNED_ACTIVE"
+    assert final["plan_authority_state"] == "PLAN_SCHEMA_REFRESH_REQUIRED"
     assert target.is_file()
     assert not (tmp_path / "_Plan").exists()
     assert frontmatter["revision"] == before_revision + 1
@@ -1804,7 +1804,16 @@ def test_layout_migrates_strict_legacy_authority_and_commits_version(
     proof = list((tmp_path / ".work-governance" / "_Plan" / ".migrations").glob("LAY-*.yaml"))
     assert len(proof) == 1
     assert run_workctl(tmp_path, "layout", "validate").stdout.strip() == "LAYOUT_VALID"
-    assert run_workctl(tmp_path, "plan", "validate").stdout.strip() == "PLAN_VALID"
+    refresh = json.loads(
+        run_workctl(
+            tmp_path,
+            "migrate",
+            "inspect",
+            env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
+        ).stdout
+    )
+    assert refresh["requires_migration"] is True
+    assert refresh["migration_mode"] == "archive_legacy_and_rebuild_current_plan"
 
 
 def test_current_controller_honors_supported_prior_adoption_receipt(
@@ -1868,12 +1877,18 @@ def test_layout_migrates_schema_one_confirmation_without_inventing_timestamp(
     assert "_Plan/" not in after["scope"]["include"]
     assert "_Plan" not in after["scope"]["exclude"]
     status = json.loads(run_workctl(tmp_path, "layout", "status").stdout)
-    plan_validation = run_workctl(tmp_path, "plan", "validate", check=False)
+    plan_validation = run_workctl(
+        tmp_path,
+        "plan",
+        "validate",
+        check=False,
+        env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
+    )
     assert status["layout_state"] == "LAYOUT_READY"
-    assert status["plan_authority_state"] == "AUTHORITY_REGISTRATION_REQUIRED"
+    assert status["plan_authority_state"] == "PLAN_SCHEMA_REFRESH_REQUIRED"
     assert run_workctl(tmp_path, "layout", "validate").stdout.strip() == "LAYOUT_VALID"
     assert plan_validation.returncode == 1
-    assert "authority state is AUTHORITY_REGISTRATION_REQUIRED" in plan_validation.stderr
+    assert "authority state is PLAN_SCHEMA_REFRESH_REQUIRED" in plan_validation.stderr
 
 
 def test_layout_classifier_rejects_invalid_current_schema_before_transaction(
@@ -4864,6 +4879,35 @@ def test_docs_plan_designated_by_agents_requires_migration(tmp_path: Path) -> No
     assert report["authority_state"] == "MIGRATION_REQUIRED"
     assert report["candidates"][0]["classification"] == "CONFIRMED_AUTHORITY"
     assert "project-rule-explicit" in report["candidates"][0]["signals"]
+
+
+def test_outdated_active_plan_does_not_bypass_confirmed_second_authority(
+    tmp_path: Path,
+) -> None:
+    """Current-schema refresh cannot hide a project-rule confirmed authority conflict."""
+    init_plan(tmp_path)
+    docs_plan = tmp_path / "docs" / "Plan.md"
+    write_markdown_plan(docs_plan, legacy_frontmatter("PLAN-20260722-002"))
+    (tmp_path / "AGENTS.md").write_text(
+        "`docs/Plan.md` is the authoritative execution Plan and must be updated.\n",
+        encoding="utf-8",
+    )
+
+    report = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "authority",
+            "inspect",
+            env={"TEST_WORKCTL_ALLOW_LEGACY_CONTRACT": "0"},
+        ).stdout
+    )
+
+    assert report["authority_state"] == "RECONCILIATION_REQUIRED"
+    assert any(
+        reason.startswith("unreconciled confirmed authority: docs/Plan.md")
+        for reason in report["blocking_reasons"]
+    )
 
 
 def test_root_plan_rule_is_ignored_after_layout_ready(tmp_path: Path) -> None:

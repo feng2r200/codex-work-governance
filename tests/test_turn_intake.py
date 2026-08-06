@@ -1221,11 +1221,33 @@ def test_turn_hook_stays_trusted_after_pyyaml_continuation_plan_resume(
     tmp_path: Path,
 ) -> None:
     """A PyYAML-wrapped active Plan must not cause SESSION_RECEIPT_MISMATCH."""
-    project, session_id = prepare_admitted_project(tmp_path, legacy_contract_compat=False)
-    rewrite_plan_with_pyyaml_escaped_continuation(project, "PLAN-20260729-001")
     fake_bin = tmp_path / "resume-bin"
     fake_bin.mkdir()
     install_fake_uv(fake_bin)
+    project = tmp_path / "project"
+    project.mkdir()
+    session_id = "session-intake"
+    run_session_hook(project, fake_bin, session_id)
+    plan_id = "PLAN-20260729-001"
+    plan = strict_admission_plan(plan_id)
+    plan_dir = project / ".work-governance" / "_Plan"
+    plan_dir.mkdir(parents=True, exist_ok=True)
+    (plan_dir / "index.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "active_plan_id": plan_id,
+                "plans": [{"id": plan_id, "path": f"{plan_id}.md"}],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (plan_dir / f"{plan_id}.md").write_text(
+        f"---\n{yaml.safe_dump(plan, sort_keys=False)}---\n# Intake test Plan\n",
+        encoding="utf-8",
+    )
+    rewrite_plan_with_pyyaml_escaped_continuation(project, plan_id)
 
     session_output = run_session_hook(
         project,

@@ -49,7 +49,8 @@ SubAgent-only results; report their actual state and evidence gap instead.
 
 Do not claim complete when:
 
-- authority is not `GOVERNED_ACTIVE`;
+- authority is not current-schema `GOVERNED_ACTIVE` for ordinary work, or is
+  still `PLAN_SCHEMA_REFRESH_REQUIRED` after a legacy refresh slice;
 - verification was skipped, failed, or only adjacent;
 - any must obligation lacks evidence;
 - any must obligation lacks an acceptance anchor;

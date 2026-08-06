@@ -370,11 +370,60 @@ def read_active_plan_bytes(tmp_path: Path) -> bytes:
     return (tmp_path / ".work-governance" / "_Plan" / "PLAN-20260723-001.md").read_bytes()
 
 
+def test_v4_active_plan_is_refresh_required_authority_not_runnable_queue(
+    tmp_path: Path,
+) -> None:
+    """Outdated active Plans are read-only refresh inputs, not runnable authority."""
+    prepare_v4_plan(tmp_path)
+
+    intake = json.loads(
+        run_workctl(tmp_path, "intake", "status", env=STRICT_CONTROLLER_ENV).stdout
+    )
+    authority = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "authority",
+            "check",
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    status = json.loads(
+        run_workctl(tmp_path, "plan", "status", env=STRICT_CONTROLLER_ENV).stdout
+    )
+    full_status = json.loads(
+        run_workctl(tmp_path, "plan", "status", "--full", env=STRICT_CONTROLLER_ENV).stdout
+    )
+
+    assert intake["authority_state"] == "PLAN_SCHEMA_REFRESH_REQUIRED"
+    assert intake["contract_state"] == "PLAN_SCHEMA_REFRESH_REQUIRED"
+    assert intake["intake_state"] == "PLAN_SCHEMA_REFRESH_REQUIRED"
+    assert authority["authority_state"] == "PLAN_SCHEMA_REFRESH_REQUIRED"
+    assert "migrate inspect|apply|recover" in authority["allowed_commands"]
+    assert "task start|block|verify|skip" not in authority["allowed_commands"]
+    assert "plan intake record" not in authority["allowed_commands"]
+    assert status["authority_state"] == "PLAN_SCHEMA_REFRESH_REQUIRED"
+    assert status["contract_state"] == "PLAN_SCHEMA_REFRESH_REQUIRED"
+    assert status["requires_migration"] is True
+    assert status["state_reset"] is True
+    assert status["legacy_state_migrated"] is False
+    assert status["expected_contract_revision"] == 1
+    assert status["legacy_summary"]["authority"] == "NON_AUTHORITY"
+    assert "migrate apply --expected-contract-revision 1" in status["next_suggestion"]
+    assert "ready" not in status
+    assert "current_task" not in status
+    assert full_status["authority_state"] == "PLAN_SCHEMA_REFRESH_REQUIRED"
+    assert full_status["allowed_commands"] == authority["allowed_commands"]
+    assert full_status["tasks"]
+
+
 def test_v4_inspect_and_dry_run_are_read_only_and_repeatable(tmp_path: Path) -> None:
     """Refresh inspection does not rewrite the v4 source and dry-run is stable."""
     prepare_v4_plan(tmp_path)
     before = read_active_plan_bytes(tmp_path)
-    inspect = json.loads(run_workctl(tmp_path, "migrate", "inspect").stdout)
+    inspect = json.loads(
+        run_workctl(tmp_path, "migrate", "inspect", env=STRICT_CONTROLLER_ENV).stdout
+    )
     first = json.loads(
         run_without_receipt(
             tmp_path,
@@ -392,6 +441,7 @@ def test_v4_inspect_and_dry_run_are_read_only_and_repeatable(tmp_path: Path) -> 
         ).stdout
     )
 
+    assert inspect["authority_state"] == "PLAN_SCHEMA_REFRESH_REQUIRED"
     assert inspect["from_schema_version"] == 4
     assert inspect["to_schema_version"] == 5
     assert inspect["requires_migration"] is True
