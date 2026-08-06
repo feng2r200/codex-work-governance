@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 from .model import V5ContractProjection
@@ -22,6 +24,72 @@ REFRESH_NEXT_MODEL_ACTION = (
     "Review legacy_summary and the archived legacy Plan before selecting the "
     "next current-schema task."
 )
+
+
+def _plan_relative_path(
+    *parts: str,
+    governance_dir_name: str = ".work-governance",
+    plan_dir_name: str = "_Plan",
+) -> str:
+    """Return the canonical project-relative Plan path for migration outputs."""
+    return Path(governance_dir_name, plan_dir_name, *parts).as_posix()
+
+
+def archive_path_for_source(
+    migration_id: str,
+    source_path: str,
+    *,
+    governance_dir_name: str = ".work-governance",
+    plan_dir_name: str = "_Plan",
+) -> str:
+    """Return the deterministic archive location for a migration source."""
+    canonical_prefix = (
+        _plan_relative_path(
+            governance_dir_name=governance_dir_name,
+            plan_dir_name=plan_dir_name,
+        )
+        + "/"
+    )
+    if source_path.startswith(canonical_prefix):
+        suffix = source_path.removeprefix(canonical_prefix)
+        return _plan_relative_path(
+            "archive",
+            migration_id,
+            "unmerged",
+            suffix,
+            governance_dir_name=governance_dir_name,
+            plan_dir_name=plan_dir_name,
+        )
+    return _plan_relative_path(
+        "archive",
+        migration_id,
+        "legacy",
+        source_path,
+        governance_dir_name=governance_dir_name,
+        plan_dir_name=plan_dir_name,
+    )
+
+
+def pointer_text(
+    *,
+    source_path: str,
+    canonical_path: str,
+    migration_id: str,
+    archive_path: str,
+    pointer_marker: str,
+) -> str:
+    """Build the non-authoritative pointer that replaces a migrated source."""
+    source_parent = Path(source_path).parent
+    canonical_href = os.path.relpath(canonical_path, start=source_parent).replace(os.sep, "/")
+    archive_href = os.path.relpath(archive_path, start=source_parent).replace(os.sep, "/")
+    return (
+        "# Non-authoritative migration pointer\n\n"
+        "This path no longer controls current or future execution.\n\n"
+        f"- Canonical Plan: [{canonical_path}]({canonical_href})\n"
+        f"- Migration: `{migration_id}`\n"
+        f"- Archived source: [{archive_path}]({archive_href})\n"
+        f"- Marker: `{pointer_marker}`\n"
+    )
 
 
 def _add_unique(values: list[str], seen: set[str], value: object) -> None:

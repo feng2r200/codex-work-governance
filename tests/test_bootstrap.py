@@ -1007,8 +1007,10 @@ def test_sessionstart_ready_when_active_plan_uses_pyyaml_continuation(
     assert "WORK_GOVERNANCE_BOOTSTRAP READY" in context
     assert "ENVIRONMENT_BLOCKED" not in context
     assert status["layout_state"] == "LAYOUT_READY"
-    assert status["plan_authority_state"] == "GOVERNED_ACTIVE"
-    assert status["plan_authority_blocking_reasons"] == []
+    assert status["plan_authority_state"] == "PLAN_SCHEMA_REFRESH_REQUIRED"
+    assert status["plan_authority_blocking_reasons"] == [
+        "active Plan requires current-schema refresh"
+    ]
 
 
 def test_action_four_sessionstart_upgrades_action_three_scope_residual(
