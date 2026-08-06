@@ -1,6 +1,7 @@
 """Testable boundaries for the Work Governance controller."""
 
 from .commands import WORKFLOW_HELP, WORKFLOW_HELP_ALIASES
+from .confirmation import accepted_confirmation, confirmation_from_manifest, manifest_input_path
 from .evidence import (
     append_capture_record,
     canonical_evidence_bytes,
@@ -35,10 +36,12 @@ from .storage import canonical_json_bytes
 __all__ = [
     "WORKFLOW_HELP",
     "WORKFLOW_HELP_ALIASES",
+    "accepted_confirmation",
     "append_capture_record",
     "build_v5_contract",
     "build_v5_state",
     "canonical_evidence_bytes",
+    "confirmation_from_manifest",
     "capture_record_id",
     "evidence_capture_blob_path",
     "evidence_capture_ledger_path",
@@ -46,6 +49,7 @@ __all__ = [
     "evidence_capture_root",
     "find_capture_record_by_idempotency_key",
     "load_capture_records",
+    "manifest_input_path",
     "normalize_capture_task",
     "blocked_task_targets",
     "canonical_json_bytes",
