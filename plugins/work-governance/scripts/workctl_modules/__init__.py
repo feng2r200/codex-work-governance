@@ -28,6 +28,7 @@ from .evidence import (
 from .migration import build_v5_contract, build_v5_state, migration_projection
 from .scheduler import (
     blocked_task_targets,
+    current_advancement_targets,
     next_suggestion,
     ready_task_targets,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "normalize_capture_task",
     "blocked_task_targets",
     "canonical_json_bytes",
+    "current_advancement_targets",
     "next_suggestion",
     "parse_evidence_bytes",
     "persist_capture_blob",

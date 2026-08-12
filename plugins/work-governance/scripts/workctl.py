@@ -40,6 +40,7 @@ try:
     from workctl_modules import blocked_task_targets as MODULE_BLOCKED_TASK_TARGETS
     from workctl_modules import canonical_evidence_bytes as MODULE_CANONICAL_EVIDENCE_BYTES
     from workctl_modules import confirmation as module_confirmation
+    from workctl_modules import current_advancement_targets as MODULE_CURRENT_ADVANCEMENT_TARGETS
     from workctl_modules import evidence as module_evidence
     from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
     from workctl_modules import ready_task_targets as MODULE_READY_TASK_TARGETS
@@ -170,6 +171,7 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     MODULE_WORKFLOW_HELP_ALIASES = None  # type: ignore[assignment,misc]
     MODULE_BLOCKED_TASK_TARGETS = None  # type: ignore[assignment]
     MODULE_CANONICAL_EVIDENCE_BYTES = None  # type: ignore[assignment]
+    MODULE_CURRENT_ADVANCEMENT_TARGETS = None  # type: ignore[assignment]
     MODULE_PARSE_EVIDENCE_BYTES = None  # type: ignore[assignment]
     MODULE_READY_TASK_TARGETS = None  # type: ignore[assignment]
     build_v5_contract = None  # type: ignore[assignment]
@@ -4182,39 +4184,9 @@ def intervention_placeholder(item: Mapping[str, Any]) -> bool:
 
 def current_advancement_targets(frontmatter: Mapping[str, Any]) -> list[str]:
     """Return the smallest dependency-ready target set for intervention projection."""
-    raw_tasks = frontmatter.get("tasks", [])
-    if isinstance(raw_tasks, list):
-        in_progress = [
-            f"task:{task['id']}"
-            for task in raw_tasks
-            if isinstance(task, dict)
-            and isinstance(task.get("id"), str)
-            and task.get("status") == "in_progress"
-        ]
-        if in_progress:
-            return in_progress
-        all_tasks = {
-            str(task["id"]): task
-            for task in raw_tasks
-            if isinstance(task, dict) and isinstance(task.get("id"), str)
-        }
-        for task in raw_tasks:
-            if not isinstance(task, dict) or task.get("status") != "pending":
-                continue
-            dependencies = task.get("depends_on", [])
-            if isinstance(dependencies, list) and all(
-                dependency in all_tasks
-                and all_tasks[dependency].get("status") in VERIFIED_TASK_STATES
-                for dependency in dependencies
-            ):
-                return [f"task:{task['id']}"]
-    delivery = frontmatter.get("delivery", {})
-    if isinstance(delivery, dict) and delivery.get("status") != "complete":
-        return ["delivery"]
-    activation = frontmatter.get("activation", {})
-    if isinstance(activation, dict) and activation.get("status") != "active":
-        return ["activation"]
-    return ["route"]
+    if MODULE_CURRENT_ADVANCEMENT_TARGETS is None:
+        raise WorkctlError("SCHEDULER_MODULE_UNAVAILABLE: current_advancement_targets")
+    return MODULE_CURRENT_ADVANCEMENT_TARGETS(frontmatter, VERIFIED_TASK_STATES)
 
 
 def scheduler_state_path(root: Path, plan_id: str) -> Path:

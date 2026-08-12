@@ -10037,6 +10037,32 @@ def test_future_authority_gate_is_information_until_its_target_is_current(
     assert status["user_intervention"]["state"] == "NOT_REQUIRED"
 
 
+def test_current_advancement_targets_wrapper_delegates_to_scheduler_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The single-file controller wrapper delegates current-target selection to scheduler."""
+    namespace = runpy.run_path(str(SCRIPT), run_name="workctl_advancement_fixture")
+    calls: list[tuple[object, object]] = []
+
+    def fake_current_targets(frontmatter: object, verified_states: object) -> list[str]:
+        """Record wrapper inputs and return a sentinel scheduler result."""
+        calls.append((frontmatter, verified_states))
+        return ["task:T-SENTINEL"]
+
+    wrapper = namespace["current_advancement_targets"]
+    monkeypatch.setitem(
+        wrapper.__globals__,
+        "MODULE_CURRENT_ADVANCEMENT_TARGETS",
+        fake_current_targets,
+    )
+    frontmatter: dict[str, object] = {"delivery": {"status": "pending"}}
+
+    payload = wrapper(frontmatter)
+
+    assert payload == ["task:T-SENTINEL"]
+    assert calls == [(frontmatter, namespace["VERIFIED_TASK_STATES"])]
+
+
 def test_schema_v4_admission_rejects_unclassified_pending_gate(tmp_path: Path) -> None:
     """New authority cannot introduce a generic pending continuation gate."""
     frontmatter = schema_v4_admission_plan("PLAN-20260731-105")
