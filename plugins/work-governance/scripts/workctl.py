@@ -45,6 +45,12 @@ try:
     from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
     from workctl_modules import ready_task_targets as MODULE_READY_TASK_TARGETS
     from workctl_modules import yaml_compat as yaml
+    from workctl_modules.authority import (
+        candidate_to_dict as module_candidate_to_dict,
+    )
+    from workctl_modules.authority import (
+        parse_candidate_specs as module_parse_candidate_specs,
+    )
     from workctl_modules.history import (
         PlanHistoryError as ModulePlanHistoryError,
     )
@@ -175,6 +181,8 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     )
     canonical_event_bytes = None  # type: ignore[assignment]
     module_action_reversibility = None  # type: ignore[assignment]
+    module_candidate_to_dict = None  # type: ignore[assignment]
+    module_parse_candidate_specs = None  # type: ignore[assignment]
     module_risk_factors_for_action = None  # type: ignore[assignment]
     module_risk_inspection_payload = None  # type: ignore[assignment]
     module_confirmation = None  # type: ignore[assignment]
@@ -18743,31 +18751,19 @@ def cmd_log_append(args: argparse.Namespace) -> None:
 
 def candidate_to_dict(candidate: AuthorityCandidate) -> dict[str, Any]:
     """Convert a candidate into stable JSON output."""
-    return {
-        "path": candidate.path,
-        "classification": candidate.classification,
-        "origin": candidate.origin,
-        "signals": candidate.signals,
-        "sha256": candidate.sha256,
-        "plan_id": candidate.plan_id,
-        "revision": candidate.revision,
-        "status": candidate.status,
-    }
+    if module_candidate_to_dict is None:
+        raise WorkctlError("AUTHORITY_MODULE_UNAVAILABLE: candidate_to_dict")
+    return cast(dict[str, Any], module_candidate_to_dict(candidate))
 
 
 def parse_candidate_specs(values: list[str]) -> dict[str, str]:
     """Parse repeatable ``PATH=CLASSIFICATION`` semantic inputs."""
-    result: dict[str, str] = {}
-    for value in values:
-        if "=" not in value:
-            raise WorkctlError("INVALID_CANDIDATE: expected PATH=CLASSIFICATION")
-        path, classification = value.rsplit("=", 1)
-        if classification not in AUTHORITY_CLASSIFICATIONS:
-            raise WorkctlError(f"INVALID_AUTHORITY_CLASSIFICATION: {classification}")
-        if path in result and result[path] != classification:
-            raise WorkctlError(f"CONFLICTING_CANDIDATE_CLASSIFICATION: {path}")
-        result[path] = classification
-    return result
+    if module_parse_candidate_specs is None:
+        raise WorkctlError("AUTHORITY_MODULE_UNAVAILABLE: parse_candidate_specs")
+    try:
+        return module_parse_candidate_specs(values, AUTHORITY_CLASSIFICATIONS)
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def cmd_plan_authority_inspect(args: argparse.Namespace) -> None:
