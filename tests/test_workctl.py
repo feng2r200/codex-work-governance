@@ -10063,6 +10063,77 @@ def test_current_advancement_targets_wrapper_delegates_to_scheduler_module(
     assert calls == [(frontmatter, namespace["VERIFIED_TASK_STATES"])]
 
 
+def test_scheduler_state_wrappers_delegate_to_scheduler_module(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Scheduler state wrappers preserve controller-owned paths and error translation."""
+    namespace = runpy.run_path(str(SCRIPT), run_name="workctl_scheduler_state_fixture")
+    path_calls: list[tuple[Path, str, str, object]] = []
+    load_calls: list[tuple[Path, str, str, object]] = []
+    dump_calls: list[object] = []
+
+    def fake_state_path(
+        root: Path,
+        plan_id: str,
+        governance_dir_name: str,
+        reject_symlink_components: object,
+    ) -> Path:
+        path_calls.append((root, plan_id, governance_dir_name, reject_symlink_components))
+        return root / "scheduler-state.json"
+
+    def fake_load_state(
+        root: Path,
+        plan_id: str,
+        governance_dir_name: str,
+        reject_symlink_components: object,
+    ) -> dict[str, object]:
+        load_calls.append((root, plan_id, governance_dir_name, reject_symlink_components))
+        return {"schema_version": 1, "plan_id": plan_id, "state_sequence": 0, "priorities": {}}
+
+    def fake_dump_state(state: object) -> str:
+        dump_calls.append(state)
+        return "SERIALIZED\n"
+
+    path_wrapper = namespace["scheduler_state_path"]
+    load_wrapper = namespace["load_scheduler_state"]
+    dump_wrapper = namespace["dump_scheduler_state"]
+    monkeypatch.setitem(path_wrapper.__globals__, "MODULE_SCHEDULER_STATE_PATH", fake_state_path)
+    monkeypatch.setitem(load_wrapper.__globals__, "MODULE_LOAD_SCHEDULER_STATE", fake_load_state)
+    monkeypatch.setitem(dump_wrapper.__globals__, "MODULE_DUMP_SCHEDULER_STATE", fake_dump_state)
+
+    assert path_wrapper(tmp_path, "PLAN-20260806-001") == tmp_path / "scheduler-state.json"
+    assert load_wrapper(tmp_path, "PLAN-20260806-001") == {
+        "schema_version": 1,
+        "plan_id": "PLAN-20260806-001",
+        "state_sequence": 0,
+        "priorities": {},
+    }
+    assert dump_wrapper({"state_sequence": 0}) == "SERIALIZED\n"
+    assert path_calls == [
+        (
+            tmp_path,
+            "PLAN-20260806-001",
+            namespace["GOVERNANCE_DIR_NAME"],
+            namespace["reject_symlink_components"],
+        )
+    ]
+    assert load_calls == path_calls
+    assert dump_calls == [{"state_sequence": 0}]
+
+    def broken_load_state(
+        _root: Path,
+        _plan_id: str,
+        _governance_dir_name: str,
+        _reject_symlink_components: object,
+    ) -> dict[str, object]:
+        raise namespace["ModuleSchedulerStateError"]("bad state")
+
+    monkeypatch.setitem(load_wrapper.__globals__, "MODULE_LOAD_SCHEDULER_STATE", broken_load_state)
+    with pytest.raises(namespace["WorkctlError"], match="SCHEDULER_STATE_INVALID"):
+        load_wrapper(tmp_path, "PLAN-20260806-001")
+
+
 def test_schema_v4_admission_rejects_unclassified_pending_gate(tmp_path: Path) -> None:
     """New authority cannot introduce a generic pending continuation gate."""
     frontmatter = schema_v4_admission_plan("PLAN-20260731-105")

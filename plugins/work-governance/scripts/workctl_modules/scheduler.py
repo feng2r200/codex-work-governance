@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence, Set
+import json
+from collections.abc import Callable, Mapping, Sequence, Set
+from pathlib import Path
+from typing import cast
 
 from .model import TaskProjection
+
+RejectSymlinkComponents = Callable[[Path, Path], None]
+
+
+class SchedulerStateError(ValueError):
+    """Raised when ignored runtime scheduler state is malformed."""
 
 
 def _task_map(tasks: Sequence[TaskProjection]) -> dict[str, TaskProjection]:
@@ -42,6 +51,66 @@ def ready_task_targets(
 def blocked_task_targets(tasks: Sequence[TaskProjection]) -> list[str]:
     """Return tasks explicitly blocked by execution state."""
     return [f"task:{task.task_id}" for task in tasks if task.status == "blocked"]
+
+
+def scheduler_state_path(
+    root: Path,
+    plan_id: str,
+    governance_dir_name: str,
+    reject_symlink_components: RejectSymlinkComponents,
+) -> Path:
+    """Return the ignored runtime scheduler state path for one active Plan."""
+    scheduler_dir = root / governance_dir_name / "runtime" / "scheduler"
+    reject_symlink_components(root, scheduler_dir)
+    return scheduler_dir / f"{plan_id}.json"
+
+
+def default_scheduler_state(plan_id: str) -> dict[str, object]:
+    """Return the empty schema-v4 runtime scheduler state for one Plan."""
+    return {"schema_version": 1, "plan_id": plan_id, "state_sequence": 0, "priorities": {}}
+
+
+def validate_scheduler_state_payload(payload: object, plan_id: str) -> dict[str, object]:
+    """Validate a decoded scheduler state payload before the controller trusts it."""
+    if not isinstance(payload, dict):
+        raise SchedulerStateError("SCHEDULER_STATE_INVALID")
+    priorities = payload.get("priorities", {})
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("plan_id") != plan_id
+        or type(payload.get("state_sequence")) is not int
+        or payload["state_sequence"] < 0
+        or not isinstance(priorities, dict)
+        or any(
+            not isinstance(key, str) or type(value) is not int for key, value in priorities.items()
+        )
+    ):
+        raise SchedulerStateError("SCHEDULER_STATE_INVALID")
+    return cast(dict[str, object], payload)
+
+
+def load_scheduler_state(
+    root: Path,
+    plan_id: str,
+    governance_dir_name: str,
+    reject_symlink_components: RejectSymlinkComponents,
+) -> dict[str, object]:
+    """Load a bounded scheduler snapshot without changing the Plan contract."""
+    path = scheduler_state_path(root, plan_id, governance_dir_name, reject_symlink_components)
+    if not path.exists():
+        return default_scheduler_state(plan_id)
+    if path.is_symlink() or not path.is_file():
+        raise SchedulerStateError("SCHEDULER_STATE_INVALID")
+    try:
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SchedulerStateError("SCHEDULER_STATE_INVALID") from exc
+    return validate_scheduler_state_payload(payload, plan_id)
+
+
+def dump_scheduler_state(state: Mapping[str, object]) -> str:
+    """Serialize scheduler state with stable formatting for atomic persistence."""
+    return json.dumps(state, indent=2, sort_keys=True) + "\n"
 
 
 def current_advancement_targets(
