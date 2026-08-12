@@ -635,6 +635,35 @@ def test_current_schema_refresh_archives_legacy_and_rebuilds_fresh_state(
     assert "Legacy runtime state was not migrated" in refreshed_body
 
 
+def test_current_schema_refresh_reports_archive_problem_statuses(
+    tmp_path: Path,
+) -> None:
+    """Refresh status reports archive file problems at the real CLI boundary."""
+    prepare_v4_plan(tmp_path)
+    run_workctl(tmp_path, "migrate", "apply", "--expected-contract-revision", "1")
+    frontmatter, _body = read_plan(tmp_path)
+    archive_path = tmp_path / frontmatter["legacy_archive"]["path"]
+    archive_bytes = archive_path.read_bytes()
+
+    archive_path.unlink()
+    missing = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    assert missing["legacy_refresh"]["archive_status"] == "missing"
+
+    archive_path.write_bytes(b"tampered archive bytes")
+    mismatch = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    assert mismatch["legacy_refresh"]["archive_status"] == "sha256_mismatch"
+    assert mismatch["legacy_refresh"]["actual_archive_sha256"] == sha256_path(archive_path)
+
+    archive_path.write_bytes(archive_bytes)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-archive.md"
+    outside.write_text("# Outside archive\n", encoding="utf-8")
+    archive_path.unlink()
+    archive_path.symlink_to(outside)
+    unreadable = json.loads(run_workctl(tmp_path, "plan", "status").stdout)
+    assert unreadable["legacy_refresh"]["archive_status"] == "unreadable"
+    assert "archive_error" in unreadable["legacy_refresh"]
+
+
 def test_goal_gate_truth_and_review_public_views(tmp_path: Path) -> None:
     """Top-level public views expose current governance state without mutation."""
     prepare_v4_plan(tmp_path)

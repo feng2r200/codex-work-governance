@@ -91,6 +91,12 @@ try:
         completion_claims as module_completion_claims,
     )
     from workctl_modules.status import (
+        current_schema_refresh_status as module_current_schema_refresh_status,
+    )
+    from workctl_modules.status import (
+        legacy_refresh_projection as module_legacy_refresh_projection,
+    )
+    from workctl_modules.status import (
         queue_projection as module_queue_projection,
     )
     from workctl_modules.storage import canonical_event_bytes, redacted_copy
@@ -194,6 +200,8 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     module_risk_inspection_payload = None  # type: ignore[assignment]
     module_compact_plan_status = None  # type: ignore[assignment]
     module_completion_claims = None  # type: ignore[assignment]
+    module_current_schema_refresh_status = None  # type: ignore[assignment]
+    module_legacy_refresh_projection = None  # type: ignore[assignment]
     module_queue_projection = None  # type: ignore[assignment]
     module_confirmation = None  # type: ignore[assignment]
     module_evidence = None  # type: ignore[assignment]
@@ -4732,46 +4740,37 @@ def legacy_refresh_projection(
     frontmatter: Mapping[str, Any],
 ) -> dict[str, Any] | None:
     """Project archive-backed refresh guidance for a rebuilt current-schema Plan."""
-    archive = frontmatter.get("legacy_archive")
-    if not isinstance(archive, dict):
-        return None
-    archive_path = archive.get("path")
-    projection: dict[str, Any] = {
-        "from_schema_version": archive.get("from_schema_version"),
-        "archive_path": archive_path,
-        "archive_sha256": archive.get("sha256"),
-        "migration_mode": archive.get("mode", "archive_legacy_and_rebuild_current_plan"),
-        "runtime_state": archive.get("runtime_state", "fresh"),
-        "state_reset": True,
-        "legacy_state_migrated": False,
-        "not_migrated": list(archive.get("not_migrated", REFRESH_NOT_MIGRATED))
-        if isinstance(archive.get("not_migrated"), list)
-        else list(REFRESH_NOT_MIGRATED),
-        "next_model_action": archive.get("next_model_action", REFRESH_NEXT_MODEL_ACTION),
-        "archive_status": "not_checked",
-    }
-    if not isinstance(archive_path, str) or not archive_path:
-        projection["archive_status"] = "missing_path"
-        return projection
-    try:
-        archive_file = checked_project_path(root, archive_path)
-        reject_symlink_components(root, archive_file)
-        if not archive_file.is_file():
-            projection["archive_status"] = "missing"
-            return projection
-        expected_sha256 = archive.get("sha256")
-        actual_sha256 = sha256_file(archive_file)
-        if isinstance(expected_sha256, str) and expected_sha256 != actual_sha256:
-            projection["archive_status"] = "sha256_mismatch"
-            projection["actual_archive_sha256"] = actual_sha256
-            return projection
-        projection["archive_status"] = "readable"
-        if callable(legacy_plan_summary):
-            projection["legacy_summary"] = legacy_plan_summary(load_plan(archive_file).frontmatter)
-    except WorkctlError as exc:
-        projection["archive_status"] = "unreadable"
-        projection["archive_error"] = str(exc)
-    return projection
+    if module_legacy_refresh_projection is None:
+        raise WorkctlError("STATUS_MODULE_UNAVAILABLE: legacy_refresh_projection")
+
+    def archive_status(archive_path: str, expected_sha256: object) -> Mapping[str, object]:
+        try:
+            archive_file = checked_project_path(root, archive_path)
+            reject_symlink_components(root, archive_file)
+            if not archive_file.is_file():
+                return {"archive_status": "missing"}
+            actual_sha256 = sha256_file(archive_file)
+            if isinstance(expected_sha256, str) and expected_sha256 != actual_sha256:
+                return {
+                    "archive_status": "sha256_mismatch",
+                    "actual_archive_sha256": actual_sha256,
+                }
+            payload: dict[str, object] = {"archive_status": "readable"}
+            if callable(legacy_plan_summary):
+                payload["legacy_summary"] = legacy_plan_summary(
+                    load_plan(archive_file).frontmatter
+                )
+            return payload
+        except WorkctlError as exc:
+            return {"archive_status": "unreadable", "archive_error": str(exc)}
+
+    return cast(
+        dict[str, Any] | None,
+        module_legacy_refresh_projection(
+            frontmatter,
+            archive_status_projection=archive_status,
+        ),
+    )
 
 
 def current_schema_refresh_status(
@@ -4782,41 +4781,33 @@ def current_schema_refresh_status(
     full: bool,
 ) -> dict[str, Any]:
     """Build a status view for an outdated active Plan without scheduling tasks."""
-    projection: dict[str, Any] = (
-        dict(migration_projection(frontmatter)) if callable(migration_projection) else {}
-    )
-    contract = frontmatter.get("contract")
-    expected_revision = (
-        contract.get("revision")
-        if isinstance(contract, dict)
-        else frontmatter.get("revision")
-    )
-    payload: dict[str, Any] = {
-        "authority_state": report.state,
-        "blocking_reasons": report.blockers,
-        "contract_state": contract_state(dict(frontmatter)),
-        "current_schema_version": CURRENT_PLAN_SCHEMA_VERSION,
-        "expected_contract_revision": expected_revision,
-        "plan_id": frontmatter.get("plan_id"),
-        "schema_version": frontmatter.get("schema_version"),
-        "status": frontmatter.get("status"),
-        "next_suggestion": (
-            "Run migrate inspect and migrate apply --expected-contract-revision "
-            f"{expected_revision}."
-            if isinstance(expected_revision, int)
-            else "Run migrate inspect before rebuilding the active Plan."
+    if module_current_schema_refresh_status is None:
+        raise WorkctlError("STATUS_MODULE_UNAVAILABLE: current_schema_refresh_status")
+    if not callable(migration_projection):
+        raise WorkctlError("MIGRATION_MODULE_UNAVAILABLE: migration_projection")
+
+    def refresh_projection(document: Mapping[str, object]) -> Mapping[str, object]:
+        return migration_projection(cast(Mapping[str, Any], document))
+
+    def current_contract_state(document: Mapping[str, object]) -> str:
+        return contract_state(dict(document))
+
+    return cast(
+        dict[str, Any],
+        module_current_schema_refresh_status(
+            frontmatter,
+            authority_state=report.state,
+            blocking_reasons=report.blockers,
+            current_schema_version=CURRENT_PLAN_SCHEMA_VERSION,
+            migration_projection=refresh_projection,
+            contract_state=current_contract_state,
+            full=full,
+            authority_candidates=(
+                [candidate_to_dict(item) for item in report.candidates] if full else ()
+            ),
+            allowed_commands=report.allowed_commands if full else (),
         ),
-    }
-    payload.update(projection)
-    if full:
-        payload["authority_candidates"] = [
-            candidate_to_dict(item) for item in report.candidates
-        ]
-        payload["allowed_commands"] = report.allowed_commands
-        payload["goal"] = frontmatter.get("goal", {})
-        payload["tasks"] = frontmatter.get("tasks", [])
-        payload["confirmations"] = frontmatter.get("confirmations", {})
-    return payload
+    )
 
 
 def compact_plan_status(

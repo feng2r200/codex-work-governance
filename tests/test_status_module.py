@@ -13,6 +13,8 @@ if str(SCRIPT_ROOT) not in sys.path:
 status_module = importlib.import_module("workctl_modules.status")
 compact_plan_status = status_module.compact_plan_status
 completion_claims = status_module.completion_claims
+current_schema_refresh_status = status_module.current_schema_refresh_status
+legacy_refresh_projection = status_module.legacy_refresh_projection
 queue_projection = status_module.queue_projection
 
 
@@ -57,6 +59,25 @@ def confirmations_by_id(
             if isinstance(item, Mapping) and isinstance(item.get("id"), str):
                 result[str(item["id"])] = item
     return result
+
+
+def refresh_projection(frontmatter: Mapping[str, object]) -> Mapping[str, object]:
+    """Return a representative read-only migration projection."""
+    return {
+        "from_schema_version": frontmatter.get("schema_version"),
+        "to_schema_version": 5,
+        "requires_migration": True,
+        "migration_mode": "archive_legacy_and_rebuild_current_plan",
+        "state_reset": True,
+        "legacy_state_migrated": False,
+        "legacy_summary": {"authority": "NON_AUTHORITY"},
+        "not_migrated": ["task.status"],
+    }
+
+
+def refresh_contract_state(_frontmatter: Mapping[str, object]) -> str:
+    """Return the current-schema refresh contract state."""
+    return "PLAN_SCHEMA_REFRESH_REQUIRED"
 
 
 def test_compact_plan_status_preserves_default_payload_shape() -> None:
@@ -307,3 +328,159 @@ def test_completion_claims_preserves_malformed_activation_confirmation_id() -> N
 
     assert payload["activation_authorized"] is False
     assert payload["activation_confirmation_id"] == 123
+
+
+def test_legacy_refresh_projection_reads_archive_status() -> None:
+    """Archive-backed refresh guidance merges controller archive probe evidence."""
+
+    def archive_status(archive_path: str, expected_sha256: object) -> Mapping[str, object]:
+        assert archive_path == ".work-governance/_Plan/.archive/PLAN-OLD.md"
+        assert expected_sha256 == "a" * 64
+        return {
+            "archive_status": "readable",
+            "legacy_summary": {"plan_status": "active"},
+        }
+
+    payload = legacy_refresh_projection(
+        {
+            "legacy_archive": {
+                "path": ".work-governance/_Plan/.archive/PLAN-OLD.md",
+                "sha256": "a" * 64,
+                "from_schema_version": 4,
+            }
+        },
+        archive_status_projection=archive_status,
+    )
+
+    assert payload == {
+        "archive_path": ".work-governance/_Plan/.archive/PLAN-OLD.md",
+        "archive_sha256": "a" * 64,
+        "archive_status": "readable",
+        "from_schema_version": 4,
+        "legacy_state_migrated": False,
+        "legacy_summary": {"plan_status": "active"},
+        "migration_mode": "archive_legacy_and_rebuild_current_plan",
+        "next_model_action": (
+            "Review legacy_summary and the archived legacy Plan before selecting the "
+            "next current-schema task."
+        ),
+        "not_migrated": [
+            "task.status",
+            "task.note",
+            "task.evidence",
+            "confirmations",
+            "runtime_state",
+            "current_task",
+            "revision_history",
+        ],
+        "runtime_state": "fresh",
+        "state_reset": True,
+    }
+
+
+def test_legacy_refresh_projection_handles_missing_archive_path_without_probe() -> None:
+    """Missing archive path is reported without invoking archive file probes."""
+
+    def archive_status(_archive_path: str, _expected_sha256: object) -> Mapping[str, object]:
+        raise AssertionError("archive probe should not run without a path")
+
+    payload = legacy_refresh_projection(
+        {"legacy_archive": {"from_schema_version": 4}},
+        archive_status_projection=archive_status,
+    )
+
+    assert payload is not None
+    assert payload["archive_status"] == "missing_path"
+    assert payload["archive_path"] is None
+
+
+def test_legacy_refresh_projection_propagates_archive_problem_statuses() -> None:
+    """Archive probe results are preserved in the legacy refresh projection."""
+    cases = [
+        {"archive_status": "missing"},
+        {"archive_status": "sha256_mismatch", "actual_archive_sha256": "b" * 64},
+        {"archive_status": "unreadable", "archive_error": "PATH_ESCAPES_PROJECT"},
+    ]
+
+    for archive_result in cases:
+
+        def archive_status(
+            _archive_path: str,
+            _expected_sha256: object,
+            result: Mapping[str, object] = archive_result,
+        ) -> Mapping[str, object]:
+            return result
+
+        payload = legacy_refresh_projection(
+            {
+                "legacy_archive": {
+                    "path": ".work-governance/_Plan/.archive/PLAN-OLD.md",
+                    "sha256": "a" * 64,
+                }
+            },
+            archive_status_projection=archive_status,
+        )
+
+        assert payload is not None
+        for key, value in archive_result.items():
+            assert payload[key] == value
+
+
+def test_current_schema_refresh_status_keeps_queue_fields_out_of_default_view() -> None:
+    """Outdated active Plan status is read-only refresh guidance, not a runnable queue."""
+    payload = current_schema_refresh_status(
+        {
+            "plan_id": "PLAN-20260806-001",
+            "schema_version": 4,
+            "status": "active",
+            "contract": {"revision": 3},
+            "tasks": [{"id": "T-001", "status": "verified"}],
+        },
+        authority_state="PLAN_SCHEMA_REFRESH_REQUIRED",
+        blocking_reasons=["active Plan requires current-schema refresh"],
+        current_schema_version=5,
+        migration_projection=refresh_projection,
+        contract_state=refresh_contract_state,
+        full=False,
+    )
+
+    assert payload["authority_state"] == "PLAN_SCHEMA_REFRESH_REQUIRED"
+    assert payload["blocking_reasons"] == ["active Plan requires current-schema refresh"]
+    assert payload["contract_state"] == "PLAN_SCHEMA_REFRESH_REQUIRED"
+    assert payload["current_schema_version"] == 5
+    assert payload["expected_contract_revision"] == 3
+    assert payload["legacy_summary"] == {"authority": "NON_AUTHORITY"}
+    assert payload["requires_migration"] is True
+    assert "migrate apply --expected-contract-revision 3" in str(payload["next_suggestion"])
+    assert "ready" not in payload
+    assert "current_task" not in payload
+
+
+def test_current_schema_refresh_status_full_view_adds_authority_details() -> None:
+    """Full refresh status adds authority details without scheduling tasks."""
+    payload = current_schema_refresh_status(
+        {
+            "plan_id": "PLAN-20260806-001",
+            "schema_version": 4,
+            "status": "active",
+            "revision": 7,
+            "goal": {"statement": "Reduce friction."},
+            "tasks": [{"id": "T-001"}],
+            "confirmations": {"required": []},
+        },
+        authority_state="PLAN_SCHEMA_REFRESH_REQUIRED",
+        blocking_reasons=[],
+        current_schema_version=5,
+        migration_projection=refresh_projection,
+        contract_state=refresh_contract_state,
+        full=True,
+        authority_candidates=[{"plan_id": "PLAN-20260806-001"}],
+        allowed_commands=["migrate inspect|apply|recover"],
+    )
+
+    assert payload["authority_candidates"] == [{"plan_id": "PLAN-20260806-001"}]
+    assert payload["allowed_commands"] == ["migrate inspect|apply|recover"]
+    assert payload["expected_contract_revision"] == 7
+    assert payload["goal"] == {"statement": "Reduce friction."}
+    assert payload["tasks"] == [{"id": "T-001"}]
+    assert payload["confirmations"] == {"required": []}
