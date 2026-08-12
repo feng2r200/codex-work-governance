@@ -41,7 +41,6 @@ try:
     from workctl_modules import canonical_evidence_bytes as MODULE_CANONICAL_EVIDENCE_BYTES
     from workctl_modules import confirmation as module_confirmation
     from workctl_modules import evidence as module_evidence
-    from workctl_modules import next_suggestion as MODULE_NEXT_SUGGESTION
     from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
     from workctl_modules import ready_task_targets as MODULE_READY_TASK_TARGETS
     from workctl_modules import yaml_compat as yaml
@@ -84,6 +83,9 @@ try:
     )
     from workctl_modules.risk import (
         risk_inspection_payload as module_risk_inspection_payload,
+    )
+    from workctl_modules.status import (
+        compact_plan_status as module_compact_plan_status,
     )
     from workctl_modules.storage import canonical_event_bytes, redacted_copy
     from workctl_modules.workflow_contract import (
@@ -153,7 +155,6 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     MODULE_WORKFLOW_HELP_ALIASES = None  # type: ignore[assignment,misc]
     MODULE_BLOCKED_TASK_TARGETS = None  # type: ignore[assignment]
     MODULE_CANONICAL_EVIDENCE_BYTES = None  # type: ignore[assignment]
-    MODULE_NEXT_SUGGESTION = None  # type: ignore[assignment]
     MODULE_PARSE_EVIDENCE_BYTES = None  # type: ignore[assignment]
     MODULE_READY_TASK_TARGETS = None  # type: ignore[assignment]
     build_v5_contract = None  # type: ignore[assignment]
@@ -185,6 +186,7 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     module_parse_candidate_specs = None  # type: ignore[assignment]
     module_risk_factors_for_action = None  # type: ignore[assignment]
     module_risk_inspection_payload = None  # type: ignore[assignment]
+    module_compact_plan_status = None  # type: ignore[assignment]
     module_confirmation = None  # type: ignore[assignment]
     module_evidence = None  # type: ignore[assignment]
     redacted_copy = None  # type: ignore[assignment]
@@ -4816,60 +4818,35 @@ def compact_plan_status(
     scheduler: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the bounded default status view without revision history."""
-    raw_tasks = frontmatter.get("tasks", [])
-    tasks = raw_tasks if isinstance(raw_tasks, list) else []
-    current = [
-        f"task:{task['id']}"
-        for task in tasks
-        if isinstance(task, dict)
-        and isinstance(task.get("id"), str)
-        and task.get("status") == "in_progress"
-    ]
-    priorities = scheduler.get("priorities", {}) if isinstance(scheduler, Mapping) else None
-    blocked_details = task_blocking_details(root, frontmatter)
-    blocked = [str(item["task"]) for item in blocked_details]
-    blocked_set = set(blocked)
-    ready = [
-        target
-        for target in ready_task_targets(frontmatter, cast(Mapping[str, int], priorities or {}))
-        if target not in blocked_set
-    ]
-    current_task = current[0] if current else (ready[0] if ready else None)
-    confirmation_gates = pending_confirmation_ids(frontmatter)
-    if MODULE_NEXT_SUGGESTION is not None:
-        next_suggestion = MODULE_NEXT_SUGGESTION(
-            current[0] if current else None,
-            ready,
-            blocked,
-            confirmation_gates,
-        )
-    elif current and current[0] in blocked_set:
-        next_suggestion = f"Resolve blockers for {current[0]} before advancing."
-    elif current:
-        next_suggestion = f"Continue {current[0]}"
-    elif ready:
-        next_suggestion = f"Start {ready[0]}"
-    elif confirmation_gates:
-        next_suggestion = "Resolve the pending confirmation gate."
-    elif blocked:
-        next_suggestion = "Resolve a blocked task before advancing."
-    else:
-        next_suggestion = "Inspect the route handoff for the next governed action."
-    payload = {
-        "plan_id": frontmatter.get("plan_id"),
-        "goal": frontmatter.get("goal", {}),
-        "current_task": current_task,
-        "ready": ready,
-        "blocked": blocked,
-        "blocked_details": blocked_details,
-        "parallel_ready": ready,
-        "confirmation_gates": confirmation_gates,
-        "next_suggestion": next_suggestion,
-    }
-    legacy_refresh = legacy_refresh_projection(root, frontmatter)
-    if legacy_refresh is not None:
-        payload["legacy_refresh"] = legacy_refresh
-    return payload
+    if module_compact_plan_status is None:
+        raise WorkctlError("STATUS_MODULE_UNAVAILABLE: compact_plan_status")
+
+    def ready_targets(
+        document: Mapping[str, object],
+        priorities: Mapping[str, int],
+    ) -> Sequence[str]:
+        return ready_task_targets(cast(Mapping[str, Any], document), priorities)
+
+    def blocking_details(document: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
+        return task_blocking_details(root, cast(Mapping[str, Any], document))
+
+    def confirmations(document: Mapping[str, object]) -> Sequence[str]:
+        return pending_confirmation_ids(cast(Mapping[str, Any], document))
+
+    def refresh_projection(document: Mapping[str, object]) -> Mapping[str, object] | None:
+        return legacy_refresh_projection(root, cast(Mapping[str, Any], document))
+
+    return cast(
+        dict[str, Any],
+        module_compact_plan_status(
+            frontmatter,
+            scheduler=scheduler,
+            ready_task_targets=ready_targets,
+            task_blocking_details=blocking_details,
+            pending_confirmation_ids=confirmations,
+            legacy_refresh_projection=refresh_projection,
+        ),
+    )
 
 
 def user_intervention_projection(frontmatter: Mapping[str, Any]) -> dict[str, Any]:
