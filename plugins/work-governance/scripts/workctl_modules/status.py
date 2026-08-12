@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence, Set
 
+from .migration import REFRESH_NEXT_MODEL_ACTION, REFRESH_NOT_MIGRATED
 from .scheduler import next_suggestion as default_next_suggestion
 
 StatusDocument = Mapping[str, object]
@@ -15,6 +16,9 @@ LegacyRefreshProjection = Callable[[StatusDocument], Mapping[str, object] | None
 NextSuggestion = Callable[[str | None, Sequence[str], Sequence[str], Sequence[str]], str]
 IncompleteEntryIds = Callable[[StatusDocument, str], Sequence[str]]
 ConfirmationsById = Callable[[StatusDocument], Mapping[str, Mapping[str, object]]]
+ArchiveStatusProjection = Callable[[str, object], Mapping[str, object]]
+MigrationStatusProjection = Callable[[StatusDocument], Mapping[str, object]]
+ContractStateProjection = Callable[[StatusDocument], str]
 
 VERIFIED_TASK_STATES: Set[str] = frozenset({"verified", "skipped"})
 
@@ -58,6 +62,84 @@ def _confirmed(
         and confirmation.get("status") == "accepted"
         and confirmation.get("ref")
     )
+
+
+def legacy_refresh_projection(
+    frontmatter: StatusDocument,
+    *,
+    archive_status_projection: ArchiveStatusProjection,
+) -> dict[str, object] | None:
+    """Project archive-backed refresh guidance for a rebuilt current-schema Plan."""
+    archive = frontmatter.get("legacy_archive")
+    if not isinstance(archive, Mapping):
+        return None
+    archive_path = archive.get("path")
+    not_migrated = archive.get("not_migrated", REFRESH_NOT_MIGRATED)
+    projection: dict[str, object] = {
+        "from_schema_version": archive.get("from_schema_version"),
+        "archive_path": archive_path,
+        "archive_sha256": archive.get("sha256"),
+        "migration_mode": archive.get("mode", "archive_legacy_and_rebuild_current_plan"),
+        "runtime_state": archive.get("runtime_state", "fresh"),
+        "state_reset": True,
+        "legacy_state_migrated": False,
+        "not_migrated": list(not_migrated)
+        if isinstance(not_migrated, list)
+        else list(REFRESH_NOT_MIGRATED),
+        "next_model_action": archive.get("next_model_action", REFRESH_NEXT_MODEL_ACTION),
+        "archive_status": "not_checked",
+    }
+    if not isinstance(archive_path, str) or not archive_path:
+        projection["archive_status"] = "missing_path"
+        return projection
+    projection.update(archive_status_projection(archive_path, archive.get("sha256")))
+    return projection
+
+
+def current_schema_refresh_status(
+    frontmatter: StatusDocument,
+    *,
+    authority_state: str,
+    blocking_reasons: Sequence[str],
+    current_schema_version: int,
+    migration_projection: MigrationStatusProjection,
+    contract_state: ContractStateProjection,
+    full: bool,
+    authority_candidates: Sequence[Mapping[str, object]] = (),
+    allowed_commands: Sequence[str] = (),
+) -> dict[str, object]:
+    """Build a status view for an outdated active Plan without scheduling tasks."""
+    projection = dict(migration_projection(frontmatter))
+    contract = frontmatter.get("contract")
+    expected_revision = (
+        contract.get("revision")
+        if isinstance(contract, Mapping)
+        else frontmatter.get("revision")
+    )
+    payload: dict[str, object] = {
+        "authority_state": authority_state,
+        "blocking_reasons": list(blocking_reasons),
+        "contract_state": contract_state(frontmatter),
+        "current_schema_version": current_schema_version,
+        "expected_contract_revision": expected_revision,
+        "plan_id": frontmatter.get("plan_id"),
+        "schema_version": frontmatter.get("schema_version"),
+        "status": frontmatter.get("status"),
+        "next_suggestion": (
+            "Run migrate inspect and migrate apply --expected-contract-revision "
+            f"{expected_revision}."
+            if isinstance(expected_revision, int)
+            else "Run migrate inspect before rebuilding the active Plan."
+        ),
+    }
+    payload.update(projection)
+    if full:
+        payload["authority_candidates"] = list(authority_candidates)
+        payload["allowed_commands"] = list(allowed_commands)
+        payload["goal"] = frontmatter.get("goal", {})
+        payload["tasks"] = frontmatter.get("tasks", [])
+        payload["confirmations"] = frontmatter.get("confirmations", {})
+    return payload
 
 
 def compact_plan_status(
