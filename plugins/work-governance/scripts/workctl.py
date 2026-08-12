@@ -87,6 +87,9 @@ try:
     from workctl_modules.status import (
         compact_plan_status as module_compact_plan_status,
     )
+    from workctl_modules.status import (
+        queue_projection as module_queue_projection,
+    )
     from workctl_modules.storage import canonical_event_bytes, redacted_copy
     from workctl_modules.workflow_contract import (
         WorkflowContractError as ModuleWorkflowContractError,
@@ -187,6 +190,7 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     module_risk_factors_for_action = None  # type: ignore[assignment]
     module_risk_inspection_payload = None  # type: ignore[assignment]
     module_compact_plan_status = None  # type: ignore[assignment]
+    module_queue_projection = None  # type: ignore[assignment]
     module_confirmation = None  # type: ignore[assignment]
     module_evidence = None  # type: ignore[assignment]
     redacted_copy = None  # type: ignore[assignment]
@@ -14124,17 +14128,9 @@ def cmd_plan_queue(args: argparse.Namespace) -> None:
     else:
         scheduler = load_scheduler_state(root, str(doc.frontmatter["plan_id"]))
         compact = compact_plan_status(root, doc.frontmatter, scheduler=scheduler)
-    if args.queue_action == "ready":
-        payload: object = compact["ready"]
-    elif args.queue_action == "blocked":
-        payload = compact["blocked"]
-    else:
-        payload = {
-            "current_task": compact["current_task"],
-            "parallel_ready": compact["parallel_ready"],
-            "blocked_details": compact["blocked_details"],
-            "next_suggestion": compact["next_suggestion"],
-        }
+    if module_queue_projection is None:
+        raise WorkctlError("STATUS_MODULE_UNAVAILABLE: queue_projection")
+    payload = module_queue_projection(compact, str(args.queue_action))
     print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
 
 

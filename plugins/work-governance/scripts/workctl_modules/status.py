@@ -81,3 +81,17 @@ def compact_plan_status(
     if legacy_refresh is not None:
         payload["legacy_refresh"] = legacy_refresh
     return payload
+
+
+def queue_projection(compact_status: Mapping[str, object], action: str) -> object:
+    """Project one public queue command from the compact status payload."""
+    if action == "ready":
+        return compact_status["ready"]
+    if action == "blocked":
+        return compact_status["blocked"]
+    return {
+        "current_task": compact_status["current_task"],
+        "parallel_ready": compact_status["parallel_ready"],
+        "blocked_details": compact_status["blocked_details"],
+        "next_suggestion": compact_status["next_suggestion"],
+    }

@@ -12,6 +12,7 @@ if str(SCRIPT_ROOT) not in sys.path:
 
 status_module = importlib.import_module("workctl_modules.status")
 compact_plan_status = status_module.compact_plan_status
+queue_projection = status_module.queue_projection
 
 
 def no_blockers(_frontmatter: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
@@ -131,4 +132,37 @@ def test_compact_plan_status_adds_legacy_refresh_when_present() -> None:
     assert payload["legacy_refresh"] == {
         "requires_migration": True,
         "from_schema_version": 4,
+    }
+
+
+def test_queue_projection_preserves_public_queue_views() -> None:
+    """Queue projections keep ready, blocked, and next command JSON shapes."""
+    compact = {
+        "ready": ["task:T-002", "task:T-001"],
+        "blocked": ["task:T-003"],
+        "current_task": "task:T-002",
+        "parallel_ready": ["task:T-002", "task:T-001"],
+        "blocked_details": [
+            {
+                "task": "task:T-003",
+                "status": "blocked",
+                "reasons": [{"kind": "explicit-block"}],
+            }
+        ],
+        "next_suggestion": "Start task:T-002",
+    }
+
+    assert queue_projection(compact, "ready") == ["task:T-002", "task:T-001"]
+    assert queue_projection(compact, "blocked") == ["task:T-003"]
+    assert queue_projection(compact, "next") == {
+        "current_task": "task:T-002",
+        "parallel_ready": ["task:T-002", "task:T-001"],
+        "blocked_details": [
+            {
+                "task": "task:T-003",
+                "status": "blocked",
+                "reasons": [{"kind": "explicit-block"}],
+            }
+        ],
+        "next_suggestion": "Start task:T-002",
     }
