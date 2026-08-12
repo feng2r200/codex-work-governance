@@ -16,6 +16,7 @@ completion_claims = status_module.completion_claims
 current_schema_refresh_status = status_module.current_schema_refresh_status
 legacy_refresh_projection = status_module.legacy_refresh_projection
 queue_projection = status_module.queue_projection
+user_intervention_projection = status_module.user_intervention_projection
 
 
 def no_blockers(_frontmatter: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
@@ -484,3 +485,158 @@ def test_current_schema_refresh_status_full_view_adds_authority_details() -> Non
     assert payload["goal"] == {"statement": "Reduce friction."}
     assert payload["tasks"] == [{"id": "T-001"}]
     assert payload["confirmations"] == {"required": []}
+
+
+def test_user_intervention_projection_prioritizes_blocking_user_unknown() -> None:
+    """A blocking user-owned unknown becomes the first intervention signal."""
+    payload = user_intervention_projection(
+        {
+            "unknowns": [
+                {
+                    "id": "U-001",
+                    "status": "open",
+                    "owner": "user",
+                    "impact": "blocking",
+                    "blocks": ["task:T-001", "route"],
+                }
+            ],
+            "confirmations": {
+                "required": [
+                    {
+                        "id": "C-PLAN",
+                        "status": "pending",
+                        "intervention": {
+                            "kind": "plan_contract",
+                            "blocks": ["task:T-001"],
+                            "basis_ref": "project:plan-basis",
+                        },
+                    }
+                ]
+            },
+        },
+        current_targets=["task:T-001"],
+    )
+
+    assert payload == {
+        "state": "REQUIREMENT_INPUT_REQUIRED",
+        "current_targets": ["task:T-001"],
+        "blocks": ["task:T-001", "route"],
+        "unknown_id": "U-001",
+        "confirmation_id": None,
+        "basis_ref": None,
+    }
+
+
+def test_user_intervention_projection_classifies_legacy_pending_gate() -> None:
+    """A pending gate without intervention metadata remains a plan decision."""
+    payload = user_intervention_projection(
+        {"confirmations": {"required": [{"id": "C-LEGACY", "status": "pending"}]}},
+        current_targets=["task:T-001"],
+    )
+
+    assert payload == {
+        "state": "PLAN_DECISION_REQUIRED",
+        "current_targets": ["task:T-001"],
+        "blocks": ["task:T-001"],
+        "unknown_id": None,
+        "confirmation_id": "C-LEGACY",
+        "basis_ref": None,
+    }
+
+
+def test_user_intervention_projection_classifies_typed_blocking_gates() -> None:
+    """Typed pending confirmations map to their user-owned intervention states."""
+    cases = [
+        ("plan_contract", "PLAN_DECISION_REQUIRED", "C-PLAN"),
+        ("external_authority", "AUTHORITY_REQUIRED", "C-LIVE"),
+        ("deviation_recovery", "DEVIATION_DECISION_REQUIRED", "C-RECOVER"),
+        ("unknown-kind", "PLAN_DECISION_REQUIRED", "C-UNKNOWN"),
+    ]
+    for kind, expected_state, confirmation_id in cases:
+        payload = user_intervention_projection(
+            {
+                "confirmations": {
+                    "required": [
+                        {
+                            "id": confirmation_id,
+                            "status": "pending",
+                            "intervention": {
+                                "kind": kind,
+                                "blocks": ["task:T-001", "activation"],
+                                "basis_ref": f"project:{confirmation_id}",
+                            },
+                        }
+                    ]
+                }
+            },
+            current_targets=["task:T-001"],
+        )
+
+        assert payload["state"] == expected_state
+        assert payload["blocks"] == ["task:T-001", "activation"]
+        assert payload["confirmation_id"] == confirmation_id
+        assert payload["basis_ref"] == f"project:{confirmation_id}"
+
+
+def test_user_intervention_projection_ignores_future_gate() -> None:
+    """A pending confirmation for a later target does not block current progress."""
+    payload = user_intervention_projection(
+        {
+            "confirmations": {
+                "required": [
+                    {
+                        "id": "C-LIVE",
+                        "status": "pending",
+                        "intervention": {
+                            "kind": "external_authority",
+                            "blocks": ["task:T-002", "activation"],
+                            "basis_ref": "project:future-live-basis",
+                        },
+                    }
+                ]
+            }
+        },
+        current_targets=["task:T-001"],
+    )
+
+    assert payload == {
+        "state": "NOT_REQUIRED",
+        "current_targets": ["task:T-001"],
+        "blocks": [],
+        "unknown_id": None,
+        "confirmation_id": None,
+        "basis_ref": None,
+    }
+
+
+def test_user_intervention_projection_ignores_malformed_blocks() -> None:
+    """Malformed blocks never become a user intervention requirement."""
+    payload = user_intervention_projection(
+        {
+            "unknowns": [
+                {
+                    "id": "U-001",
+                    "status": "open",
+                    "owner": "user",
+                    "impact": "blocking",
+                    "blocks": "task:T-001",
+                }
+            ],
+            "confirmations": {
+                "required": [
+                    {
+                        "id": "C-LIVE",
+                        "status": "pending",
+                        "intervention": {
+                            "kind": "external_authority",
+                            "blocks": "task:T-001",
+                            "basis_ref": "project:malformed",
+                        },
+                    }
+                ]
+            },
+        },
+        current_targets=["task:T-001"],
+    )
+
+    assert payload["state"] == "NOT_REQUIRED"

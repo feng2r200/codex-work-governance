@@ -99,6 +99,9 @@ try:
     from workctl_modules.status import (
         queue_projection as module_queue_projection,
     )
+    from workctl_modules.status import (
+        user_intervention_projection as module_user_intervention_projection,
+    )
     from workctl_modules.storage import canonical_event_bytes, redacted_copy
     from workctl_modules.workflow_contract import (
         WorkflowContractError as ModuleWorkflowContractError,
@@ -203,6 +206,7 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     module_current_schema_refresh_status = None  # type: ignore[assignment]
     module_legacy_refresh_projection = None  # type: ignore[assignment]
     module_queue_projection = None  # type: ignore[assignment]
+    module_user_intervention_projection = None  # type: ignore[assignment]
     module_confirmation = None  # type: ignore[assignment]
     module_evidence = None  # type: ignore[assignment]
     redacted_copy = None  # type: ignore[assignment]
@@ -4850,66 +4854,15 @@ def compact_plan_status(
 
 def user_intervention_projection(frontmatter: Mapping[str, Any]) -> dict[str, Any]:
     """Describe only the user-owned input that blocks the current advancement target."""
-    current_targets = current_advancement_targets(frontmatter)
-    raw_unknowns = frontmatter.get("unknowns", [])
-    if isinstance(raw_unknowns, list):
-        for unknown in raw_unknowns:
-            if (
-                isinstance(unknown, dict)
-                and unknown.get("status") == "open"
-                and unknown.get("owner") == "user"
-                and unknown.get("impact") == "blocking"
-                and isinstance(unknown.get("blocks"), list)
-                and set(current_targets).intersection(unknown["blocks"])
-            ):
-                return {
-                    "state": "REQUIREMENT_INPUT_REQUIRED",
-                    "current_targets": current_targets,
-                    "blocks": unknown["blocks"],
-                    "unknown_id": unknown.get("id"),
-                    "confirmation_id": None,
-                    "basis_ref": None,
-                }
-    raw_confirmations = frontmatter.get("confirmations", {})
-    required = raw_confirmations.get("required", []) if isinstance(raw_confirmations, dict) else []
-    for item in required if isinstance(required, list) else []:
-        if not isinstance(item, dict) or item.get("status") != "pending":
-            continue
-        intervention = item.get("intervention")
-        if intervention is None:
-            return {
-                "state": "PLAN_DECISION_REQUIRED",
-                "current_targets": current_targets,
-                "blocks": current_targets,
-                "unknown_id": None,
-                "confirmation_id": item.get("id"),
-                "basis_ref": None,
-            }
-        blocks = intervention.get("blocks", []) if isinstance(intervention, dict) else []
-        if not isinstance(blocks, list) or not set(current_targets).intersection(blocks):
-            continue
-        kind = intervention.get("kind") if isinstance(intervention, dict) else "plan_contract"
-        state = {
-            "plan_contract": "PLAN_DECISION_REQUIRED",
-            "external_authority": "AUTHORITY_REQUIRED",
-            "deviation_recovery": "DEVIATION_DECISION_REQUIRED",
-        }.get(str(kind), "PLAN_DECISION_REQUIRED")
-        return {
-            "state": state,
-            "current_targets": current_targets,
-            "blocks": blocks,
-            "unknown_id": None,
-            "confirmation_id": item.get("id"),
-            "basis_ref": intervention.get("basis_ref") if isinstance(intervention, dict) else None,
-        }
-    return {
-        "state": "NOT_REQUIRED",
-        "current_targets": current_targets,
-        "blocks": [],
-        "unknown_id": None,
-        "confirmation_id": None,
-        "basis_ref": None,
-    }
+    if module_user_intervention_projection is None:
+        raise WorkctlError("STATUS_MODULE_UNAVAILABLE: user_intervention_projection")
+    return cast(
+        dict[str, Any],
+        module_user_intervention_projection(
+            frontmatter,
+            current_targets=current_advancement_targets(frontmatter),
+        ),
+    )
 
 
 def require_confirmation(frontmatter: dict[str, Any], confirmation_id: str | None) -> None:

@@ -142,6 +142,83 @@ def current_schema_refresh_status(
     return payload
 
 
+def user_intervention_projection(
+    frontmatter: StatusDocument,
+    *,
+    current_targets: Sequence[str],
+) -> dict[str, object]:
+    """Describe only user-owned input that blocks the current advancement target."""
+    target_list = list(current_targets)
+    target_set = set(target_list)
+    raw_unknowns = frontmatter.get("unknowns", [])
+    if isinstance(raw_unknowns, list):
+        for unknown in raw_unknowns:
+            if not isinstance(unknown, Mapping):
+                continue
+            blocks = unknown.get("blocks")
+            if (
+                unknown.get("status") == "open"
+                and unknown.get("owner") == "user"
+                and unknown.get("impact") == "blocking"
+                and isinstance(blocks, list)
+                and target_set.intersection(blocks)
+            ):
+                return {
+                    "state": "REQUIREMENT_INPUT_REQUIRED",
+                    "current_targets": target_list,
+                    "blocks": blocks,
+                    "unknown_id": unknown.get("id"),
+                    "confirmation_id": None,
+                    "basis_ref": None,
+                }
+    raw_confirmations = frontmatter.get("confirmations", {})
+    required = (
+        raw_confirmations.get("required", [])
+        if isinstance(raw_confirmations, Mapping)
+        else []
+    )
+    for item in required if isinstance(required, list) else []:
+        if not isinstance(item, Mapping) or item.get("status") != "pending":
+            continue
+        intervention = item.get("intervention")
+        if intervention is None:
+            return {
+                "state": "PLAN_DECISION_REQUIRED",
+                "current_targets": target_list,
+                "blocks": target_list,
+                "unknown_id": None,
+                "confirmation_id": item.get("id"),
+                "basis_ref": None,
+            }
+        blocks = intervention.get("blocks", []) if isinstance(intervention, Mapping) else []
+        if not isinstance(blocks, list) or not target_set.intersection(blocks):
+            continue
+        kind = intervention.get("kind") if isinstance(intervention, Mapping) else "plan_contract"
+        state = {
+            "plan_contract": "PLAN_DECISION_REQUIRED",
+            "external_authority": "AUTHORITY_REQUIRED",
+            "deviation_recovery": "DEVIATION_DECISION_REQUIRED",
+        }.get(str(kind), "PLAN_DECISION_REQUIRED")
+        return {
+            "state": state,
+            "current_targets": target_list,
+            "blocks": blocks,
+            "unknown_id": None,
+            "confirmation_id": item.get("id"),
+            "basis_ref": intervention.get("basis_ref")
+            if isinstance(intervention, Mapping)
+            else None,
+        }
+    return {
+        "state": "NOT_REQUIRED",
+        "current_targets": target_list,
+        "blocks": [],
+        "unknown_id": None,
+        "confirmation_id": None,
+        "basis_ref": None,
+    }
+
+
 def compact_plan_status(
     frontmatter: StatusDocument,
     *,
