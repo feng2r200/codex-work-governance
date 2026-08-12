@@ -37,13 +37,17 @@ if str(SCRIPT_DIR) not in sys.path:
 try:
     from workctl_modules import WORKFLOW_HELP as MODULE_WORKFLOW_HELP
     from workctl_modules import WORKFLOW_HELP_ALIASES as MODULE_WORKFLOW_HELP_ALIASES
+    from workctl_modules import SchedulerStateError as ModuleSchedulerStateError
     from workctl_modules import blocked_task_targets as MODULE_BLOCKED_TASK_TARGETS
     from workctl_modules import canonical_evidence_bytes as MODULE_CANONICAL_EVIDENCE_BYTES
     from workctl_modules import confirmation as module_confirmation
     from workctl_modules import current_advancement_targets as MODULE_CURRENT_ADVANCEMENT_TARGETS
+    from workctl_modules import dump_scheduler_state as MODULE_DUMP_SCHEDULER_STATE
     from workctl_modules import evidence as module_evidence
+    from workctl_modules import load_scheduler_state as MODULE_LOAD_SCHEDULER_STATE
     from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
     from workctl_modules import ready_task_targets as MODULE_READY_TASK_TARGETS
+    from workctl_modules import scheduler_state_path as MODULE_SCHEDULER_STATE_PATH
     from workctl_modules import yaml_compat as yaml
     from workctl_modules.authority import (
         candidate_to_dict as module_candidate_to_dict,
@@ -158,6 +162,9 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     class ModuleWorktreeLedgerError(ValueError):  # type: ignore[no-redef]
         """Fallback exception for legacy single-file runtime bundles."""
 
+    class ModuleSchedulerStateError(ValueError):  # type: ignore[no-redef]
+        """Fallback exception for legacy single-file runtime bundles."""
+
     class ModulePlanHistoryError(ValueError):  # type: ignore[no-redef]
         """Fallback exception for legacy single-file runtime bundles."""
 
@@ -172,8 +179,11 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     MODULE_BLOCKED_TASK_TARGETS = None  # type: ignore[assignment]
     MODULE_CANONICAL_EVIDENCE_BYTES = None  # type: ignore[assignment]
     MODULE_CURRENT_ADVANCEMENT_TARGETS = None  # type: ignore[assignment]
+    MODULE_DUMP_SCHEDULER_STATE = None  # type: ignore[assignment]
+    MODULE_LOAD_SCHEDULER_STATE = None  # type: ignore[assignment]
     MODULE_PARSE_EVIDENCE_BYTES = None  # type: ignore[assignment]
     MODULE_READY_TASK_TARGETS = None  # type: ignore[assignment]
+    MODULE_SCHEDULER_STATE_PATH = None  # type: ignore[assignment]
     build_v5_contract = None  # type: ignore[assignment]
     build_v5_state = None  # type: ignore[assignment]
     module_archive_path_for_source = None  # type: ignore[assignment]
@@ -4191,37 +4201,39 @@ def current_advancement_targets(frontmatter: Mapping[str, Any]) -> list[str]:
 
 def scheduler_state_path(root: Path, plan_id: str) -> Path:
     """Return the ignored runtime scheduler state path for one active Plan."""
-    scheduler_dir = root / GOVERNANCE_DIR_NAME / "runtime" / "scheduler"
-    reject_symlink_components(root, scheduler_dir)
-    return scheduler_dir / f"{plan_id}.json"
+    if MODULE_SCHEDULER_STATE_PATH is None:
+        raise WorkctlError("SCHEDULER_MODULE_UNAVAILABLE: scheduler_state_path")
+    return MODULE_SCHEDULER_STATE_PATH(
+        root,
+        plan_id,
+        GOVERNANCE_DIR_NAME,
+        reject_symlink_components,
+    )
 
 
 def load_scheduler_state(root: Path, plan_id: str) -> dict[str, Any]:
     """Load a bounded scheduler snapshot without changing the Plan contract."""
-    path = scheduler_state_path(root, plan_id)
-    if not path.exists():
-        return {"schema_version": 1, "plan_id": plan_id, "state_sequence": 0, "priorities": {}}
-    if path.is_symlink() or not path.is_file():
-        raise WorkctlError("SCHEDULER_STATE_INVALID")
+    if MODULE_LOAD_SCHEDULER_STATE is None:
+        raise WorkctlError("SCHEDULER_MODULE_UNAVAILABLE: load_scheduler_state")
     try:
-        payload: object = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise WorkctlError("SCHEDULER_STATE_INVALID") from exc
-    if not isinstance(payload, dict):
-        raise WorkctlError("SCHEDULER_STATE_INVALID")
-    priorities = payload.get("priorities", {})
-    if (
-        payload.get("schema_version") != 1
-        or payload.get("plan_id") != plan_id
-        or type(payload.get("state_sequence")) is not int
-        or payload["state_sequence"] < 0
-        or not isinstance(priorities, dict)
-        or any(
-            not isinstance(key, str) or type(value) is not int for key, value in priorities.items()
+        return cast(
+            dict[str, Any],
+            MODULE_LOAD_SCHEDULER_STATE(
+                root,
+                plan_id,
+                GOVERNANCE_DIR_NAME,
+                reject_symlink_components,
+            ),
         )
-    ):
-        raise WorkctlError("SCHEDULER_STATE_INVALID")
-    return cast(dict[str, Any], payload)
+    except ModuleSchedulerStateError as exc:
+        raise WorkctlError("SCHEDULER_STATE_INVALID") from exc
+
+
+def dump_scheduler_state(state: Mapping[str, Any]) -> str:
+    """Serialize scheduler state with stable formatting for atomic persistence."""
+    if MODULE_DUMP_SCHEDULER_STATE is None:
+        raise WorkctlError("SCHEDULER_MODULE_UNAVAILABLE: dump_scheduler_state")
+    return MODULE_DUMP_SCHEDULER_STATE(state)
 
 
 def v5_runtime_dir(root: Path, plan_id: str) -> Path:
@@ -14094,7 +14106,7 @@ def cmd_task_reprioritize(args: argparse.Namespace) -> None:
         state["state_sequence"] += 1
         write_atomic(
             scheduler_state_path(root, str(doc.frontmatter["plan_id"])),
-            json.dumps(state, indent=2, sort_keys=True) + "\n",
+            dump_scheduler_state(state),
         )
     print(
         f"TASK_REPRIORITIZED {args.task_id} priority={args.priority} "

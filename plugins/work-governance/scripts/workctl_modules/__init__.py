@@ -27,16 +27,21 @@ from .evidence import (
 )
 from .migration import build_v5_contract, build_v5_state, migration_projection
 from .scheduler import (
+    SchedulerStateError,
     blocked_task_targets,
     current_advancement_targets,
+    dump_scheduler_state,
+    load_scheduler_state,
     next_suggestion,
     ready_task_targets,
+    scheduler_state_path,
 )
 from .storage import canonical_json_bytes
 
 __all__ = [
     "WORKFLOW_HELP",
     "WORKFLOW_HELP_ALIASES",
+    "SchedulerStateError",
     "accepted_confirmation",
     "append_capture_record",
     "build_v5_contract",
@@ -55,6 +60,8 @@ __all__ = [
     "blocked_task_targets",
     "canonical_json_bytes",
     "current_advancement_targets",
+    "dump_scheduler_state",
+    "load_scheduler_state",
     "next_suggestion",
     "parse_evidence_bytes",
     "persist_capture_blob",
@@ -65,6 +72,7 @@ __all__ = [
     "redact_capture_bytes",
     "redact_capture_text",
     "migration_projection",
+    "scheduler_state_path",
     "validate_capture_args",
     "validate_evidence_payload",
     "verify_capture_record_file",
