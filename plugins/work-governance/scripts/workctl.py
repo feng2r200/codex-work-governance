@@ -88,6 +88,9 @@ try:
         compact_plan_status as module_compact_plan_status,
     )
     from workctl_modules.status import (
+        completion_claims as module_completion_claims,
+    )
+    from workctl_modules.status import (
         queue_projection as module_queue_projection,
     )
     from workctl_modules.storage import canonical_event_bytes, redacted_copy
@@ -190,6 +193,7 @@ except ImportError:  # pragma: no cover - legacy single-file runtime bundles
     module_risk_factors_for_action = None  # type: ignore[assignment]
     module_risk_inspection_payload = None  # type: ignore[assignment]
     module_compact_plan_status = None  # type: ignore[assignment]
+    module_completion_claims = None  # type: ignore[assignment]
     module_queue_projection = None  # type: ignore[assignment]
     module_confirmation = None  # type: ignore[assignment]
     module_evidence = None  # type: ignore[assignment]
@@ -18821,71 +18825,30 @@ def completion_claims(
     readiness: dict[str, Any],
 ) -> dict[str, Any]:
     """Describe which completion claims current evidence permits."""
-    delivery = frontmatter.get("delivery", {})
-    route = frontmatter.get("route", {})
-    delivery_declared_complete = isinstance(delivery, dict) and delivery.get("status") == "complete"
-    obligations_complete = not incomplete_entries(frontmatter, "obligations")
-    validations_complete = not incomplete_entries(frontmatter, "validations")
-    tasks = frontmatter.get("tasks", [])
-    local_tasks_complete = isinstance(tasks, list) and all(
-        isinstance(task, dict)
-        and (
-            task.get("completion_scope", "local") == "route"
-            or task.get("status") in VERIFIED_TASK_STATES
+    if module_completion_claims is None:
+        raise WorkctlError("STATUS_MODULE_UNAVAILABLE: completion_claims")
+
+    def incomplete_ids(document: Mapping[str, object], field: str) -> Sequence[str]:
+        return incomplete_entries(cast(dict[str, Any], document), field)
+
+    def confirmation_lookup(
+        document: Mapping[str, object],
+    ) -> Mapping[str, Mapping[str, object]]:
+        return cast(
+            Mapping[str, Mapping[str, object]],
+            confirmations(cast(dict[str, Any], document)),
         )
-        for task in tasks
+
+    return cast(
+        dict[str, Any],
+        module_completion_claims(
+            frontmatter,
+            readiness,
+            incomplete_entry_ids=incomplete_ids,
+            confirmations_by_id=confirmation_lookup,
+            verified_task_states=VERIFIED_TASK_STATES,
+        ),
     )
-    artifacts = frontmatter.get("artifacts", [])
-    artifacts_final = isinstance(artifacts, list) and all(
-        isinstance(artifact, dict) and artifact.get("status") == "final" for artifact in artifacts
-    )
-    local_delivery_complete = (
-        delivery_declared_complete
-        and obligations_complete
-        and validations_complete
-        and local_tasks_complete
-        and artifacts_final
-    )
-    route_complete = bool(readiness.get("ready"))
-    confirmation_gate = route.get("confirmation_gate") if isinstance(route, dict) else None
-    slice_action_authorized = confirmation_gate in {None, "", "none"}
-    if isinstance(confirmation_gate, str) and confirmation_gate.startswith("C-"):
-        confirmation = confirmations(frontmatter).get(confirmation_gate)
-        slice_action_authorized = bool(
-            confirmation and confirmation.get("status") == "accepted" and confirmation.get("ref")
-        )
-    activation = frontmatter.get("activation", {})
-    activation_confirmation = (
-        activation.get("confirmation_id") if isinstance(activation, dict) else None
-    )
-    activation_decision = (
-        confirmations(frontmatter).get(activation_confirmation)
-        if isinstance(activation_confirmation, str)
-        else None
-    )
-    activation_authorized = bool(
-        activation_decision
-        and activation_decision.get("status") == "accepted"
-        and activation_decision.get("ref")
-    )
-    if route_complete:
-        level = "route_complete"
-    elif local_delivery_complete:
-        level = "local_delivery_complete"
-    else:
-        level = "in_progress"
-    return {
-        "level": level,
-        "slice_status": route.get("slice_status") if isinstance(route, dict) else None,
-        "delivery_declared_complete": delivery_declared_complete,
-        "local_delivery_complete": local_delivery_complete,
-        "route_complete": route_complete,
-        "no_required_next_step_allowed": route_complete,
-        "slice_next_action_authorized": slice_action_authorized,
-        "slice_confirmation_id": confirmation_gate,
-        "activation_authorized": activation_authorized,
-        "activation_confirmation_id": activation_confirmation,
-    }
 
 
 def closeout_readiness(
