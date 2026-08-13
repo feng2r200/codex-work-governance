@@ -17,7 +17,6 @@ import ctypes
 import difflib
 import errno
 import fcntl
-import hashlib
 import json
 import os
 import re
@@ -25,7 +24,6 @@ import secrets
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -54,6 +52,8 @@ from workctl_modules import yaml_compat as yaml
 from workctl_modules.authority import candidate_to_dict as module_candidate_to_dict
 from workctl_modules.authority import parse_candidate_specs as module_parse_candidate_specs
 from workctl_modules.confirmation import confirmation_lookup as module_confirmation_lookup
+from workctl_modules import filesystem as module_filesystem
+from workctl_modules.filesystem import FilesystemError as ModuleFilesystemError
 from workctl_modules.history import PlanHistoryError as ModulePlanHistoryError
 from workctl_modules.history import find_plan_history_target as module_find_plan_history_target
 from workctl_modules.history import (
@@ -70,6 +70,8 @@ from workctl_modules.migration import (
 from workctl_modules.migration import archive_path_for_source as module_archive_path_for_source
 from workctl_modules.migration import pointer_text as module_pointer_text
 from workctl_modules.model import TaskProjection
+from workctl_modules import paths as module_paths
+from workctl_modules.paths import PathError as ModulePathError
 from workctl_modules.plan_schema import CURRENT_PLAN_SCHEMA_VERSION
 from workctl_modules.references import valid_reference as module_valid_reference
 from workctl_modules.risk import action_reversibility as module_action_reversibility
@@ -702,152 +704,164 @@ def valid_reference(value: object) -> bool:
 
 def project_root() -> Path:
     """Resolve the physical root of the current Git worktree or local directory."""
-    current = Path.cwd().resolve()
-    probe = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        cwd=current,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if probe.returncode == 0 and probe.stdout.strip():
-        root = Path(probe.stdout.strip()).resolve()
-        if root == current or root in current.parents:
-            return root
-    for candidate in (current, *current.parents):
-        marker = candidate / ".git"
-        if marker.exists() or marker.is_symlink():
-            return candidate
-    return current
+    return module_paths.project_root()
 
 
 def governance_root(root: Path) -> Path:
     """Return the only project-level root owned by Work Governance 1.0."""
-    return root / GOVERNANCE_DIR_NAME
+    return module_paths.governance_root(root, GOVERNANCE_DIR_NAME)
 
 
 def plan_dir(root: Path) -> Path:
     """Return the only normal Plan authority directory."""
-    return governance_root(root) / PLAN_DIR_NAME
+    return module_paths.plan_dir(root, GOVERNANCE_DIR_NAME, PLAN_DIR_NAME)
 
 
 def legacy_plan_dir(root: Path) -> Path:
     """Return the project-root legacy Plan directory used only by layout migration."""
-    return root / PLAN_DIR_NAME
+    return module_paths.legacy_plan_dir(root, PLAN_DIR_NAME)
 
 
 def legacy_logs_dir(root: Path) -> Path:
     """Return the old shared log root used only by migration compatibility."""
-    return root / ".logs"
+    return module_paths.legacy_logs_dir(root)
 
 
 def logs_dir(root: Path) -> Path:
     """Return the local append-only process evidence directory."""
-    return governance_root(root) / "logs"
+    return module_paths.logs_dir(root, GOVERNANCE_DIR_NAME)
 
 
 def worktrees_dir(root: Path) -> Path:
     """Return the default directory for worktrees created after layout 1."""
-    return governance_root(root) / "worktrees"
+    return module_paths.worktrees_dir(root, GOVERNANCE_DIR_NAME)
 
 
 def cache_dir(root: Path) -> Path:
     """Return the Plugin-owned project cache directory."""
-    return governance_root(root) / "cache"
+    return module_paths.cache_dir(root, GOVERNANCE_DIR_NAME)
 
 
 def uv_cache_dir(root: Path) -> Path:
     """Return the isolated UV cache used by bootstrap and the controller."""
-    return cache_dir(root) / "uv"
+    return module_paths.uv_cache_dir(root, GOVERNANCE_DIR_NAME)
 
 
 def proposals_dir(root: Path) -> Path:
     """Return the local non-authoritative proposal directory."""
-    return governance_root(root) / "proposals"
+    return module_paths.proposals_dir(root, GOVERNANCE_DIR_NAME)
 
 
 def evidence_dir(root: Path) -> Path:
     """Return the local validation evidence directory."""
-    return governance_root(root) / "evidence"
+    return module_paths.evidence_dir(root, GOVERNANCE_DIR_NAME)
 
 
 def runtime_dir(root: Path) -> Path:
     """Return the local recoverable transaction and staging directory."""
-    return governance_root(root) / "runtime"
+    return module_paths.runtime_dir(root, GOVERNANCE_DIR_NAME)
 
 
 def bootstrap_claim_path(root: Path) -> Path:
     """Return the durable marker proving who first created the governance root."""
-    return runtime_dir(root) / BOOTSTRAP_CLAIM_NAME
+    return module_paths.bootstrap_claim_path(root, GOVERNANCE_DIR_NAME, BOOTSTRAP_CLAIM_NAME)
 
 
 def legacy_adoption_path(root: Path) -> Path:
     """Return the worktree-local explicit legacy adoption receipt."""
-    return runtime_dir(root) / LEGACY_ADOPTION_NAME
+    return module_paths.legacy_adoption_path(root, GOVERNANCE_DIR_NAME, LEGACY_ADOPTION_NAME)
 
 
 def bootstrap_staging_path(root: Path) -> Path:
     """Return the sibling used to durably prepare a first-owner claim."""
-    return root / BOOTSTRAP_STAGING_NAME
+    return module_paths.bootstrap_staging_path(root, BOOTSTRAP_STAGING_NAME)
 
 
 def version_path(root: Path) -> Path:
     """Return the versioned layout contract."""
-    return governance_root(root) / "version.yaml"
+    return module_paths.version_path(root, GOVERNANCE_DIR_NAME)
 
 
 def governance_ignore_path(root: Path) -> Path:
     """Return the versioned local-content ignore contract."""
-    return governance_root(root) / ".gitignore"
+    return module_paths.governance_ignore_path(root, GOVERNANCE_DIR_NAME)
 
 
 def bootstrap_state_path(root: Path) -> Path:
     """Return the local exact-build and incremental bootstrap receipt."""
-    return governance_root(root) / "bootstrap-state.json"
+    return module_paths.bootstrap_state_path(root, GOVERNANCE_DIR_NAME)
 
 
 def session_state_dir(root: Path, session_id: str) -> Path:
     """Return a bounded project-local directory for one Codex session."""
-    if SESSION_ID_RE.fullmatch(session_id) is None:
-        raise WorkctlError("SESSION_ID_INVALID")
-    return runtime_dir(root) / SESSIONS_DIR_NAME / session_id
+    try:
+        return module_paths.session_state_dir(
+            root,
+            session_id,
+            governance_dir_name=GOVERNANCE_DIR_NAME,
+            sessions_dir_name=SESSIONS_DIR_NAME,
+            session_id_pattern=SESSION_ID_RE,
+        )
+    except ModulePathError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def session_receipt_path(root: Path, session_id: str) -> Path:
     """Return the canonical READY receipt path for one Codex session."""
-    return session_state_dir(root, session_id) / "bootstrap-state.json"
+    try:
+        return module_paths.session_receipt_path(
+            root,
+            session_id,
+            governance_dir_name=GOVERNANCE_DIR_NAME,
+            sessions_dir_name=SESSIONS_DIR_NAME,
+            session_id_pattern=SESSION_ID_RE,
+        )
+    except ModulePathError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def session_capability_path(root: Path, session_id: str) -> Path:
     """Return the bootstrap-only capability path for one Codex session."""
-    return session_state_dir(root, session_id) / BOOTSTRAP_CAPABILITY_NAME
+    try:
+        return module_paths.session_capability_path(
+            root,
+            session_id,
+            governance_dir_name=GOVERNANCE_DIR_NAME,
+            sessions_dir_name=SESSIONS_DIR_NAME,
+            session_id_pattern=SESSION_ID_RE,
+            bootstrap_capability_name=BOOTSTRAP_CAPABILITY_NAME,
+        )
+    except ModulePathError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def scoped_session_paths(root: Path, name: str) -> list[Path]:
     """List regular session control paths without following session-root symlinks."""
-    sessions = runtime_dir(root) / SESSIONS_DIR_NAME
-    if not sessions.exists() and not sessions.is_symlink():
-        return []
-    if sessions.is_symlink() or not sessions.is_dir():
-        raise WorkctlError("SESSION_STATE_ROOT_INVALID")
-    paths: list[Path] = []
-    for child in sorted(sessions.iterdir(), key=lambda item: item.name):
-        if child.is_symlink() or not child.is_dir() or SESSION_ID_RE.fullmatch(child.name) is None:
-            raise WorkctlError("SESSION_STATE_ENTRY_INVALID")
-        candidate = child / name
-        if candidate.exists() or candidate.is_symlink():
-            paths.append(candidate)
-    return paths
+    try:
+        return module_paths.scoped_session_paths(
+            root,
+            name,
+            governance_dir_name=GOVERNANCE_DIR_NAME,
+            sessions_dir_name=SESSIONS_DIR_NAME,
+            session_id_pattern=SESSION_ID_RE,
+        )
+    except ModulePathError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def ready_receipt_paths(root: Path, *, allow_bootstrapping: bool) -> list[Path]:
     """Return legacy plus session-scoped receipt candidates."""
-    paths = [bootstrap_state_path(root)]
-    paths.extend(scoped_session_paths(root, "bootstrap-state.json"))
-    if allow_bootstrapping:
-        paths.append(bootstrap_capability_path(root))
-        paths.extend(scoped_session_paths(root, BOOTSTRAP_CAPABILITY_NAME))
-    return paths
+    try:
+        return module_paths.ready_receipt_paths(
+            root,
+            allow_bootstrapping=allow_bootstrapping,
+            governance_dir_name=GOVERNANCE_DIR_NAME,
+            sessions_dir_name=SESSIONS_DIR_NAME,
+            session_id_pattern=SESSION_ID_RE,
+            bootstrap_capability_name=BOOTSTRAP_CAPABILITY_NAME,
+        )
+    except ModulePathError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def load_controller_receipt_v2(
@@ -904,66 +918,66 @@ def load_ready_receipt_v2(root: Path) -> dict[str, Any] | None:
 
 def bootstrap_capability_path(root: Path) -> Path:
     """Return the current SessionStart-only capability used for layout writes."""
-    return governance_root(root) / "runtime" / BOOTSTRAP_CAPABILITY_NAME
+    return module_paths.bootstrap_capability_path(
+        root,
+        GOVERNANCE_DIR_NAME,
+        BOOTSTRAP_CAPABILITY_NAME,
+    )
 
 
 def workctl_lock_path(root: Path) -> Path:
     """Return the stable lock shared by every Work Governance 1.x controller."""
-    return governance_root(root) / "workctl.lock"
+    return module_paths.workctl_lock_path(root, GOVERNANCE_DIR_NAME)
 
 
 def index_path(root: Path) -> Path:
-    return plan_dir(root) / "index.yaml"
+    return module_paths.index_path(root, GOVERNANCE_DIR_NAME, PLAN_DIR_NAME)
 
 
 def plan_relative_path(*parts: str) -> str:
     """Build a project-relative path below the canonical Plan directory."""
-    return Path(GOVERNANCE_DIR_NAME, PLAN_DIR_NAME, *parts).as_posix()
+    return module_paths.plan_relative_path(
+        *parts,
+        governance_dir_name=GOVERNANCE_DIR_NAME,
+        plan_dir_name=PLAN_DIR_NAME,
+    )
 
 
 def sha256_bytes(content: bytes) -> str:
     """Return the lowercase SHA256 digest for *content*."""
-    return hashlib.sha256(content).hexdigest()
+    return module_filesystem.sha256_bytes(content)
 
 
 def sha256_file(path: Path) -> str:
     """Return the SHA256 digest for a regular file."""
-    if not path.is_file():
-        raise WorkctlError(f"MISSING_FILE: {path}")
-    return sha256_bytes(path.read_bytes())
+    try:
+        return module_filesystem.sha256_file(path)
+    except ModuleFilesystemError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def relative_project_path(root: Path, path: Path) -> str:
     """Return a stable project-relative POSIX path."""
     try:
-        return path.resolve().relative_to(root).as_posix()
-    except ValueError as exc:
-        raise WorkctlError(f"PATH_OUTSIDE_PROJECT: {path}") from exc
+        return module_filesystem.relative_project_path(root, path)
+    except ModuleFilesystemError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def reject_symlink_components(root: Path, path: Path) -> None:
     """Reject an existing symlink in a project-local control path chain."""
     try:
-        relative = path.relative_to(root)
-    except ValueError as exc:
-        raise WorkctlError(f"PATH_OUTSIDE_PROJECT: {path}") from exc
-    current = root
-    for part in relative.parts:
-        current /= part
-        if current.is_symlink():
-            raise WorkctlError(f"LAYOUT_PATH_SYMLINK: {current.relative_to(root).as_posix()}")
+        module_filesystem.reject_symlink_components(root, path)
+    except ModuleFilesystemError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def checked_project_path(root: Path, raw_path: str) -> Path:
     """Resolve a manifest path while preventing project-root escape."""
-    if not raw_path or Path(raw_path).is_absolute():
-        raise WorkctlError(f"INVALID_PROJECT_PATH: {raw_path}")
-    resolved = (root / raw_path).resolve()
     try:
-        resolved.relative_to(root)
-    except ValueError as exc:
-        raise WorkctlError(f"PATH_OUTSIDE_PROJECT: {raw_path}") from exc
-    return resolved
+        return module_filesystem.checked_project_path(root, raw_path)
+    except ModuleFilesystemError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def runtime_bundle_manifest_payload(
@@ -3678,107 +3692,66 @@ def dump_plan(doc: PlanDocument) -> str:
 
 def fsync_directory(path: Path) -> None:
     """Synchronize one directory entry set to durable storage."""
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    fd = os.open(path, flags)
     try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+        module_filesystem.fsync_directory(path)
+    except ModuleFilesystemError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def fsync_tree(path: Path) -> None:
     """Synchronize every regular file, then every directory from leaves upward."""
-    if path.is_symlink() or not path.is_dir():
-        raise WorkctlError(f"DURABILITY_TREE_INVALID: {path}")
-    directories = [path]
-    for candidate in sorted(path.rglob("*"), key=lambda item: item.as_posix()):
-        if candidate.is_symlink():
-            raise WorkctlError(f"LAYOUT_PATH_SYMLINK: {candidate}")
-        if candidate.is_dir():
-            directories.append(candidate)
-        elif candidate.is_file():
-            with candidate.open("rb") as handle:
-                os.fsync(handle.fileno())
-        else:
-            raise WorkctlError(f"LAYOUT_PATH_NOT_REGULAR: {candidate}")
-    for directory in sorted(
-        directories,
-        key=lambda item: len(item.relative_to(path).parts),
-        reverse=True,
-    ):
-        fsync_directory(directory)
+    try:
+        module_filesystem.fsync_tree(path)
+    except ModuleFilesystemError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def ensure_directory_durable(path: Path) -> None:
     """Create a directory chain and synchronize each new parent entry."""
-    missing: list[Path] = []
-    cursor = path
-    while not cursor.exists():
-        missing.append(cursor)
-        if cursor.parent == cursor:
-            break
-        cursor = cursor.parent
-    path.mkdir(parents=True, exist_ok=True)
-    for directory in reversed(missing):
-        fsync_directory(directory.parent)
-        fsync_directory(directory)
+    try:
+        module_filesystem.ensure_directory_durable(path)
+    except ModuleFilesystemError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def write_atomic_bytes(path: Path, content: bytes) -> None:
     """Atomically and durably replace a file with exact bytes."""
-    ensure_directory_durable(path.parent)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    tmp_path = Path(tmp_name)
     try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_path, path)
-        fsync_directory(path.parent)
-    finally:
-        with contextlib.suppress(FileNotFoundError):
-            tmp_path.unlink()
+        module_filesystem.write_atomic_bytes(path, content)
+    except ModuleFilesystemError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def write_atomic(path: Path, text: str) -> None:
     """Atomically replace a UTF-8 text file."""
-    write_atomic_bytes(path, text.encode())
+    try:
+        module_filesystem.write_atomic(path, text)
+    except ModuleFilesystemError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def durable_replace(source: Path, target: Path) -> None:
     """Rename one path and durably synchronize both affected parent entries."""
-    source_parent = source.parent
-    target_parent = target.parent
-    os.replace(source, target)
-    fsync_directory(source_parent)
-    if target_parent != source_parent:
-        fsync_directory(target_parent)
+    try:
+        module_filesystem.durable_replace(source, target)
+    except ModuleFilesystemError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def durable_copy_file(source: Path, target: Path) -> None:
     """Copy one regular file through a synced temp file and durable rename."""
-    if source.is_symlink() or not source.is_file():
-        raise WorkctlError(f"DURABLE_COPY_SOURCE_INVALID: {source}")
-    ensure_directory_durable(target.parent)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
-    temporary = Path(temporary_name)
     try:
-        with source.open("rb") as input_handle, os.fdopen(descriptor, "wb") as output_handle:
-            shutil.copyfileobj(input_handle, output_handle)
-            output_handle.flush()
-            os.fsync(output_handle.fileno())
-        os.replace(temporary, target)
-        fsync_directory(target.parent)
-    finally:
-        with contextlib.suppress(FileNotFoundError):
-            temporary.unlink()
+        module_filesystem.durable_copy_file(source, target)
+    except ModuleFilesystemError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def durable_unlink(path: Path) -> None:
     """Remove one file and synchronize the parent directory entry."""
-    path.unlink()
-    fsync_directory(path.parent)
+    try:
+        module_filesystem.durable_unlink(path)
+    except ModuleFilesystemError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 @contextlib.contextmanager

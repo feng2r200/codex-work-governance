@@ -1666,18 +1666,18 @@ def test_durable_replace_fsyncs_both_directory_entries(
 ) -> None:
     """A cross-directory rename is not considered durable until both parents sync."""
     namespace = runpy.run_path(str(SCRIPT), run_name="workctl_durability_fixture")
-    function_globals = namespace["durable_replace"].__globals__
+    filesystem_module = namespace["module_filesystem"]
     source = tmp_path / "source" / "tree"
     target = tmp_path / "target" / "tree"
     events: list[tuple[str, Path, Path | None]] = []
 
     monkeypatch.setattr(
-        namespace["os"],
+        filesystem_module.os,
         "replace",
         lambda old, new: events.append(("replace", old, new)),
     )
-    monkeypatch.setitem(
-        function_globals,
+    monkeypatch.setattr(
+        filesystem_module,
         "fsync_directory",
         lambda path: events.append(("fsync", path, None)),
     )
@@ -1696,7 +1696,7 @@ def test_transaction_durability_orders_file_data_before_directory_entries(
 ) -> None:
     """Staged trees and copied files sync data before their containing entries."""
     namespace = runpy.run_path(str(SCRIPT), run_name="workctl_data_durability_fixture")
-    function_globals = namespace["fsync_tree"].__globals__
+    filesystem_module = namespace["module_filesystem"]
     tree = tmp_path / "tree"
     child = tree / "child"
     child.mkdir(parents=True)
@@ -1708,12 +1708,12 @@ def test_transaction_durability_orders_file_data_before_directory_entries(
     events: list[tuple[str, object]] = []
 
     monkeypatch.setattr(
-        namespace["os"],
+        filesystem_module.os,
         "fsync",
         lambda descriptor: events.append(("file-fsync", descriptor)),
     )
-    monkeypatch.setitem(
-        function_globals,
+    monkeypatch.setattr(
+        filesystem_module,
         "fsync_directory",
         lambda path: events.append(("dir-fsync", path)),
     )
