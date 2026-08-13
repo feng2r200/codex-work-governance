@@ -5,6 +5,9 @@
 # ///
 """Deterministic controller for Work Governance Plan files."""
 
+# workctl_modules imports depend on SCRIPT_DIR being present for runpy/runtime-bundle execution.
+# ruff: noqa: E402, I001
+
 from __future__ import annotations
 
 import argparse
@@ -34,207 +37,81 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-try:
-    from workctl_modules import WORKFLOW_HELP as MODULE_WORKFLOW_HELP
-    from workctl_modules import WORKFLOW_HELP_ALIASES as MODULE_WORKFLOW_HELP_ALIASES
-    from workctl_modules import SchedulerStateError as ModuleSchedulerStateError
-    from workctl_modules import blocked_task_targets as MODULE_BLOCKED_TASK_TARGETS
-    from workctl_modules import canonical_evidence_bytes as MODULE_CANONICAL_EVIDENCE_BYTES
-    from workctl_modules import confirmation as module_confirmation
-    from workctl_modules import current_advancement_targets as MODULE_CURRENT_ADVANCEMENT_TARGETS
-    from workctl_modules import dump_scheduler_state as MODULE_DUMP_SCHEDULER_STATE
-    from workctl_modules import evidence as module_evidence
-    from workctl_modules import load_scheduler_state as MODULE_LOAD_SCHEDULER_STATE
-    from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
-    from workctl_modules import ready_task_targets as MODULE_READY_TASK_TARGETS
-    from workctl_modules import scheduler_state_path as MODULE_SCHEDULER_STATE_PATH
-    from workctl_modules import yaml_compat as yaml
-    from workctl_modules.authority import (
-        candidate_to_dict as module_candidate_to_dict,
-    )
-    from workctl_modules.authority import (
-        parse_candidate_specs as module_parse_candidate_specs,
-    )
-    from workctl_modules.history import (
-        PlanHistoryError as ModulePlanHistoryError,
-    )
-    from workctl_modules.history import (
-        find_plan_history_target as module_find_plan_history_target,
-    )
-    from workctl_modules.history import (
-        tolerant_plan_history_summary as module_tolerant_plan_history_summary,
-    )
-    from workctl_modules.migration import (
-        REFRESH_NEXT_MODEL_ACTION,
-        REFRESH_NOT_MIGRATED,
-        build_v5_contract,
-        build_v5_state,
-        legacy_plan_summary,
-        migration_projection,
-    )
-    from workctl_modules.migration import (
-        archive_path_for_source as module_archive_path_for_source,
-    )
-    from workctl_modules.migration import (
-        pointer_text as module_pointer_text,
-    )
-    from workctl_modules.model import TaskProjection
-    from workctl_modules.plan_schema import CURRENT_PLAN_SCHEMA_VERSION
-    from workctl_modules.risk import (
-        action_reversibility as module_action_reversibility,
-    )
-    from workctl_modules.risk import (
-        risk_factors_for_action as module_risk_factors_for_action,
-    )
-    from workctl_modules.risk import (
-        risk_inspection_payload as module_risk_inspection_payload,
-    )
-    from workctl_modules.status import (
-        compact_plan_status as module_compact_plan_status,
-    )
-    from workctl_modules.status import (
-        completion_claims as module_completion_claims,
-    )
-    from workctl_modules.status import (
-        current_schema_refresh_status as module_current_schema_refresh_status,
-    )
-    from workctl_modules.status import (
-        legacy_refresh_projection as module_legacy_refresh_projection,
-    )
-    from workctl_modules.status import (
-        queue_projection as module_queue_projection,
-    )
-    from workctl_modules.status import (
-        user_intervention_projection as module_user_intervention_projection,
-    )
-    from workctl_modules.storage import canonical_event_bytes, redacted_copy
-    from workctl_modules.workflow_contract import (
-        WorkflowContractError as ModuleWorkflowContractError,
-    )
-    from workctl_modules.workflow_contract import (
-        non_empty_string as module_non_empty_string,
-    )
-    from workctl_modules.workflow_contract import (
-        normalize_goal_confirmations as module_normalize_goal_confirmations,
-    )
-    from workctl_modules.workflow_contract import (
-        normalize_goal_tasks as module_normalize_goal_tasks,
-    )
-    from workctl_modules.workflow_contract import (
-        parse_workflow_mapping as module_parse_workflow_mapping,
-    )
-    from workctl_modules.workflow_contract import (
-        workflow_string_list as module_workflow_string_list,
-    )
-    from workctl_modules.workflow_input import (
-        WorkflowInputError as ModuleWorkflowInputError,
-    )
-    from workctl_modules.workflow_input import (
-        read_workflow_input_bytes as module_read_workflow_input_bytes,
-    )
-    from workctl_modules.worktree import (
-        WorktreeLedgerError as ModuleWorktreeLedgerError,
-    )
-    from workctl_modules.worktree import (
-        append_worktree_event as module_append_worktree_event,
-    )
-    from workctl_modules.worktree import (
-        build_worktree_event as module_build_worktree_event,
-    )
-    from workctl_modules.worktree import (
-        close_worktree_ledger as module_close_worktree_ledger,
-    )
-    from workctl_modules.worktree import (
-        encode_worktree_ledger as module_encode_worktree_ledger,
-    )
-    from workctl_modules.worktree import (
-        load_worktree_ledger as module_load_worktree_ledger,
-    )
-    from workctl_modules.worktree import (
-        open_worktree_ledger as module_open_worktree_ledger,
-    )
-    from workctl_modules.worktree import (
-        worktree_ledger_path as module_worktree_ledger_path,
-    )
-except ImportError:  # pragma: no cover - legacy single-file runtime bundles
-    import yaml  # type: ignore[no-redef]
-
-    class ModuleWorktreeLedgerError(ValueError):  # type: ignore[no-redef]
-        """Fallback exception for legacy single-file runtime bundles."""
-
-    class ModuleSchedulerStateError(ValueError):  # type: ignore[no-redef]
-        """Fallback exception for legacy single-file runtime bundles."""
-
-    class ModulePlanHistoryError(ValueError):  # type: ignore[no-redef]
-        """Fallback exception for legacy single-file runtime bundles."""
-
-    class ModuleWorkflowInputError(ValueError):  # type: ignore[no-redef]
-        """Fallback exception for legacy single-file runtime bundles."""
-
-    class ModuleWorkflowContractError(ValueError):  # type: ignore[no-redef]
-        """Fallback exception for legacy single-file runtime bundles."""
-
-    MODULE_WORKFLOW_HELP = None  # type: ignore[assignment,misc]
-    MODULE_WORKFLOW_HELP_ALIASES = None  # type: ignore[assignment,misc]
-    MODULE_BLOCKED_TASK_TARGETS = None  # type: ignore[assignment]
-    MODULE_CANONICAL_EVIDENCE_BYTES = None  # type: ignore[assignment]
-    MODULE_CURRENT_ADVANCEMENT_TARGETS = None  # type: ignore[assignment]
-    MODULE_DUMP_SCHEDULER_STATE = None  # type: ignore[assignment]
-    MODULE_LOAD_SCHEDULER_STATE = None  # type: ignore[assignment]
-    MODULE_PARSE_EVIDENCE_BYTES = None  # type: ignore[assignment]
-    MODULE_READY_TASK_TARGETS = None  # type: ignore[assignment]
-    MODULE_SCHEDULER_STATE_PATH = None  # type: ignore[assignment]
-    build_v5_contract = None  # type: ignore[assignment]
-    build_v5_state = None  # type: ignore[assignment]
-    module_archive_path_for_source = None  # type: ignore[assignment]
-    module_pointer_text = None  # type: ignore[assignment]
-    module_find_plan_history_target = None  # type: ignore[assignment]
-    module_tolerant_plan_history_summary = None  # type: ignore[assignment]
-    legacy_plan_summary = None  # type: ignore[assignment]
-    migration_projection = None  # type: ignore[assignment]
-    TaskProjection = None  # type: ignore[assignment,misc]
-    CURRENT_PLAN_SCHEMA_VERSION = 5
-    REFRESH_NOT_MIGRATED = (
-        "task.status",
-        "task.note",
-        "task.evidence",
-        "confirmations",
-        "runtime_state",
-        "current_task",
-        "revision_history",
-    )
-    REFRESH_NEXT_MODEL_ACTION = (
-        "Review legacy_summary and the archived legacy Plan before selecting the "
-        "next current-schema task."
-    )
-    canonical_event_bytes = None  # type: ignore[assignment]
-    module_action_reversibility = None  # type: ignore[assignment]
-    module_candidate_to_dict = None  # type: ignore[assignment]
-    module_parse_candidate_specs = None  # type: ignore[assignment]
-    module_risk_factors_for_action = None  # type: ignore[assignment]
-    module_risk_inspection_payload = None  # type: ignore[assignment]
-    module_compact_plan_status = None  # type: ignore[assignment]
-    module_completion_claims = None  # type: ignore[assignment]
-    module_current_schema_refresh_status = None  # type: ignore[assignment]
-    module_legacy_refresh_projection = None  # type: ignore[assignment]
-    module_queue_projection = None  # type: ignore[assignment]
-    module_user_intervention_projection = None  # type: ignore[assignment]
-    module_confirmation = None  # type: ignore[assignment]
-    module_evidence = None  # type: ignore[assignment]
-    redacted_copy = None  # type: ignore[assignment]
-    module_append_worktree_event = None  # type: ignore[assignment]
-    module_build_worktree_event = None  # type: ignore[assignment]
-    module_close_worktree_ledger = None  # type: ignore[assignment]
-    module_encode_worktree_ledger = None  # type: ignore[assignment]
-    module_load_worktree_ledger = None  # type: ignore[assignment]
-    module_open_worktree_ledger = None  # type: ignore[assignment]
-    module_worktree_ledger_path = None  # type: ignore[assignment]
-    module_non_empty_string = None  # type: ignore[assignment]
-    module_normalize_goal_confirmations = None  # type: ignore[assignment]
-    module_normalize_goal_tasks = None  # type: ignore[assignment]
-    module_parse_workflow_mapping = None  # type: ignore[assignment]
-    module_read_workflow_input_bytes = None  # type: ignore[assignment]
-    module_workflow_string_list = None  # type: ignore[assignment]
+from workctl_modules import WORKFLOW_HELP as MODULE_WORKFLOW_HELP
+from workctl_modules import WORKFLOW_HELP_ALIASES as MODULE_WORKFLOW_HELP_ALIASES
+from workctl_modules import SchedulerStateError as ModuleSchedulerStateError
+from workctl_modules import blocked_task_targets as MODULE_BLOCKED_TASK_TARGETS
+from workctl_modules import canonical_evidence_bytes as MODULE_CANONICAL_EVIDENCE_BYTES
+from workctl_modules import confirmation as module_confirmation
+from workctl_modules import current_advancement_targets as MODULE_CURRENT_ADVANCEMENT_TARGETS
+from workctl_modules import dump_scheduler_state as MODULE_DUMP_SCHEDULER_STATE
+from workctl_modules import evidence as module_evidence
+from workctl_modules import load_scheduler_state as MODULE_LOAD_SCHEDULER_STATE
+from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
+from workctl_modules import ready_task_targets as MODULE_READY_TASK_TARGETS
+from workctl_modules import scheduler_state_path as MODULE_SCHEDULER_STATE_PATH
+from workctl_modules import yaml_compat as yaml
+from workctl_modules.authority import candidate_to_dict as module_candidate_to_dict
+from workctl_modules.authority import parse_candidate_specs as module_parse_candidate_specs
+from workctl_modules.history import PlanHistoryError as ModulePlanHistoryError
+from workctl_modules.history import find_plan_history_target as module_find_plan_history_target
+from workctl_modules.history import (
+    tolerant_plan_history_summary as module_tolerant_plan_history_summary,
+)
+from workctl_modules.migration import (
+    REFRESH_NEXT_MODEL_ACTION,
+    REFRESH_NOT_MIGRATED,
+    build_v5_contract,
+    build_v5_state,
+    legacy_plan_summary,
+    migration_projection,
+)
+from workctl_modules.migration import archive_path_for_source as module_archive_path_for_source
+from workctl_modules.migration import pointer_text as module_pointer_text
+from workctl_modules.model import TaskProjection
+from workctl_modules.plan_schema import CURRENT_PLAN_SCHEMA_VERSION
+from workctl_modules.risk import action_reversibility as module_action_reversibility
+from workctl_modules.risk import risk_factors_for_action as module_risk_factors_for_action
+from workctl_modules.risk import risk_inspection_payload as module_risk_inspection_payload
+from workctl_modules.status import blocking_artifacts as module_blocking_artifacts
+from workctl_modules.status import compact_plan_status as module_compact_plan_status
+from workctl_modules.status import completion_claims as module_completion_claims
+from workctl_modules.status import (
+    current_schema_refresh_status as module_current_schema_refresh_status,
+)
+from workctl_modules.status import downstream_task_targets as module_downstream_task_targets
+from workctl_modules.status import legacy_refresh_projection as module_legacy_refresh_projection
+from workctl_modules.status import pending_confirmation_ids as module_pending_confirmation_ids
+from workctl_modules.status import queue_projection as module_queue_projection
+from workctl_modules.status import task_artifact_blockers as module_task_artifact_blockers
+from workctl_modules.status import task_blocking_details as module_task_blocking_details
+from workctl_modules.status import task_confirmation_blocker as module_task_confirmation_blocker
+from workctl_modules.status import (
+    user_intervention_projection as module_user_intervention_projection,
+)
+from workctl_modules.storage import canonical_event_bytes, redacted_copy
+from workctl_modules.workflow_contract import WorkflowContractError as ModuleWorkflowContractError
+from workctl_modules.workflow_contract import non_empty_string as module_non_empty_string
+from workctl_modules.workflow_contract import (
+    normalize_goal_confirmations as module_normalize_goal_confirmations,
+)
+from workctl_modules.workflow_contract import normalize_goal_tasks as module_normalize_goal_tasks
+from workctl_modules.workflow_contract import (
+    parse_workflow_mapping as module_parse_workflow_mapping,
+)
+from workctl_modules.workflow_contract import workflow_string_list as module_workflow_string_list
+from workctl_modules.workflow_input import WorkflowInputError as ModuleWorkflowInputError
+from workctl_modules.workflow_input import (
+    read_workflow_input_bytes as module_read_workflow_input_bytes,
+)
+from workctl_modules.worktree import WorktreeLedgerError as ModuleWorktreeLedgerError
+from workctl_modules.worktree import append_worktree_event as module_append_worktree_event
+from workctl_modules.worktree import build_worktree_event as module_build_worktree_event
+from workctl_modules.worktree import close_worktree_ledger as module_close_worktree_ledger
+from workctl_modules.worktree import encode_worktree_ledger as module_encode_worktree_ledger
+from workctl_modules.worktree import load_worktree_ledger as module_load_worktree_ledger
+from workctl_modules.worktree import open_worktree_ledger as module_open_worktree_ledger
+from workctl_modules.worktree import worktree_ledger_path as module_worktree_ledger_path
 
 PLAN_ID_RE = re.compile(r"^PLAN-\d{8}-\d{3}$")
 MIGRATION_ID_RE = re.compile(r"^MIG-\d{8}-\d{3}$")
@@ -4058,14 +3935,9 @@ def require_plan_contract_ready(frontmatter: dict[str, Any]) -> None:
 
 def blocking_artifacts(frontmatter: dict[str, Any]) -> dict[str, str]:
     """Return blocking artifact IDs and states from a Plan."""
-    result: dict[str, str] = {}
-    for artifact in frontmatter.get("artifacts", []):
-        if isinstance(artifact, dict) and artifact.get("status") in BLOCKING_ARTIFACT_STATES:
-            artifact_id = artifact.get("id")
-            status = artifact.get("status")
-            if isinstance(artifact_id, str) and isinstance(status, str):
-                result[artifact_id] = status
-    return result
+    if module_blocking_artifacts is None:
+        raise WorkctlError("STATUS_MODULE_UNAVAILABLE: blocking_artifacts")
+    return module_blocking_artifacts(frontmatter, BLOCKING_ARTIFACT_STATES)
 
 
 def require_no_blocking_artifacts(
@@ -4362,15 +4234,25 @@ def v5_read_events(root: Path, plan_id: str) -> list[dict[str, Any]]:
     return events
 
 
+def canonical_event_payload_bytes(event: Mapping[str, Any]) -> bytes:
+    """Return canonical bytes for one runtime event."""
+    if canonical_event_bytes is None:
+        raise WorkctlError("STORAGE_MODULE_UNAVAILABLE: canonical_event_bytes")
+    return canonical_event_bytes(event)
+
+
+def redacted_runtime_copy(value: Any) -> Any:
+    """Return the storage-module redacted projection used in runtime payloads."""
+    if redacted_copy is None:
+        raise WorkctlError("STORAGE_MODULE_UNAVAILABLE: redacted_copy")
+    return redacted_copy(value)
+
+
 def v5_append_event(root: Path, plan_id: str, event: Mapping[str, Any]) -> None:
     """Append one canonical event and fsync the event ledger."""
     path = v5_event_path(root, plan_id)
     ensure_directory_durable(path.parent)
-    encoded = (
-        canonical_event_bytes(event)
-        if canonical_event_bytes is not None
-        else (json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n").encode()
-    )
+    encoded = canonical_event_payload_bytes(event)
     with path.open("ab") as handle:
         handle.write(encoded)
         handle.flush()
@@ -4399,7 +4281,7 @@ def v5_persist_state_transition(
         "state_sequence": next_state_sequence,
         "event": event,
         "subject": subject,
-        "payload": redacted_copy(dict(payload)) if redacted_copy is not None else dict(payload),
+        "payload": redacted_runtime_copy(dict(payload)),
         "recorded_at": utc_now(),
     }
     state["state_sequence"] = next_state_sequence
@@ -4465,7 +4347,7 @@ def v5_persist_contract_transition(
         "event": event,
         "subject": subject,
         "payload": {
-            **(redacted_copy(dict(payload)) if redacted_copy is not None else dict(payload)),
+            **cast(dict[str, Any], redacted_runtime_copy(dict(payload))),
             "contract_revision": doc.frontmatter["contract_revision"],
             "contract_sha256": contract_sha256,
         },
@@ -4488,7 +4370,7 @@ def v5_persist_contract_transition(
 def scheduler_task_projections(frontmatter: Mapping[str, Any]) -> list[Any]:
     """Convert Plan task mappings to the scheduler module's typed projections."""
     if TaskProjection is None:
-        return []
+        raise WorkctlError("SCHEDULER_MODULE_UNAVAILABLE: TaskProjection")
     raw_tasks = frontmatter.get("tasks", [])
     if not isinstance(raw_tasks, list):
         return []
@@ -4516,58 +4398,19 @@ def ready_task_targets(
     priorities: Mapping[str, int] | None = None,
 ) -> list[str]:
     """Return every pending task whose hard dependencies are verified."""
-    raw_tasks = frontmatter.get("tasks", [])
-    if not isinstance(raw_tasks, list):
-        return []
-    task_map = {
-        str(task["id"]): task
-        for task in raw_tasks
-        if isinstance(task, dict) and isinstance(task.get("id"), str)
-    }
-    if MODULE_READY_TASK_TARGETS is not None:
-        return MODULE_READY_TASK_TARGETS(
-            scheduler_task_projections(frontmatter),
-            priorities,
-        )
-    ready: list[str] = []
-    for task in raw_tasks:
-        if not isinstance(task, dict) or task.get("status") != "pending":
-            continue
-        dependencies = task.get("depends_on", [])
-        if not isinstance(dependencies, list) or not all(
-            isinstance(dependency, str) for dependency in dependencies
-        ):
-            continue
-        if all(
-            dependency in task_map and task_map[dependency].get("status") in VERIFIED_TASK_STATES
-            for dependency in dependencies
-        ):
-            ready.append(f"task:{task['id']}")
-    priority_map = priorities or {}
-    ready_order = {target: index for index, target in enumerate(ready)}
-    return sorted(
-        ready,
-        key=lambda target: (
-            -priority_map.get(target.removeprefix("task:"), 0),
-            ready_order[target],
-        ),
+    if MODULE_READY_TASK_TARGETS is None:
+        raise WorkctlError("SCHEDULER_MODULE_UNAVAILABLE: ready_task_targets")
+    return MODULE_READY_TASK_TARGETS(
+        scheduler_task_projections(frontmatter),
+        priorities,
     )
 
 
 def blocked_task_targets(frontmatter: Mapping[str, Any]) -> list[str]:
     """Return explicitly blocked tasks without treating dependency waits as failures."""
-    raw_tasks = frontmatter.get("tasks", [])
-    if not isinstance(raw_tasks, list):
-        return []
-    if MODULE_BLOCKED_TASK_TARGETS is not None:
-        return MODULE_BLOCKED_TASK_TARGETS(scheduler_task_projections(frontmatter))
-    return [
-        f"task:{task['id']}"
-        for task in raw_tasks
-        if isinstance(task, dict)
-        and isinstance(task.get("id"), str)
-        and task.get("status") == "blocked"
-    ]
+    if MODULE_BLOCKED_TASK_TARGETS is None:
+        raise WorkctlError("SCHEDULER_MODULE_UNAVAILABLE: blocked_task_targets")
+    return MODULE_BLOCKED_TASK_TARGETS(scheduler_task_projections(frontmatter))
 
 
 def downstream_task_targets(
@@ -4575,22 +4418,9 @@ def downstream_task_targets(
     task_map: Mapping[str, Mapping[str, Any]],
 ) -> list[str]:
     """Return non-terminal tasks that transitively depend on one blocked task."""
-    downstream: list[str] = []
-    visited: set[str] = set()
-    frontier = [task_id]
-    while frontier:
-        blocked_id = frontier.pop(0)
-        for candidate_id, candidate in task_map.items():
-            if candidate_id in visited:
-                continue
-            dependencies = candidate.get("depends_on", [])
-            if not isinstance(dependencies, list) or blocked_id not in dependencies:
-                continue
-            visited.add(candidate_id)
-            if candidate.get("status") not in VERIFIED_TASK_STATES:
-                downstream.append(f"task:{candidate_id}")
-            frontier.append(candidate_id)
-    return downstream
+    if module_downstream_task_targets is None:
+        raise WorkctlError("STATUS_MODULE_UNAVAILABLE: downstream_task_targets")
+    return module_downstream_task_targets(task_id, task_map, VERIFIED_TASK_STATES)
 
 
 def task_artifact_blockers(
@@ -4598,36 +4428,9 @@ def task_artifact_blockers(
     task: Mapping[str, Any],
 ) -> list[dict[str, str]]:
     """Project artifact blockers with the same recovery exception as task advancement."""
-    blocked = blocking_artifacts(cast(dict[str, Any], frontmatter))
-    if not blocked:
-        return []
-    non_suspect = {
-        artifact_id: status for artifact_id, status in blocked.items() if status != "suspect"
-    }
-    if non_suspect:
-        return [
-            {
-                "kind": "artifact",
-                "artifact": artifact_id,
-                "state": non_suspect[artifact_id],
-            }
-            for artifact_id in sorted(non_suspect)
-        ]
-    resolves = task.get("resolves_artifacts", [])
-    if (
-        isinstance(resolves, list)
-        and resolves
-        and all(isinstance(artifact_id, str) and artifact_id in blocked for artifact_id in resolves)
-    ):
-        return []
-    return [
-        {
-            "kind": "artifact",
-            "artifact": artifact_id,
-            "state": blocked[artifact_id],
-        }
-        for artifact_id in sorted(blocked)
-    ]
+    if module_task_artifact_blockers is None:
+        raise WorkctlError("STATUS_MODULE_UNAVAILABLE: task_artifact_blockers")
+    return module_task_artifact_blockers(frontmatter, task, BLOCKING_ARTIFACT_STATES)
 
 
 def task_confirmation_blocker(
@@ -4635,13 +4438,9 @@ def task_confirmation_blocker(
     task: Mapping[str, Any],
 ) -> dict[str, str] | None:
     """Return the pending task gate that blocks a normal start/verify path."""
-    confirmation_id = task.get("requires_confirmation")
-    if not isinstance(confirmation_id, str):
-        return None
-    item = confirmations(cast(dict[str, Any], frontmatter)).get(confirmation_id)
-    if item and item.get("status") == "accepted" and item.get("ref"):
-        return None
-    return {"kind": "confirmation", "confirmation_id": confirmation_id}
+    if module_task_confirmation_blocker is None:
+        raise WorkctlError("STATUS_MODULE_UNAVAILABLE: task_confirmation_blocker")
+    return module_task_confirmation_blocker(frontmatter, task)
 
 
 def task_blocking_details(
@@ -4649,78 +4448,28 @@ def task_blocking_details(
     frontmatter: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     """Explain every task that cannot currently advance and what it blocks downstream."""
-    raw_tasks = frontmatter.get("tasks", [])
-    if not isinstance(raw_tasks, list):
-        return []
-    task_map: dict[str, Mapping[str, Any]] = {
-        str(task["id"]): task
-        for task in raw_tasks
-        if isinstance(task, dict) and isinstance(task.get("id"), str)
-    }
-    details: list[dict[str, Any]] = []
-    for task_id, task in task_map.items():
-        status = str(task.get("status", "pending"))
-        if status in VERIFIED_TASK_STATES:
-            continue
-        reasons: list[dict[str, Any]] = []
-        if status == "blocked":
-            note = task.get("blocker", task.get("note", "task status is blocked"))
-            reasons.append({"kind": "explicit-block", "detail": str(note)})
-        dependencies = task.get("depends_on", [])
-        if isinstance(dependencies, list):
-            for dependency in dependencies:
-                if not isinstance(dependency, str):
-                    reasons.append({"kind": "dependency-invalid"})
-                    continue
-                dependency_task = task_map.get(dependency)
-                if dependency_task is None:
-                    reasons.append({"kind": "dependency-missing", "dependency": dependency})
-                elif dependency_task.get("status") not in VERIFIED_TASK_STATES:
-                    reasons.append(
-                        {
-                            "kind": "dependency-not-verified",
-                            "dependency": dependency,
-                            "state": str(dependency_task.get("status", "pending")),
-                        }
-                    )
-        elif "depends_on" in task:
-            reasons.append({"kind": "dependency-invalid"})
-        if status in {"pending", "in_progress"}:
-            reasons.extend(task_artifact_blockers(frontmatter, task))
-            review_modes = independent_review_blockers(root, frontmatter, f"task:{task_id}")
-            if review_modes:
-                reasons.append(
-                    {
-                        "kind": "independent-review",
-                        "modes": sorted(review_modes),
-                    }
-                )
-            confirmation_blocker = task_confirmation_blocker(frontmatter, task)
-            if confirmation_blocker is not None:
-                reasons.append(confirmation_blocker)
-        if reasons:
-            details.append(
-                {
-                    "task": f"task:{task_id}",
-                    "status": status,
-                    "reasons": reasons,
-                    "blocks_downstream": downstream_task_targets(task_id, task_map),
-                }
-            )
-    return details
+    if module_task_blocking_details is None:
+        raise WorkctlError("STATUS_MODULE_UNAVAILABLE: task_blocking_details")
+
+    def review_blockers(target: str) -> Sequence[str]:
+        return independent_review_blockers(root, frontmatter, target)
+
+    return cast(
+        list[dict[str, Any]],
+        module_task_blocking_details(
+            frontmatter,
+            independent_review_blockers=review_blockers,
+            blocking_artifact_states=BLOCKING_ARTIFACT_STATES,
+            verified_task_states=VERIFIED_TASK_STATES,
+        ),
+    )
 
 
 def pending_confirmation_ids(frontmatter: Mapping[str, Any]) -> list[str]:
     """Return pending confirmation IDs in stable Plan order."""
-    raw = frontmatter.get("confirmations", {})
-    required = raw.get("required", []) if isinstance(raw, dict) else []
-    return [
-        str(item["id"])
-        for item in required
-        if isinstance(item, dict)
-        and isinstance(item.get("id"), str)
-        and item.get("status") == "pending"
-    ]
+    if module_pending_confirmation_ids is None:
+        raise WorkctlError("STATUS_MODULE_UNAVAILABLE: pending_confirmation_ids")
+    return module_pending_confirmation_ids(frontmatter)
 
 
 def legacy_refresh_projection(
@@ -4983,7 +4732,7 @@ def set_v5_task_status(args: argparse.Namespace, status: str, doc: PlanDocument)
         )
     state_task["status"] = status
     if args.note:
-        state_task["note"] = redacted_copy(args.note) if redacted_copy is not None else args.note
+        state_task["note"] = redacted_runtime_copy(args.note)
     if evidence_ref is not None and evidence_sha256 is not None:
         state_task["evidence_ref"] = evidence_ref
         state_task["evidence_sha256"] = evidence_sha256
@@ -11627,22 +11376,7 @@ def read_workflow_input_bytes(
     use_stdin = bool(getattr(args, stdin_attr, False))
     raw_path = getattr(args, file_attr, None)
     if module_read_workflow_input_bytes is None:
-        if use_stdin and isinstance(raw_path, str):
-            raise WorkctlError("WORKFLOW_INPUT_SOURCE_CONFLICT")
-        if use_stdin:
-            content = sys.stdin.buffer.read(max_bytes + 1)
-        elif isinstance(raw_path, str):
-            source = Path(raw_path)
-            if source.is_symlink() or not source.is_file():
-                raise WorkctlError("WORKFLOW_INPUT_MISSING")
-            content = source.read_bytes()
-        elif required:
-            raise WorkctlError("WORKFLOW_INPUT_REQUIRED")
-        else:
-            return None
-        if len(content) > max_bytes:
-            raise WorkctlError("WORKFLOW_INPUT_TOO_LARGE")
-        return content
+        raise WorkctlError("WORKFLOW_INPUT_MODULE_UNAVAILABLE: read_workflow_input_bytes")
     try:
         return module_read_workflow_input_bytes(
             use_stdin=use_stdin,
@@ -11657,52 +11391,35 @@ def read_workflow_input_bytes(
 
 def parse_workflow_mapping(content: bytes, *, error_prefix: str) -> dict[str, Any]:
     """Parse a bounded JSON/YAML workflow mapping."""
-    if module_parse_workflow_mapping is not None:
-        try:
-            return cast(
-                dict[str, Any],
-                module_parse_workflow_mapping(content, error_prefix=error_prefix),
-            )
-        except ModuleWorkflowContractError as exc:
-            raise WorkctlError(str(exc)) from exc
+    if module_parse_workflow_mapping is None:
+        raise WorkctlError("WORKFLOW_CONTRACT_MODULE_UNAVAILABLE: parse_workflow_mapping")
     try:
-        payload: object = json.loads(content)
-    except json.JSONDecodeError:
-        try:
-            payload = yaml.safe_load(content)
-        except yaml.YAMLError as exc:
-            raise WorkctlError(f"{error_prefix}_INVALID") from exc
-    if not isinstance(payload, dict):
-        raise WorkctlError(f"{error_prefix}_MUST_BE_MAPPING")
-    return cast(dict[str, Any], payload)
+        return cast(
+            dict[str, Any],
+            module_parse_workflow_mapping(content, error_prefix=error_prefix),
+        )
+    except ModuleWorkflowContractError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def non_empty_string(value: object, *, field: str) -> str:
     """Return a non-empty string field or raise a workflow contract error."""
-    if module_non_empty_string is not None:
-        try:
-            return module_non_empty_string(value, field=field)
-        except ModuleWorkflowContractError as exc:
-            raise WorkctlError(str(exc)) from exc
-    if not isinstance(value, str) or not value.strip():
-        raise WorkctlError(f"{field}_REQUIRED")
-    return value.strip()
+    if module_non_empty_string is None:
+        raise WorkctlError("WORKFLOW_CONTRACT_MODULE_UNAVAILABLE: non_empty_string")
+    try:
+        return module_non_empty_string(value, field=field)
+    except ModuleWorkflowContractError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def workflow_string_list(value: object, *, field: str) -> list[str]:
     """Validate one non-empty list of strings for high-level contracts."""
-    if module_workflow_string_list is not None:
-        try:
-            return module_workflow_string_list(value, field=field)
-        except ModuleWorkflowContractError as exc:
-            raise WorkctlError(str(exc)) from exc
-    if (
-        not isinstance(value, list)
-        or not value
-        or not all(isinstance(item, str) and item.strip() for item in value)
-    ):
-        raise WorkctlError(f"{field}_REQUIRES_NON_EMPTY_STRING_LIST")
-    return [str(item).strip() for item in value]
+    if module_workflow_string_list is None:
+        raise WorkctlError("WORKFLOW_CONTRACT_MODULE_UNAVAILABLE: workflow_string_list")
+    try:
+        return module_workflow_string_list(value, field=field)
+    except ModuleWorkflowContractError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def next_available_plan_id(root: Path) -> str:
@@ -11729,105 +11446,31 @@ def next_available_plan_id(root: Path) -> str:
 
 def normalize_goal_tasks(raw_tasks: object) -> list[dict[str, Any]]:
     """Normalize a minimal task list into v5 contract task mappings."""
-    if module_normalize_goal_tasks is not None:
-        try:
-            return cast(
-                list[dict[str, Any]],
-                module_normalize_goal_tasks(
-                    raw_tasks,
-                    task_id_pattern=ENTRY_ID_PATTERNS["tasks"],
-                ),
-            )
-        except ModuleWorkflowContractError as exc:
-            raise WorkctlError(str(exc)) from exc
-    if not isinstance(raw_tasks, list) or not raw_tasks:
-        raise WorkctlError("GOAL_TASKS_REQUIRED")
-    tasks: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for index, raw_task in enumerate(raw_tasks, start=1):
-        if isinstance(raw_task, str):
-            task: dict[str, Any] = {
-                "id": f"T-{index:03d}",
-                "description": raw_task.strip(),
-            }
-        elif isinstance(raw_task, dict):
-            task_id = raw_task.get("id", f"T-{index:03d}")
-            task = {
-                "id": task_id,
-                "description": raw_task.get("description"),
-            }
-            for optional_field in (
-                "depends_on",
-                "requires_confirmation",
-                "completion_scope",
-                "resolves_artifacts",
-            ):
-                if optional_field in raw_task:
-                    task[optional_field] = copy.deepcopy(raw_task[optional_field])
-        else:
-            raise WorkctlError("GOAL_TASKS_ENTRIES_INVALID")
-        task_id_value = task.get("id")
-        if (
-            not isinstance(task_id_value, str)
-            or ENTRY_ID_PATTERNS["tasks"].fullmatch(task_id_value) is None
-        ):
-            raise WorkctlError("GOAL_TASK_ID_INVALID")
-        if task_id_value in seen:
-            raise WorkctlError(f"DUPLICATE_TASK_ID: {task_id_value}")
-        seen.add(task_id_value)
-        task["description"] = non_empty_string(task.get("description"), field="TASK_DESCRIPTION")
-        dependencies = task.get("depends_on", [])
-        if not isinstance(dependencies, list) or not all(
-            isinstance(item, str) for item in dependencies
-        ):
-            raise WorkctlError(f"{task_id_value}_DEPENDS_ON_INVALID")
-        task["depends_on"] = list(dependencies)
-        tasks.append(task)
-    known = {str(task["id"]) for task in tasks}
-    for task in tasks:
-        for dependency in task.get("depends_on", []):
-            if dependency not in known:
-                raise WorkctlError(f"{task['id']}_UNKNOWN_DEPENDENCY: {dependency}")
-    return tasks
+    if module_normalize_goal_tasks is None:
+        raise WorkctlError("WORKFLOW_CONTRACT_MODULE_UNAVAILABLE: normalize_goal_tasks")
+    try:
+        return cast(
+            list[dict[str, Any]],
+            module_normalize_goal_tasks(
+                raw_tasks,
+                task_id_pattern=ENTRY_ID_PATTERNS["tasks"],
+            ),
+        )
+    except ModuleWorkflowContractError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def normalize_goal_confirmations(raw_confirmations: object) -> dict[str, list[dict[str, Any]]]:
     """Normalize the optional minimal confirmation mapping."""
-    if module_normalize_goal_confirmations is not None:
-        try:
-            return cast(
-                dict[str, list[dict[str, Any]]],
-                module_normalize_goal_confirmations(raw_confirmations),
-            )
-        except ModuleWorkflowContractError as exc:
-            raise WorkctlError(str(exc)) from exc
-    if raw_confirmations is None:
-        return {"required": [], "accepted": []}
-    if not isinstance(raw_confirmations, dict):
-        raise WorkctlError("GOAL_CONFIRMATIONS_MUST_BE_MAPPING")
-    result: dict[str, list[dict[str, Any]]] = {"required": [], "accepted": []}
-    seen: set[str] = set()
-    for group in ("required", "accepted"):
-        values = raw_confirmations.get(group, [])
-        if not isinstance(values, list):
-            raise WorkctlError(f"GOAL_CONFIRMATIONS_{group.upper()}_INVALID")
-        for item in values:
-            if not isinstance(item, dict):
-                raise WorkctlError(f"GOAL_CONFIRMATIONS_{group.upper()}_ENTRIES_INVALID")
-            confirmation = copy.deepcopy(item)
-            confirmation_id = confirmation.get("id")
-            if not isinstance(confirmation_id, str) or not confirmation_id.startswith("C-"):
-                raise WorkctlError("GOAL_CONFIRMATION_ID_INVALID")
-            if confirmation_id in seen:
-                raise WorkctlError(f"DUPLICATE_CONFIRMATION_ID: {confirmation_id}")
-            seen.add(confirmation_id)
-            confirmation["description"] = non_empty_string(
-                confirmation.get("description"),
-                field="CONFIRMATION_DESCRIPTION",
-            )
-            confirmation.setdefault("status", "pending" if group == "required" else "accepted")
-            result[group].append(confirmation)
-    return result
+    if module_normalize_goal_confirmations is None:
+        raise WorkctlError("WORKFLOW_CONTRACT_MODULE_UNAVAILABLE: normalize_goal_confirmations")
+    try:
+        return cast(
+            dict[str, list[dict[str, Any]]],
+            module_normalize_goal_confirmations(raw_confirmations),
+        )
+    except ModuleWorkflowContractError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def build_goal_init_document(
@@ -12079,7 +11722,7 @@ def verify_task_done_v5(
     require_task_confirmation(doc.frontmatter, contract_task, "verified")
     state_task["status"] = "verified"
     if note:
-        state_task["note"] = redacted_copy(note) if redacted_copy is not None else note
+        state_task["note"] = redacted_runtime_copy(note)
     state_task["evidence_ref"] = evidence_ref
     state_task["evidence_sha256"] = evidence_sha256
     state_task["verified_at"] = utc_now()
@@ -14116,119 +13759,8 @@ def cmd_task_reprioritize(args: argparse.Namespace) -> None:
 
 def cmd_workflow_help(args: argparse.Namespace) -> None:
     """Print the stable public workflow command surface."""
-    workflows: dict[str, dict[str, object]] = {
-        "plan": {
-            "commands": [
-                "goal show",
-                "plan create",
-                "plan show [--full]",
-                "plan edit",
-                "plan reorder",
-                "plan status",
-                "plan ready",
-                "plan next",
-                "plan blocked",
-                "plan activation-repair",
-            ],
-            "note": "Contract edits require their existing confirmation and revision guards.",
-        },
-        "task": {
-            "commands": [
-                "task start",
-                "task block",
-                "task unblock",
-                "task verify [--evidence-stdin]",
-                "task reprioritize",
-            ],
-            "note": "Task transitions remain receipt-bound and dependency-checked.",
-        },
-        "gate": {
-            "commands": [
-                "gate list",
-                "gate check --gate-id C-001",
-                "gate open",
-                "gate satisfy",
-                "gate waive",
-            ],
-            "note": "Gate writes are aliases over strict Plan confirmation transactions.",
-        },
-        "truth": {
-            "commands": ["truth list", "truth conflicts", "truth add --manifest PATH"],
-            "note": "Truth writes are aliases over the confirmed contract revision path.",
-        },
-        "review": {
-            "commands": [
-                "review status",
-                "review request",
-                "review attach --manifest PATH",
-                "review acquisition check",
-                "review acquisition record-failure",
-                "review acquisition status",
-            ],
-            "note": (
-                "Review attachment uses the independent-review recorder and its trust rules; "
-                "reviewer acquisition caches exact and environment-level same-mechanism "
-                "validator-unavailable failures in runtime."
-            ),
-        },
-        "evidence": {
-            "commands": [
-                "evidence capture --task T-001 --kind command-output --summary TEXT",
-                "evidence record --stdin",
-                "plan evidence record --manifest PATH|--stdin",
-            ],
-            "note": (
-                "Direct capture writes redacted blobs and an append-only ledger; "
-                "Plan evidence records remain the bounded canonical compatibility path."
-            ),
-        },
-        "action": {
-            "commands": [
-                "action authorize",
-                "action consume",
-                "action status",
-                "action lease prepare",
-                "action lease issue",
-                "action lease authorize",
-                "action lease status",
-                "action lease revoke",
-            ],
-            "note": (
-                "High-impact actions still consume single-use capabilities; a route "
-                "lease only mints those capabilities inside a confirmed bounded scope; "
-                "use a new idempotency key for a consumed same-action retry."
-            ),
-        },
-        "migration": {
-            "commands": [
-                "migrate inspect",
-                "migrate apply [--dry-run]",
-                "migrate recover",
-                "migrate rollback-info",
-                "doctor",
-            ],
-            "note": (
-                "Outdated active Plans are read-only inputs: migrate apply archives the "
-                "legacy Plan, rebuilds the current schema contract, and starts fresh "
-                "runtime state without adapting legacy task status. legacy_summary and "
-                "legacy_refresh are NON_AUTHORITY guidance for selecting the next task."
-            ),
-        },
-        "doctor": {
-            "commands": ["doctor", "doctor --clean-stale-transactions"],
-            "note": (
-                "Doctor is read-only by default; cleanup only removes stale generic "
-                "runtime transaction directories with no journal."
-            ),
-        },
-    }
-    workflow_aliases: dict[str, str] = {
-        "migrate": "migration",
-    }
-    if isinstance(MODULE_WORKFLOW_HELP, dict):
-        workflows = MODULE_WORKFLOW_HELP
-    if isinstance(MODULE_WORKFLOW_HELP_ALIASES, dict):
-        workflow_aliases = MODULE_WORKFLOW_HELP_ALIASES
+    workflows = MODULE_WORKFLOW_HELP
+    workflow_aliases = MODULE_WORKFLOW_HELP_ALIASES
     workflow = args.workflow or "plan"
     workflow = workflow_aliases.get(workflow, workflow)
     if workflow not in workflows:
@@ -15062,8 +14594,9 @@ def cmd_migrate_inspect(_args: argparse.Namespace) -> None:
         doc = load_plan(active_plan_path(root))
         payload["plan_id"] = doc.frontmatter.get("plan_id")
         payload["from_schema_version"] = doc.frontmatter.get("schema_version")
-        if migration_projection is not None:
-            payload.update(migration_projection(doc.frontmatter))
+        if migration_projection is None:
+            raise WorkctlError("MIGRATION_MODULE_UNAVAILABLE: migration_projection")
+        payload.update(migration_projection(doc.frontmatter))
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
@@ -15210,14 +14743,12 @@ def prepare_v5_migration(
         "not_migrated": list(REFRESH_NOT_MIGRATED),
         "next_model_action": REFRESH_NEXT_MODEL_ACTION,
     }
-    if redacted_copy is not None:
-        contract = cast(dict[str, Any], redacted_copy(contract))
+    contract = cast(dict[str, Any], redacted_runtime_copy(contract))
     state = build_v5_state(
         source.frontmatter,
         updated_at=timestamp,
     )
-    if redacted_copy is not None:
-        state = cast(dict[str, Any], redacted_copy(state))
+    state = cast(dict[str, Any], redacted_runtime_copy(state))
     plan_doc = PlanDocument(source.path, contract, current_schema_refresh_body(contract))
     target_bytes = dump_plan(plan_doc).encode("utf-8")
     target_sha256 = sha256_bytes(target_bytes)
@@ -15245,14 +14776,9 @@ def prepare_v5_migration(
         },
         "recorded_at": timestamp,
     }
-    if redacted_copy is not None:
-        event = cast(dict[str, Any], redacted_copy(event))
+    event = cast(dict[str, Any], redacted_runtime_copy(event))
     state["event_sequence"] = 1
-    event_bytes = (
-        canonical_event_bytes(event)
-        if canonical_event_bytes is not None
-        else (json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n").encode()
-    )
+    event_bytes = canonical_event_payload_bytes(event)
     journal = {
         "schema_version": 1,
         "kind": "current-plan-schema-refresh",
@@ -15490,11 +15016,7 @@ def cmd_migrate_apply(args: argparse.Namespace) -> None:
         )
         paths = v5_migration_paths(root, migration_id)
         source_bytes = source.path.read_bytes()
-        event_bytes = (
-            canonical_event_bytes(event)
-            if canonical_event_bytes is not None
-            else (json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n").encode()
-        )
+        event_bytes = canonical_event_payload_bytes(event)
         write_v5_migration_staging(root, paths, source_bytes, target_bytes, state, event_bytes)
         write_atomic(paths["journal"], json.dumps(journal, indent=2, sort_keys=True) + "\n")
         finish_v5_migration(root, paths["journal"])
@@ -17477,11 +16999,9 @@ def require_evidence_args(evidence_ref: str, evidence_sha256: str) -> None:
 
 def canonical_evidence_bytes(payload: Mapping[str, Any]) -> bytes:
     """Return the only accepted immutable evidence record encoding."""
-    if MODULE_CANONICAL_EVIDENCE_BYTES is not None:
-        return MODULE_CANONICAL_EVIDENCE_BYTES(payload)
-    return (
-        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
-    ).encode()
+    if MODULE_CANONICAL_EVIDENCE_BYTES is None:
+        raise WorkctlError("EVIDENCE_MODULE_UNAVAILABLE: canonical_evidence_bytes")
+    return MODULE_CANONICAL_EVIDENCE_BYTES(payload)
 
 
 def validate_evidence_payload(
@@ -17491,76 +17011,19 @@ def validate_evidence_payload(
     expected_subject: str | None = None,
 ) -> None:
     """Validate bounded evidence metadata without accepting process output blobs."""
-    if module_evidence is not None:
-        try:
-            module_evidence.validate_evidence_payload(
-                payload,
-                expected_plan_id=expected_plan_id,
-                expected_subject=expected_subject,
-                valid_reference=valid_reference,
-                sha256_pattern=SHA256_RE,
-                max_items=EVIDENCE_MANIFEST_MAX_ITEMS,
-            )
-        except ValueError as exc:
-            raise WorkctlError(str(exc)) from exc
-        return
-    subject = payload.get("subject")
-    required_fields = {
-        "schema_version",
-        "kind",
-        "plan_id",
-        "subject",
-        "created_at",
-        "producer_ref",
-        "items",
-    }
-    if subject == "activation":
-        required_fields.add("observed_ref")
-    if set(payload) != required_fields:
-        raise WorkctlError("INVALID_EVIDENCE_MANIFEST_FIELDS")
-    if payload.get("schema_version") != 1 or payload.get("kind") != "work-governance-evidence":
-        raise WorkctlError("INVALID_EVIDENCE_MANIFEST_SCHEMA")
-    if payload.get("plan_id") != expected_plan_id:
-        raise WorkctlError("EVIDENCE_MANIFEST_PLAN_MISMATCH")
-    if (
-        not isinstance(subject, str)
-        or re.fullmatch(
-            r"(?:[a-z][a-z0-9-]*:[A-Za-z0-9._-]+|closeout|delivery|"
-            r"activation|plan-validation|contract-upgrade)",
-            subject,
+    if module_evidence is None:
+        raise WorkctlError("EVIDENCE_MODULE_UNAVAILABLE: validate_evidence_payload")
+    try:
+        module_evidence.validate_evidence_payload(
+            payload,
+            expected_plan_id=expected_plan_id,
+            expected_subject=expected_subject,
+            valid_reference=valid_reference,
+            sha256_pattern=SHA256_RE,
+            max_items=EVIDENCE_MANIFEST_MAX_ITEMS,
         )
-        is None
-    ):
-        raise WorkctlError("INVALID_EVIDENCE_MANIFEST_SUBJECT")
-    if expected_subject is not None and subject != expected_subject:
-        raise WorkctlError(
-            f"EVIDENCE_MANIFEST_SUBJECT_MISMATCH: expected {expected_subject}, found {subject}"
-        )
-    if not isinstance(payload.get("created_at"), str) or not payload.get("created_at"):
-        raise WorkctlError("INVALID_EVIDENCE_MANIFEST_CREATED_AT")
-    if not valid_reference(payload.get("producer_ref")):
-        raise WorkctlError("INVALID_EVIDENCE_MANIFEST_PRODUCER")
-    if subject == "activation":
-        observed_ref = payload.get("observed_ref")
-        if (
-            not isinstance(observed_ref, str)
-            or not observed_ref
-            or observed_ref != observed_ref.strip()
-            or any(character.isspace() for character in observed_ref)
-        ):
-            raise WorkctlError("INVALID_ACTIVATION_EVIDENCE_OBSERVED_REF")
-    items = payload.get("items")
-    if not isinstance(items, list) or not items or len(items) > EVIDENCE_MANIFEST_MAX_ITEMS:
-        raise WorkctlError("INVALID_EVIDENCE_MANIFEST_ITEMS")
-    for item in items:
-        if (
-            not isinstance(item, dict)
-            or set(item) != {"ref", "sha256"}
-            or not valid_reference(item.get("ref"))
-            or not isinstance(item.get("sha256"), str)
-            or SHA256_RE.fullmatch(item["sha256"]) is None
-        ):
-            raise WorkctlError("INVALID_EVIDENCE_MANIFEST_ITEM")
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def evidence_relative_path(plan_id: str, digest: str) -> str:
@@ -17570,26 +17033,15 @@ def evidence_relative_path(plan_id: str, digest: str) -> str:
 
 def parse_evidence_content(content: bytes) -> dict[str, Any]:
     """Parse one bounded JSON or YAML evidence object from trusted input bytes."""
-    if MODULE_PARSE_EVIDENCE_BYTES is not None:
-        try:
-            return cast(
-                dict[str, Any],
-                MODULE_PARSE_EVIDENCE_BYTES(content, EVIDENCE_MANIFEST_MAX_BYTES),
-            )
-        except ValueError as exc:
-            raise WorkctlError(str(exc)) from exc
-    if len(content) > EVIDENCE_MANIFEST_MAX_BYTES:
-        raise WorkctlError("EVIDENCE_MANIFEST_TOO_LARGE")
     try:
-        payload: object = json.loads(content)
-    except json.JSONDecodeError:
-        try:
-            payload = yaml.safe_load(content)
-        except yaml.YAMLError as exc:
-            raise WorkctlError("EVIDENCE_MANIFEST_INVALID") from exc
-    if not isinstance(payload, dict):
-        raise WorkctlError("EVIDENCE_MANIFEST_INVALID")
-    return cast(dict[str, Any], payload)
+        if MODULE_PARSE_EVIDENCE_BYTES is None:
+            raise WorkctlError("EVIDENCE_MODULE_UNAVAILABLE: parse_evidence_bytes")
+        return cast(
+            dict[str, Any],
+            MODULE_PARSE_EVIDENCE_BYTES(content, EVIDENCE_MANIFEST_MAX_BYTES),
+        )
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def evidence_payload_from_args(args: argparse.Namespace) -> dict[str, Any] | None:
@@ -17620,9 +17072,12 @@ def capture_module_call(name: str) -> Any:
 def evidence_capture_root(root: Path) -> Path:
     """Return the project-local direct evidence store root."""
     try:
-        return capture_module_call("evidence_capture_root")(
-            root,
-            governance_dir_name=GOVERNANCE_DIR_NAME,
+        return cast(
+            Path,
+            capture_module_call("evidence_capture_root")(
+                root,
+                governance_dir_name=GOVERNANCE_DIR_NAME,
+            ),
         )
     except ValueError as exc:
         raise WorkctlError(str(exc)) from exc
@@ -17631,10 +17086,13 @@ def evidence_capture_root(root: Path) -> Path:
 def evidence_capture_blob_path(root: Path, digest: str) -> Path:
     """Return the content-addressed blob path for direct evidence capture."""
     try:
-        return capture_module_call("evidence_capture_blob_path")(
-            root,
-            digest,
-            governance_dir_name=GOVERNANCE_DIR_NAME,
+        return cast(
+            Path,
+            capture_module_call("evidence_capture_blob_path")(
+                root,
+                digest,
+                governance_dir_name=GOVERNANCE_DIR_NAME,
+            ),
         )
     except ValueError as exc:
         raise WorkctlError(str(exc)) from exc
@@ -17644,7 +17102,7 @@ def evidence_capture_record_path(root: Path, digest: str) -> Path:
     """Return the content-addressed metadata record path for direct evidence capture."""
     try:
         helper = capture_module_call("evidence_capture_record_path")
-        return helper(root, digest, governance_dir_name=GOVERNANCE_DIR_NAME)
+        return cast(Path, helper(root, digest, governance_dir_name=GOVERNANCE_DIR_NAME))
     except ValueError as exc:
         raise WorkctlError(str(exc)) from exc
 
@@ -17653,7 +17111,7 @@ def evidence_capture_ledger_path(root: Path) -> Path:
     """Return the append-only direct evidence ledger path."""
     try:
         helper = capture_module_call("evidence_capture_ledger_path")
-        return helper(root, governance_dir_name=GOVERNANCE_DIR_NAME)
+        return cast(Path, helper(root, governance_dir_name=GOVERNANCE_DIR_NAME))
     except ValueError as exc:
         raise WorkctlError(str(exc)) from exc
 
@@ -17661,7 +17119,7 @@ def evidence_capture_ledger_path(root: Path) -> Path:
 def normalize_capture_task(task_value: str | None) -> str | None:
     """Normalize an optional task reference to a task ID."""
     try:
-        return capture_module_call("normalize_capture_task")(task_value)
+        return cast(str | None, capture_module_call("normalize_capture_task")(task_value))
     except ValueError as exc:
         raise WorkctlError(str(exc)) from exc
 
@@ -17669,7 +17127,7 @@ def normalize_capture_task(task_value: str | None) -> str | None:
 def redact_capture_text(value: str) -> str:
     """Apply conservative text redaction before evidence bytes are persisted."""
     try:
-        return capture_module_call("redact_capture_text")(value)
+        return cast(str, capture_module_call("redact_capture_text")(value))
     except ValueError as exc:
         raise WorkctlError(str(exc)) from exc
 
@@ -17677,7 +17135,7 @@ def redact_capture_text(value: str) -> str:
 def redact_capture_bytes(content: bytes) -> tuple[bytes, bool]:
     """Return persistable evidence bytes and whether the source was textual."""
     try:
-        return capture_module_call("redact_capture_bytes")(content)
+        return cast(tuple[bytes, bool], capture_module_call("redact_capture_bytes")(content))
     except ValueError as exc:
         raise WorkctlError(str(exc)) from exc
 
@@ -17685,7 +17143,10 @@ def redact_capture_bytes(content: bytes) -> tuple[bytes, bool]:
 def read_capture_source(root: Path, args: argparse.Namespace) -> tuple[bytes, str, str | None]:
     """Read direct evidence bytes from stdin or a project-local explicit file."""
     try:
-        return capture_module_call("read_capture_source")(root, args)
+        return cast(
+            tuple[bytes, str, str | None],
+            capture_module_call("read_capture_source")(root, args),
+        )
     except ValueError as exc:
         raise WorkctlError(str(exc)) from exc
 
@@ -17693,7 +17154,7 @@ def read_capture_source(root: Path, args: argparse.Namespace) -> tuple[bytes, st
 def capture_record_id(created_at: str) -> str:
     """Create a collision-resistant evidence ID from time and a random suffix."""
     try:
-        return capture_module_call("capture_record_id")(created_at)
+        return cast(str, capture_module_call("capture_record_id")(created_at))
     except ValueError as exc:
         raise WorkctlError(str(exc)) from exc
 
@@ -17727,10 +17188,13 @@ def append_capture_record(root: Path, record: Mapping[str, Any]) -> None:
 def verify_capture_record_file(root: Path, record: Mapping[str, Any]) -> tuple[str, str]:
     """Verify the content-addressed metadata file named by a ledger record."""
     try:
-        return capture_module_call("verify_capture_record_file")(
-            root,
-            record,
-            governance_dir_name=GOVERNANCE_DIR_NAME,
+        return cast(
+            tuple[str, str],
+            capture_module_call("verify_capture_record_file")(
+                root,
+                record,
+                governance_dir_name=GOVERNANCE_DIR_NAME,
+            ),
         )
     except ValueError as exc:
         raise WorkctlError(str(exc)) from exc
@@ -17760,7 +17224,7 @@ def find_capture_record_by_idempotency_key(
 def validate_capture_args(args: argparse.Namespace) -> str | None:
     """Validate direct evidence capture arguments and return the normalized task."""
     try:
-        return capture_module_call("validate_capture_args")(args)
+        return cast(str | None, capture_module_call("validate_capture_args")(args))
     except ValueError as exc:
         raise WorkctlError(str(exc)) from exc
 
@@ -17768,10 +17232,13 @@ def validate_capture_args(args: argparse.Namespace) -> str | None:
 def persist_capture_blob(root: Path, content: bytes) -> tuple[str, str, int]:
     """Persist redacted direct evidence bytes as a content-addressed blob."""
     try:
-        return capture_module_call("persist_capture_blob")(
-            root,
-            content,
-            governance_dir_name=GOVERNANCE_DIR_NAME,
+        return cast(
+            tuple[str, str, int],
+            capture_module_call("persist_capture_blob")(
+                root,
+                content,
+                governance_dir_name=GOVERNANCE_DIR_NAME,
+            ),
         )
     except ValueError as exc:
         raise WorkctlError(str(exc)) from exc
@@ -17780,10 +17247,13 @@ def persist_capture_blob(root: Path, content: bytes) -> tuple[str, str, int]:
 def persist_capture_metadata(root: Path, record: Mapping[str, Any]) -> tuple[str, str]:
     """Persist direct evidence metadata as a content-addressed record."""
     try:
-        return capture_module_call("persist_capture_metadata")(
-            root,
-            record,
-            governance_dir_name=GOVERNANCE_DIR_NAME,
+        return cast(
+            tuple[str, str],
+            capture_module_call("persist_capture_metadata")(
+                root,
+                record,
+                governance_dir_name=GOVERNANCE_DIR_NAME,
+            ),
         )
     except ValueError as exc:
         raise WorkctlError(str(exc)) from exc
@@ -18999,7 +18469,7 @@ def confirmation_module_call(name: str) -> Any:
 def manifest_input_path(manifest_path: Path, raw_path: str) -> Path:
     """Resolve a read-only manifest input relative to the manifest directory."""
     try:
-        return confirmation_module_call("manifest_input_path")(manifest_path, raw_path)
+        return cast(Path, confirmation_module_call("manifest_input_path")(manifest_path, raw_path))
     except ValueError as exc:
         raise WorkctlError(str(exc)) from exc
 
@@ -19012,10 +18482,13 @@ def confirmation_from_manifest(
 ) -> tuple[str, str, str, str] | None:
     """Read one accepted confirmation reference from a reconciliation manifest."""
     try:
-        return confirmation_module_call("confirmation_from_manifest")(
-            confirmations_value,
-            key,
-            required=required,
+        return cast(
+            tuple[str, str, str, str] | None,
+            confirmation_module_call("confirmation_from_manifest")(
+                confirmations_value,
+                key,
+                required=required,
+            ),
         )
     except ValueError as exc:
         raise WorkctlError(str(exc)) from exc

@@ -19,6 +19,7 @@ ConfirmationsById = Callable[[StatusDocument], Mapping[str, Mapping[str, object]
 ArchiveStatusProjection = Callable[[str, object], Mapping[str, object]]
 MigrationStatusProjection = Callable[[StatusDocument], Mapping[str, object]]
 ContractStateProjection = Callable[[StatusDocument], str]
+IndependentReviewBlockers = Callable[[str], Sequence[str]]
 
 VERIFIED_TASK_STATES: Set[str] = frozenset({"verified", "skipped"})
 
@@ -62,6 +63,196 @@ def _confirmed(
         and confirmation.get("status") == "accepted"
         and confirmation.get("ref")
     )
+
+
+def confirmation_map(frontmatter: StatusDocument) -> dict[str, Mapping[str, object]]:
+    """Return required and accepted confirmations keyed by stable ID."""
+    result: dict[str, Mapping[str, object]] = {}
+    raw = frontmatter.get("confirmations", {})
+    for group in ("required", "accepted"):
+        for item in raw.get(group, []) if isinstance(raw, Mapping) else []:
+            if isinstance(item, Mapping) and isinstance(item.get("id"), str):
+                result[str(item["id"])] = item
+    return result
+
+
+def blocking_artifacts(
+    frontmatter: StatusDocument,
+    blocking_artifact_states: Set[str],
+) -> dict[str, str]:
+    """Return blocking artifact IDs and states from a Plan-like status document."""
+    result: dict[str, str] = {}
+    raw_artifacts = frontmatter.get("artifacts", [])
+    for artifact in raw_artifacts if isinstance(raw_artifacts, list) else []:
+        if isinstance(artifact, Mapping) and artifact.get("status") in blocking_artifact_states:
+            artifact_id = artifact.get("id")
+            status = artifact.get("status")
+            if isinstance(artifact_id, str) and isinstance(status, str):
+                result[artifact_id] = status
+    return result
+
+
+def downstream_task_targets(
+    task_id: str,
+    task_map: Mapping[str, Mapping[str, object]],
+    verified_task_states: Set[str] = VERIFIED_TASK_STATES,
+) -> list[str]:
+    """Return non-terminal tasks that transitively depend on one blocked task."""
+    downstream: list[str] = []
+    visited: set[str] = set()
+    frontier = [task_id]
+    while frontier:
+        blocked_id = frontier.pop(0)
+        for candidate_id, candidate in task_map.items():
+            if candidate_id in visited:
+                continue
+            dependencies = candidate.get("depends_on", [])
+            if not isinstance(dependencies, list) or blocked_id not in dependencies:
+                continue
+            visited.add(candidate_id)
+            if candidate.get("status") not in verified_task_states:
+                downstream.append(f"task:{candidate_id}")
+            frontier.append(candidate_id)
+    return downstream
+
+
+def task_artifact_blockers(
+    frontmatter: StatusDocument,
+    task: Mapping[str, object],
+    blocking_artifact_states: Set[str],
+) -> list[dict[str, str]]:
+    """Project artifact blockers with the same recovery exception as task advancement."""
+    blocked = blocking_artifacts(frontmatter, blocking_artifact_states)
+    if not blocked:
+        return []
+    non_suspect = {
+        artifact_id: status for artifact_id, status in blocked.items() if status != "suspect"
+    }
+    if non_suspect:
+        return [
+            {
+                "kind": "artifact",
+                "artifact": artifact_id,
+                "state": non_suspect[artifact_id],
+            }
+            for artifact_id in sorted(non_suspect)
+        ]
+    resolves = task.get("resolves_artifacts", [])
+    if (
+        isinstance(resolves, list)
+        and resolves
+        and all(isinstance(artifact_id, str) and artifact_id in blocked for artifact_id in resolves)
+    ):
+        return []
+    return [
+        {
+            "kind": "artifact",
+            "artifact": artifact_id,
+            "state": blocked[artifact_id],
+        }
+        for artifact_id in sorted(blocked)
+    ]
+
+
+def task_confirmation_blocker(
+    frontmatter: StatusDocument,
+    task: Mapping[str, object],
+) -> dict[str, str] | None:
+    """Return the pending task gate that blocks a normal start/verify path."""
+    confirmation_id = task.get("requires_confirmation")
+    if not isinstance(confirmation_id, str):
+        return None
+    item = confirmation_map(frontmatter).get(confirmation_id)
+    if item and item.get("status") == "accepted" and item.get("ref"):
+        return None
+    return {"kind": "confirmation", "confirmation_id": confirmation_id}
+
+
+def task_blocking_details(
+    frontmatter: StatusDocument,
+    *,
+    independent_review_blockers: IndependentReviewBlockers,
+    blocking_artifact_states: Set[str],
+    verified_task_states: Set[str] = VERIFIED_TASK_STATES,
+) -> list[dict[str, object]]:
+    """Explain every task that cannot currently advance and what it blocks downstream."""
+    raw_tasks = frontmatter.get("tasks", [])
+    if not isinstance(raw_tasks, list):
+        return []
+    task_map: dict[str, Mapping[str, object]] = {
+        str(task["id"]): task
+        for task in raw_tasks
+        if isinstance(task, Mapping) and isinstance(task.get("id"), str)
+    }
+    details: list[dict[str, object]] = []
+    for task_id, task in task_map.items():
+        status = str(task.get("status", "pending"))
+        if status in verified_task_states:
+            continue
+        reasons: list[dict[str, object]] = []
+        if status == "blocked":
+            note = task.get("blocker", task.get("note", "task status is blocked"))
+            reasons.append({"kind": "explicit-block", "detail": str(note)})
+        dependencies = task.get("depends_on", [])
+        if isinstance(dependencies, list):
+            for dependency in dependencies:
+                if not isinstance(dependency, str):
+                    reasons.append({"kind": "dependency-invalid"})
+                    continue
+                dependency_task = task_map.get(dependency)
+                if dependency_task is None:
+                    reasons.append({"kind": "dependency-missing", "dependency": dependency})
+                elif dependency_task.get("status") not in verified_task_states:
+                    reasons.append(
+                        {
+                            "kind": "dependency-not-verified",
+                            "dependency": dependency,
+                            "state": str(dependency_task.get("status", "pending")),
+                        }
+                    )
+        elif "depends_on" in task:
+            reasons.append({"kind": "dependency-invalid"})
+        if status in {"pending", "in_progress"}:
+            for reason in task_artifact_blockers(frontmatter, task, blocking_artifact_states):
+                reasons.append(dict(reason))
+            review_modes = independent_review_blockers(f"task:{task_id}")
+            if review_modes:
+                reasons.append(
+                    {
+                        "kind": "independent-review",
+                        "modes": sorted(review_modes),
+                    }
+                )
+            confirmation_blocker = task_confirmation_blocker(frontmatter, task)
+            if confirmation_blocker is not None:
+                reasons.append(dict(confirmation_blocker))
+        if reasons:
+            details.append(
+                {
+                    "task": f"task:{task_id}",
+                    "status": status,
+                    "reasons": reasons,
+                    "blocks_downstream": downstream_task_targets(
+                        task_id,
+                        task_map,
+                        verified_task_states,
+                    ),
+                }
+            )
+    return details
+
+
+def pending_confirmation_ids(frontmatter: StatusDocument) -> list[str]:
+    """Return pending confirmation IDs in stable Plan order."""
+    raw = frontmatter.get("confirmations", {})
+    required = raw.get("required", []) if isinstance(raw, Mapping) else []
+    return [
+        str(item["id"])
+        for item in required
+        if isinstance(item, Mapping)
+        and isinstance(item.get("id"), str)
+        and item.get("status") == "pending"
+    ]
 
 
 def legacy_refresh_projection(

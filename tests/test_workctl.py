@@ -11,6 +11,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -10132,6 +10133,406 @@ def test_scheduler_state_wrappers_delegate_to_scheduler_module(
     monkeypatch.setitem(load_wrapper.__globals__, "MODULE_LOAD_SCHEDULER_STATE", broken_load_state)
     with pytest.raises(namespace["WorkctlError"], match="SCHEDULER_STATE_INVALID"):
         load_wrapper(tmp_path, "PLAN-20260806-001")
+
+
+def test_ready_and_blocked_task_wrappers_delegate_to_scheduler_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ready and blocked wrappers use scheduler projections without inline fallback."""
+    namespace = runpy.run_path(str(SCRIPT), run_name="workctl_scheduler_projection_fixture")
+    ready_calls: list[tuple[list[Any], object]] = []
+    blocked_calls: list[list[Any]] = []
+
+    def fake_ready_targets(tasks: list[object], priorities: object) -> list[str]:
+        ready_calls.append((tasks, priorities))
+        return ["task:T-READY"]
+
+    def fake_blocked_targets(tasks: list[object]) -> list[str]:
+        blocked_calls.append(tasks)
+        return ["task:T-BLOCKED"]
+
+    ready_wrapper = namespace["ready_task_targets"]
+    blocked_wrapper = namespace["blocked_task_targets"]
+    monkeypatch.setitem(ready_wrapper.__globals__, "MODULE_READY_TASK_TARGETS", fake_ready_targets)
+    monkeypatch.setitem(
+        blocked_wrapper.__globals__,
+        "MODULE_BLOCKED_TASK_TARGETS",
+        fake_blocked_targets,
+    )
+    frontmatter = {
+        "tasks": [
+            {"id": "T-001", "status": "pending", "depends_on": ["T-000"]},
+            {"id": "T-002", "status": "blocked", "depends_on": "malformed"},
+        ],
+    }
+
+    assert ready_wrapper(frontmatter, {"T-001": 3}) == ["task:T-READY"]
+    assert blocked_wrapper(frontmatter) == ["task:T-BLOCKED"]
+
+    ready_tasks, ready_priorities = ready_calls[0]
+    blocked_tasks = blocked_calls[0]
+    assert ready_priorities == {"T-001": 3}
+    assert [(task.task_id, task.status, task.dependencies) for task in ready_tasks] == [
+        ("T-001", "pending", ("T-000",)),
+        ("T-002", "blocked", ()),
+    ]
+    assert blocked_tasks == ready_tasks
+
+    monkeypatch.setitem(ready_wrapper.__globals__, "TaskProjection", None)
+    with pytest.raises(namespace["WorkctlError"], match="SCHEDULER_MODULE_UNAVAILABLE"):
+        ready_wrapper(frontmatter)
+
+
+def test_status_projection_wrappers_delegate_to_status_module(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Status projection wrappers inject controller-owned constants and callbacks."""
+    namespace = runpy.run_path(str(SCRIPT), run_name="workctl_status_projection_fixture")
+    blocking_calls: list[tuple[object, object]] = []
+    pending_calls: list[object] = []
+    detail_calls: list[tuple[object, object, object, object]] = []
+    review_calls: list[tuple[Path, object, str]] = []
+
+    def fake_blocking_artifacts(frontmatter: object, blocking_states: object) -> dict[str, str]:
+        blocking_calls.append((frontmatter, blocking_states))
+        return {"A-001": "suspect"}
+
+    def fake_pending_ids(frontmatter: object) -> list[str]:
+        pending_calls.append(frontmatter)
+        return ["C-001"]
+
+    def fake_independent_review_blockers(
+        root: Path,
+        frontmatter: object,
+        target: str,
+    ) -> list[str]:
+        review_calls.append((root, frontmatter, target))
+        return ["artifact_review"]
+
+    def fake_task_blocking_details(
+        frontmatter: object,
+        *,
+        independent_review_blockers: Callable[[str], list[str]],
+        blocking_artifact_states: object,
+        verified_task_states: object,
+    ) -> list[dict[str, object]]:
+        detail_calls.append(
+            (
+                frontmatter,
+                blocking_artifact_states,
+                verified_task_states,
+                independent_review_blockers,
+            )
+        )
+        review_modes = independent_review_blockers("task:T-001")
+        return [{"task": "task:T-001", "reasons": [{"modes": review_modes}]}]
+
+    blocking_wrapper = namespace["blocking_artifacts"]
+    pending_wrapper = namespace["pending_confirmation_ids"]
+    details_wrapper = namespace["task_blocking_details"]
+    monkeypatch.setitem(
+        blocking_wrapper.__globals__,
+        "module_blocking_artifacts",
+        fake_blocking_artifacts,
+    )
+    monkeypatch.setitem(
+        pending_wrapper.__globals__,
+        "module_pending_confirmation_ids",
+        fake_pending_ids,
+    )
+    monkeypatch.setitem(
+        details_wrapper.__globals__,
+        "module_task_blocking_details",
+        fake_task_blocking_details,
+    )
+    monkeypatch.setitem(
+        details_wrapper.__globals__,
+        "independent_review_blockers",
+        fake_independent_review_blockers,
+    )
+    frontmatter: dict[str, object] = {"tasks": []}
+
+    assert blocking_wrapper(frontmatter) == {"A-001": "suspect"}
+    assert pending_wrapper(frontmatter) == ["C-001"]
+    assert details_wrapper(tmp_path, frontmatter) == [
+        {"task": "task:T-001", "reasons": [{"modes": ["artifact_review"]}]}
+    ]
+    assert blocking_calls == [(frontmatter, namespace["BLOCKING_ARTIFACT_STATES"])]
+    assert pending_calls == [frontmatter]
+    assert detail_calls[0][:3] == (
+        frontmatter,
+        namespace["BLOCKING_ARTIFACT_STATES"],
+        namespace["VERIFIED_TASK_STATES"],
+    )
+    assert review_calls == [(tmp_path, frontmatter, "task:T-001")]
+
+
+def test_workflow_input_and_contract_wrappers_delegate_to_modules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Workflow wrappers keep all contract parsing and normalization in modules."""
+    namespace = runpy.run_path(str(SCRIPT), run_name="workctl_workflow_contract_fixture")
+    input_calls: list[tuple[bool, object, bool, int, bool]] = []
+    parse_calls: list[tuple[bytes, str]] = []
+    string_calls: list[tuple[object, str]] = []
+    list_calls: list[tuple[object, str]] = []
+    task_calls: list[tuple[object, object]] = []
+    confirmation_calls: list[object] = []
+
+    def fake_read_workflow_input_bytes(
+        *,
+        use_stdin: bool,
+        raw_path: object,
+        required: bool,
+        max_bytes: int,
+        stdin_reader: object,
+    ) -> bytes:
+        input_calls.append((use_stdin, raw_path, required, max_bytes, callable(stdin_reader)))
+        return b"title: delegated\n"
+
+    def fake_parse_workflow_mapping(content: bytes, *, error_prefix: str) -> dict[str, object]:
+        parse_calls.append((content, error_prefix))
+        return {"parsed": True}
+
+    def fake_non_empty_string(value: object, *, field: str) -> str:
+        string_calls.append((value, field))
+        return "delegated-string"
+
+    def fake_workflow_string_list(value: object, *, field: str) -> list[str]:
+        list_calls.append((value, field))
+        return ["delegated-list"]
+
+    def fake_normalize_goal_tasks(
+        raw_tasks: object,
+        *,
+        task_id_pattern: object,
+    ) -> list[dict[str, object]]:
+        task_calls.append((raw_tasks, task_id_pattern))
+        return [{"id": "T-001", "description": "Delegated", "depends_on": []}]
+
+    def fake_normalize_goal_confirmations(
+        raw_confirmations: object,
+    ) -> dict[str, list[dict[str, object]]]:
+        confirmation_calls.append(raw_confirmations)
+        return {"required": [], "accepted": [{"id": "C-001"}]}
+
+    read_wrapper = namespace["read_workflow_input_bytes"]
+    parse_wrapper = namespace["parse_workflow_mapping"]
+    string_wrapper = namespace["non_empty_string"]
+    list_wrapper = namespace["workflow_string_list"]
+    tasks_wrapper = namespace["normalize_goal_tasks"]
+    confirmations_wrapper = namespace["normalize_goal_confirmations"]
+    monkeypatch.setitem(
+        read_wrapper.__globals__,
+        "module_read_workflow_input_bytes",
+        fake_read_workflow_input_bytes,
+    )
+    monkeypatch.setitem(
+        parse_wrapper.__globals__,
+        "module_parse_workflow_mapping",
+        fake_parse_workflow_mapping,
+    )
+    monkeypatch.setitem(
+        string_wrapper.__globals__,
+        "module_non_empty_string",
+        fake_non_empty_string,
+    )
+    monkeypatch.setitem(
+        list_wrapper.__globals__,
+        "module_workflow_string_list",
+        fake_workflow_string_list,
+    )
+    monkeypatch.setitem(
+        tasks_wrapper.__globals__,
+        "module_normalize_goal_tasks",
+        fake_normalize_goal_tasks,
+    )
+    monkeypatch.setitem(
+        confirmations_wrapper.__globals__,
+        "module_normalize_goal_confirmations",
+        fake_normalize_goal_confirmations,
+    )
+
+    args = SimpleNamespace(contract_stdin=True, contract_file="ignored.yaml")
+    assert (
+        read_wrapper(
+            args,
+            stdin_attr="contract_stdin",
+            file_attr="contract_file",
+            required=True,
+            max_bytes=32,
+        )
+        == b"title: delegated\n"
+    )
+    assert parse_wrapper(b"title: delegated\n", error_prefix="GOAL_CONTRACT") == {"parsed": True}
+    assert string_wrapper(" raw ", field="GOAL_TITLE") == "delegated-string"
+    assert list_wrapper([" raw "], field="GOAL_SUCCESS_CONDITIONS") == ["delegated-list"]
+    assert tasks_wrapper(["task"]) == [
+        {"id": "T-001", "description": "Delegated", "depends_on": []}
+    ]
+    assert confirmations_wrapper({"accepted": [{"id": "C-001"}]}) == {
+        "required": [],
+        "accepted": [{"id": "C-001"}],
+    }
+    assert input_calls == [(True, "ignored.yaml", True, 32, True)]
+    assert parse_calls == [(b"title: delegated\n", "GOAL_CONTRACT")]
+    assert string_calls == [(" raw ", "GOAL_TITLE")]
+    assert list_calls == [([" raw "], "GOAL_SUCCESS_CONDITIONS")]
+    assert task_calls == [(["task"], namespace["ENTRY_ID_PATTERNS"]["tasks"])]
+    assert confirmation_calls == [{"accepted": [{"id": "C-001"}]}]
+
+    def broken_contract(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise namespace["ModuleWorkflowContractError"]("BROKEN_CONTRACT")
+
+    monkeypatch.setitem(
+        parse_wrapper.__globals__,
+        "module_parse_workflow_mapping",
+        broken_contract,
+    )
+    with pytest.raises(namespace["WorkctlError"], match="BROKEN_CONTRACT"):
+        parse_wrapper(b"bad", error_prefix="GOAL_CONTRACT")
+
+    monkeypatch.setitem(read_wrapper.__globals__, "module_read_workflow_input_bytes", None)
+    with pytest.raises(namespace["WorkctlError"], match="WORKFLOW_INPUT_MODULE_UNAVAILABLE"):
+        read_wrapper(
+            SimpleNamespace(contract_stdin=False, contract_file=None),
+            stdin_attr="contract_stdin",
+            file_attr="contract_file",
+            required=False,
+        )
+
+
+def test_evidence_wrappers_delegate_to_evidence_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Evidence wrappers centralize encoding, parsing, and validation in the module."""
+    namespace = runpy.run_path(str(SCRIPT), run_name="workctl_evidence_wrapper_fixture")
+    canonical_calls: list[object] = []
+    parse_calls: list[tuple[bytes, int]] = []
+    validate_calls: list[tuple[object, str, str | None, object, object, int]] = []
+
+    def fake_canonical_evidence_bytes(payload: object) -> bytes:
+        canonical_calls.append(payload)
+        return b"CANONICAL\n"
+
+    def fake_parse_evidence_bytes(content: bytes, max_bytes: int) -> dict[str, object]:
+        parse_calls.append((content, max_bytes))
+        return {"parsed": True}
+
+    def fake_validate_evidence_payload(
+        payload: object,
+        *,
+        expected_plan_id: str,
+        expected_subject: str | None,
+        valid_reference: object,
+        sha256_pattern: object,
+        max_items: int,
+    ) -> None:
+        validate_calls.append(
+            (
+                payload,
+                expected_plan_id,
+                expected_subject,
+                valid_reference,
+                sha256_pattern,
+                max_items,
+            )
+        )
+
+    canonical_wrapper = namespace["canonical_evidence_bytes"]
+    parse_wrapper = namespace["parse_evidence_content"]
+    validate_wrapper = namespace["validate_evidence_payload"]
+    monkeypatch.setitem(
+        canonical_wrapper.__globals__,
+        "MODULE_CANONICAL_EVIDENCE_BYTES",
+        fake_canonical_evidence_bytes,
+    )
+    monkeypatch.setitem(
+        parse_wrapper.__globals__,
+        "MODULE_PARSE_EVIDENCE_BYTES",
+        fake_parse_evidence_bytes,
+    )
+    monkeypatch.setitem(
+        validate_wrapper.__globals__,
+        "module_evidence",
+        SimpleNamespace(validate_evidence_payload=fake_validate_evidence_payload),
+    )
+    payload = {"schema_version": 1, "plan_id": "PLAN-20260806-001"}
+
+    assert canonical_wrapper(payload) == b"CANONICAL\n"
+    assert parse_wrapper(b"{}") == {"parsed": True}
+    validate_wrapper(
+        payload,
+        expected_plan_id="PLAN-20260806-001",
+        expected_subject="task:T-001",
+    )
+
+    assert canonical_calls == [payload]
+    assert parse_calls == [(b"{}", namespace["EVIDENCE_MANIFEST_MAX_BYTES"])]
+    assert validate_calls[0] == (
+        payload,
+        "PLAN-20260806-001",
+        "task:T-001",
+        namespace["valid_reference"],
+        namespace["SHA256_RE"],
+        namespace["EVIDENCE_MANIFEST_MAX_ITEMS"],
+    )
+
+    def broken_validate(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("INVALID_EVIDENCE_MANIFEST_ITEM")
+
+    monkeypatch.setitem(
+        validate_wrapper.__globals__,
+        "module_evidence",
+        SimpleNamespace(validate_evidence_payload=broken_validate),
+    )
+    with pytest.raises(namespace["WorkctlError"], match="INVALID_EVIDENCE_MANIFEST_ITEM"):
+        validate_wrapper(payload, expected_plan_id="PLAN-20260806-001")
+
+    monkeypatch.setitem(canonical_wrapper.__globals__, "MODULE_CANONICAL_EVIDENCE_BYTES", None)
+    with pytest.raises(namespace["WorkctlError"], match="EVIDENCE_MODULE_UNAVAILABLE"):
+        canonical_wrapper(payload)
+
+
+def test_storage_wrappers_delegate_to_storage_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime event encoding and redaction fail closed if storage helpers are unavailable."""
+    namespace = runpy.run_path(str(SCRIPT), run_name="workctl_storage_wrapper_fixture")
+    event_calls: list[object] = []
+    redact_calls: list[object] = []
+
+    def fake_canonical_event_bytes(event: object) -> bytes:
+        event_calls.append(event)
+        return b"EVENT\n"
+
+    def fake_redacted_copy(value: object) -> object:
+        redact_calls.append(value)
+        return {"redacted": True}
+
+    event_wrapper = namespace["canonical_event_payload_bytes"]
+    redact_wrapper = namespace["redacted_runtime_copy"]
+    monkeypatch.setitem(
+        event_wrapper.__globals__,
+        "canonical_event_bytes",
+        fake_canonical_event_bytes,
+    )
+    monkeypatch.setitem(redact_wrapper.__globals__, "redacted_copy", fake_redacted_copy)
+    event = {"event": "task.verified"}
+    payload = {"note": "secret"}
+
+    assert event_wrapper(event) == b"EVENT\n"
+    assert redact_wrapper(payload) == {"redacted": True}
+    assert event_calls == [event]
+    assert redact_calls == [payload]
+
+    monkeypatch.setitem(event_wrapper.__globals__, "canonical_event_bytes", None)
+    with pytest.raises(namespace["WorkctlError"], match="STORAGE_MODULE_UNAVAILABLE"):
+        event_wrapper(event)
+    monkeypatch.setitem(redact_wrapper.__globals__, "redacted_copy", None)
+    with pytest.raises(namespace["WorkctlError"], match="STORAGE_MODULE_UNAVAILABLE"):
+        redact_wrapper(payload)
 
 
 def test_schema_v4_admission_rejects_unclassified_pending_gate(tmp_path: Path) -> None:

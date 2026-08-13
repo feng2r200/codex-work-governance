@@ -983,6 +983,7 @@ def test_public_help_matches_candidate_boundaries(tmp_path: Path) -> None:
     assert doctor_help["commands"] == ["doctor", "doctor --clean-stale-transactions"]
     assert "action lease prepare" in action_help["commands"]
     assert "action lease authorize" in action_help["commands"]
+    assert "confirmation judgment belongs to the model" in action_help["note"]
     assert "review acquisition check" in review_help["commands"]
     assert "review acquisition record-failure" in review_help["commands"]
     assert gate_help.returncode == 0
