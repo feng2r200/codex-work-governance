@@ -15,10 +15,12 @@ blocking_artifacts = status_module.blocking_artifacts
 compact_plan_status = status_module.compact_plan_status
 completion_claims = status_module.completion_claims
 current_schema_refresh_status = status_module.current_schema_refresh_status
+incomplete_entries = status_module.incomplete_entries
 pending_confirmation_ids = status_module.pending_confirmation_ids
 legacy_refresh_projection = status_module.legacy_refresh_projection
 queue_projection = status_module.queue_projection
 task_blocking_details = status_module.task_blocking_details
+unresolved_exclusions = status_module.unresolved_exclusions
 user_intervention_projection = status_module.user_intervention_projection
 
 
@@ -117,6 +119,31 @@ def test_pending_confirmation_ids_preserves_required_plan_order() -> None:
     )
 
     assert payload == ["C-002", "C-003"]
+
+
+def test_completion_closeout_helpers_project_incomplete_entries_and_exclusions() -> None:
+    """Completion helpers keep legacy closeout preconditions outside the controller."""
+    frontmatter = {
+        "obligations": [
+            {"id": "O-001", "status": "verified"},
+            {"id": "O-002", "status": "pending"},
+            {"status": "pending"},
+            "malformed",
+        ],
+        "scope": {
+            "exclude": [
+                {"description": "Push remote refs", "disposition": "forbidden"},
+                {"description": "Local tests", "disposition": "resolved"},
+            ]
+        },
+    }
+
+    assert incomplete_entries(frontmatter, "obligations", {"verified", "skipped"}) == [
+        "O-002",
+        "obligations:unknown",
+        "obligations:invalid",
+    ]
+    assert unresolved_exclusions(frontmatter, {"forbidden"}) == ["Push remote refs"]
 
 
 def test_task_blocking_details_projects_dependency_artifact_review_and_confirmation() -> None:

@@ -53,6 +53,7 @@ from workctl_modules import scheduler_state_path as MODULE_SCHEDULER_STATE_PATH
 from workctl_modules import yaml_compat as yaml
 from workctl_modules.authority import candidate_to_dict as module_candidate_to_dict
 from workctl_modules.authority import parse_candidate_specs as module_parse_candidate_specs
+from workctl_modules.confirmation import confirmation_lookup as module_confirmation_lookup
 from workctl_modules.history import PlanHistoryError as ModulePlanHistoryError
 from workctl_modules.history import find_plan_history_target as module_find_plan_history_target
 from workctl_modules.history import (
@@ -70,6 +71,7 @@ from workctl_modules.migration import archive_path_for_source as module_archive_
 from workctl_modules.migration import pointer_text as module_pointer_text
 from workctl_modules.model import TaskProjection
 from workctl_modules.plan_schema import CURRENT_PLAN_SCHEMA_VERSION
+from workctl_modules.references import valid_reference as module_valid_reference
 from workctl_modules.risk import action_reversibility as module_action_reversibility
 from workctl_modules.risk import risk_factors_for_action as module_risk_factors_for_action
 from workctl_modules.risk import risk_inspection_payload as module_risk_inspection_payload
@@ -86,6 +88,8 @@ from workctl_modules.status import queue_projection as module_queue_projection
 from workctl_modules.status import task_artifact_blockers as module_task_artifact_blockers
 from workctl_modules.status import task_blocking_details as module_task_blocking_details
 from workctl_modules.status import task_confirmation_blocker as module_task_confirmation_blocker
+from workctl_modules.status import incomplete_entries as module_incomplete_entries
+from workctl_modules.status import unresolved_exclusions as module_unresolved_exclusions
 from workctl_modules.status import (
     user_intervention_projection as module_user_intervention_projection,
 )
@@ -693,7 +697,7 @@ def utc_now() -> str:
 
 def valid_reference(value: object) -> bool:
     """Return whether a value is a typed, non-whitespace authority reference."""
-    return isinstance(value, str) and REFERENCE_RE.fullmatch(value) is not None
+    return module_valid_reference(value, REFERENCE_RE)
 
 
 def project_root() -> Path:
@@ -3966,13 +3970,7 @@ def require_no_blocking_artifacts(
 
 
 def confirmations(frontmatter: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    result: dict[str, dict[str, Any]] = {}
-    raw = frontmatter.get("confirmations", {})
-    for group in ("required", "accepted"):
-        for item in raw.get(group, []) if isinstance(raw, dict) else []:
-            if isinstance(item, dict) and isinstance(item.get("id"), str):
-                result[item["id"]] = item
-    return result
+    return cast(dict[str, dict[str, Any]], module_confirmation_lookup(frontmatter))
 
 
 def intervention_errors(
@@ -18188,34 +18186,12 @@ def cmd_plan_schema_validate(args: argparse.Namespace) -> None:
 
 def incomplete_entries(frontmatter: dict[str, Any], field: str) -> list[str]:
     """Return IDs for work entries that are not verified or skipped."""
-    result: list[str] = []
-    values = frontmatter.get(field, [])
-    if not isinstance(values, list):
-        return [f"{field}:invalid"]
-    for item in values:
-        if not isinstance(item, dict):
-            result.append(f"{field}:invalid")
-            continue
-        if item.get("status") not in VERIFIED_TASK_STATES:
-            result.append(str(item.get("id", f"{field}:unknown")))
-    return result
+    return module_incomplete_entries(frontmatter, field, VERIFIED_TASK_STATES)
 
 
 def unresolved_exclusions(frontmatter: dict[str, Any]) -> list[str]:
     """Return schema-v3 exclusions that still require route disposition."""
-    scope = frontmatter.get("scope", {})
-    exclusions = scope.get("exclude", []) if isinstance(scope, dict) else []
-    result: list[str] = []
-    if not isinstance(exclusions, list):
-        return result
-    for exclusion in exclusions:
-        if (
-            isinstance(exclusion, dict)
-            and exclusion.get("disposition") in BLOCKING_EXCLUSION_DISPOSITIONS
-        ):
-            description = exclusion.get("description", "<unknown>")
-            result.append(str(description))
-    return result
+    return module_unresolved_exclusions(frontmatter, BLOCKING_EXCLUSION_DISPOSITIONS)
 
 
 def completion_claims(

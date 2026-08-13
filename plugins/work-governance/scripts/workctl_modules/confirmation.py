@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -15,6 +15,20 @@ def manifest_input_path(manifest_path: Path, raw_path: str) -> Path:
     if not path.is_absolute():
         path = manifest_path.parent / path
     return path.resolve()
+
+
+def confirmation_lookup(
+    frontmatter: MutableMapping[str, object] | Mapping[str, object],
+) -> dict[str, MutableMapping[str, object]]:
+    """Return required and accepted confirmation mappings keyed by stable ID."""
+    result: dict[str, MutableMapping[str, object]] = {}
+    raw = frontmatter.get("confirmations", {})
+    for group in ("required", "accepted"):
+        values = raw.get(group, []) if isinstance(raw, Mapping) else []
+        for item in values if isinstance(values, list) else []:
+            if isinstance(item, MutableMapping) and isinstance(item.get("id"), str):
+                result[str(item["id"])] = item
+    return result
 
 
 def confirmation_from_manifest(

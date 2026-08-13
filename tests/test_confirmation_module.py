@@ -11,6 +11,7 @@ if str(SCRIPT_ROOT) not in sys.path:
 
 confirmation_module = importlib.import_module("workctl_modules.confirmation")
 accepted_confirmation = confirmation_module.accepted_confirmation
+confirmation_lookup = confirmation_module.confirmation_lookup
 confirmation_from_manifest = confirmation_module.confirmation_from_manifest
 manifest_input_path = confirmation_module.manifest_input_path
 
@@ -21,6 +22,25 @@ def test_manifest_input_path_resolves_relative_to_manifest(tmp_path: Path) -> No
     expected = tmp_path / "inputs" / "prepared.md"
 
     assert manifest_input_path(manifest, "prepared.md") == expected.resolve()
+
+
+def test_confirmation_lookup_preserves_original_mapping_references() -> None:
+    """Confirmation lookup keeps mutable Plan entries addressable by ID."""
+    accepted = {"id": "C-ACCEPTED", "status": "accepted"}
+    pending = {"id": "C-PENDING", "status": "pending"}
+    frontmatter = {
+        "confirmations": {
+            "required": [pending],
+            "accepted": [accepted, {"id": 7, "status": "pending"}],
+        }
+    }
+
+    payload = confirmation_lookup(frontmatter)
+    payload["C-PENDING"]["status"] = "accepted"
+
+    assert payload["C-ACCEPTED"] is accepted
+    assert payload["C-PENDING"] is pending
+    assert pending["status"] == "accepted"
 
 
 def test_confirmation_from_manifest_accepts_required_and_optional_entries() -> None:
