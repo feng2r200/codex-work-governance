@@ -255,6 +255,45 @@ def pending_confirmation_ids(frontmatter: StatusDocument) -> list[str]:
     ]
 
 
+def incomplete_entries(
+    frontmatter: StatusDocument,
+    field: str,
+    verified_task_states: Set[str] = VERIFIED_TASK_STATES,
+) -> list[str]:
+    """Return IDs for work entries that are not verified or skipped."""
+    result: list[str] = []
+    values = frontmatter.get(field, [])
+    if not isinstance(values, list):
+        return [f"{field}:invalid"]
+    for item in values:
+        if not isinstance(item, Mapping):
+            result.append(f"{field}:invalid")
+            continue
+        if item.get("status") not in verified_task_states:
+            result.append(str(item.get("id", f"{field}:unknown")))
+    return result
+
+
+def unresolved_exclusions(
+    frontmatter: StatusDocument,
+    blocking_dispositions: Set[str],
+) -> list[str]:
+    """Return schema-v3 exclusions that still require route disposition."""
+    scope = frontmatter.get("scope", {})
+    exclusions = scope.get("exclude", []) if isinstance(scope, Mapping) else []
+    result: list[str] = []
+    if not isinstance(exclusions, list):
+        return result
+    for exclusion in exclusions:
+        if (
+            isinstance(exclusion, Mapping)
+            and exclusion.get("disposition") in blocking_dispositions
+        ):
+            description = exclusion.get("description", "<unknown>")
+            result.append(str(description))
+    return result
+
+
 def legacy_refresh_projection(
     frontmatter: StatusDocument,
     *,
