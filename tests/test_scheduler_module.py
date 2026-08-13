@@ -13,11 +13,40 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 scheduler_module = importlib.import_module("workctl_modules.scheduler")
+model_module = importlib.import_module("workctl_modules.model")
 current_advancement_targets = scheduler_module.current_advancement_targets
 dump_scheduler_state = scheduler_module.dump_scheduler_state
 load_scheduler_state = scheduler_module.load_scheduler_state
 scheduler_state_path = scheduler_module.scheduler_state_path
+ready_task_targets = scheduler_module.ready_task_targets
+blocked_task_targets = scheduler_module.blocked_task_targets
 SchedulerStateError = scheduler_module.SchedulerStateError
+TaskProjection = model_module.TaskProjection
+
+
+def test_ready_task_targets_orders_dependency_ready_tasks_by_priority() -> None:
+    """Ready task projection respects dependencies, priority, and original order."""
+    tasks = [
+        TaskProjection("T-001", "verified", ()),
+        TaskProjection("T-002", "pending", ("T-001",)),
+        TaskProjection("T-003", "pending", ()),
+        TaskProjection("T-004", "pending", ("T-404",)),
+    ]
+
+    payload = ready_task_targets(tasks, {"T-003": 5})
+
+    assert payload == ["task:T-003", "task:T-002"]
+
+
+def test_blocked_task_targets_returns_explicit_blockers_only() -> None:
+    """Blocked task projection ignores dependency waits and non-task state."""
+    tasks = [
+        TaskProjection("T-001", "pending", ()),
+        TaskProjection("T-002", "blocked", ("T-001",)),
+        TaskProjection("T-003", "in_progress", ()),
+    ]
+
+    assert blocked_task_targets(tasks) == ["task:T-002"]
 
 
 def test_current_advancement_targets_prefers_in_progress_tasks() -> None:

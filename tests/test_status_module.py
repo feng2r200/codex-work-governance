@@ -11,11 +11,14 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 status_module = importlib.import_module("workctl_modules.status")
+blocking_artifacts = status_module.blocking_artifacts
 compact_plan_status = status_module.compact_plan_status
 completion_claims = status_module.completion_claims
 current_schema_refresh_status = status_module.current_schema_refresh_status
+pending_confirmation_ids = status_module.pending_confirmation_ids
 legacy_refresh_projection = status_module.legacy_refresh_projection
 queue_projection = status_module.queue_projection
+task_blocking_details = status_module.task_blocking_details
 user_intervention_projection = status_module.user_intervention_projection
 
 
@@ -79,6 +82,110 @@ def refresh_projection(frontmatter: Mapping[str, object]) -> Mapping[str, object
 def refresh_contract_state(_frontmatter: Mapping[str, object]) -> str:
     """Return the current-schema refresh contract state."""
     return "PLAN_SCHEMA_REFRESH_REQUIRED"
+
+
+def test_blocking_artifacts_returns_configured_blocking_states() -> None:
+    """Artifact blocking projection uses the caller-owned state set."""
+    payload = blocking_artifacts(
+        {
+            "artifacts": [
+                {"id": "A-001", "status": "suspect"},
+                {"id": "A-002", "status": "final"},
+                {"id": "A-003", "status": "rollback-pending"},
+                {"id": 4, "status": "suspect"},
+            ],
+        },
+        {"suspect", "rollback-pending"},
+    )
+
+    assert payload == {"A-001": "suspect", "A-003": "rollback-pending"}
+
+
+def test_pending_confirmation_ids_preserves_required_plan_order() -> None:
+    """Only pending required confirmations are surfaced as compact gates."""
+    payload = pending_confirmation_ids(
+        {
+            "confirmations": {
+                "required": [
+                    {"id": "C-001", "status": "accepted"},
+                    {"id": "C-002", "status": "pending"},
+                    {"id": "C-003", "status": "pending"},
+                ],
+                "accepted": [{"id": "C-004", "status": "pending"}],
+            }
+        }
+    )
+
+    assert payload == ["C-002", "C-003"]
+
+
+def test_task_blocking_details_projects_dependency_artifact_review_and_confirmation() -> None:
+    """Task blocking details explain every local reason and downstream impact."""
+    payload = task_blocking_details(
+        {
+            "tasks": [
+                {
+                    "id": "T-001",
+                    "status": "pending",
+                    "depends_on": ["T-404", 7],
+                    "requires_confirmation": "C-START",
+                },
+                {
+                    "id": "T-002",
+                    "status": "pending",
+                    "depends_on": ["T-001"],
+                    "resolves_artifacts": ["A-001"],
+                    "requires_confirmation": "C-DONE",
+                },
+                {"id": "T-003", "status": "blocked", "note": "Need external fact"},
+                {"id": "T-004", "status": "verified", "depends_on": ["T-003"]},
+            ],
+            "artifacts": [{"id": "A-001", "status": "suspect"}],
+            "confirmations": {
+                "required": [
+                    {"id": "C-START", "status": "pending"},
+                    {"id": "C-DONE", "status": "accepted", "ref": "user:accepted"},
+                ]
+            },
+        },
+        independent_review_blockers=lambda target: ["artifact_review"]
+        if target == "task:T-001"
+        else [],
+        blocking_artifact_states={"suspect"},
+    )
+
+    assert payload == [
+        {
+            "task": "task:T-001",
+            "status": "pending",
+            "reasons": [
+                {"kind": "dependency-missing", "dependency": "T-404"},
+                {"kind": "dependency-invalid"},
+                {"kind": "artifact", "artifact": "A-001", "state": "suspect"},
+                {"kind": "independent-review", "modes": ["artifact_review"]},
+                {"kind": "confirmation", "confirmation_id": "C-START"},
+            ],
+            "blocks_downstream": ["task:T-002"],
+        },
+        {
+            "task": "task:T-002",
+            "status": "pending",
+            "reasons": [
+                {
+                    "kind": "dependency-not-verified",
+                    "dependency": "T-001",
+                    "state": "pending",
+                }
+            ],
+            "blocks_downstream": [],
+        },
+        {
+            "task": "task:T-003",
+            "status": "blocked",
+            "reasons": [{"kind": "explicit-block", "detail": "Need external fact"}],
+            "blocks_downstream": [],
+        },
+    ]
 
 
 def test_compact_plan_status_preserves_default_payload_shape() -> None:

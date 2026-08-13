@@ -9,14 +9,45 @@ from typing import Protocol
 class AuthorityCandidateView(Protocol):
     """Minimal read-only shape required for authority candidate projection."""
 
-    path: str
-    classification: str
-    origin: str
-    signals: list[str]
-    sha256: str
-    plan_id: str | None
-    revision: int | None
-    status: str | None
+    @property
+    def path(self) -> str:
+        """Project-local candidate path."""
+        ...
+
+    @property
+    def classification(self) -> str:
+        """Candidate semantic class."""
+        ...
+
+    @property
+    def origin(self) -> str:
+        """Discovery origin."""
+        ...
+
+    @property
+    def signals(self) -> list[str]:
+        """Authority signals that led to classification."""
+        ...
+
+    @property
+    def sha256(self) -> str:
+        """Candidate content digest."""
+        ...
+
+    @property
+    def plan_id(self) -> str | None:
+        """Plan ID parsed from the candidate, if any."""
+        ...
+
+    @property
+    def revision(self) -> int | None:
+        """Plan revision parsed from the candidate, if any."""
+        ...
+
+    @property
+    def status(self) -> str | None:
+        """Plan status parsed from the candidate, if any."""
+        ...
 
 
 def candidate_to_dict(candidate: AuthorityCandidateView) -> dict[str, object]:
