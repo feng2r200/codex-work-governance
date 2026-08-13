@@ -224,8 +224,10 @@ def patch_runtime_controller_for_legacy_schema_tests(project: Path) -> None:
     """Patch the runtime controller copy so legacy v4 intake tests stay scoped."""
     receipt_path = project / ".work-governance" / "bootstrap-state.json"
     receipt = read_json_object(receipt_path)
-    controller = project / cast(str, receipt["controller_ref"])
     bundle = project / cast(str, receipt["runtime_bundle_ref"])
+    controller = bundle / "workctl_modules" / "kernel" / "controller.py"
+    if not controller.is_file():
+        controller = project / cast(str, receipt["controller_ref"])
     manifest_path = bundle / "manifest.json"
     controller_source = controller.read_text(encoding="utf-8")
     contract_state_marker = (
@@ -274,7 +276,24 @@ def patch_runtime_controller_for_legacy_schema_tests(project: Path) -> None:
     controller.write_text(controller_source, encoding="utf-8")
     controller_sha256 = sha256_bytes(controller.read_bytes())
     manifest = read_json_object(manifest_path)
-    manifest["controller_sha256"] = controller_sha256
+    receipt_controller_sha256 = cast(str, receipt["controller_sha256"])
+    if controller.name == "workctl.py":
+        manifest["controller_sha256"] = controller_sha256
+        receipt_controller_sha256 = controller_sha256
+    else:
+        module_files = manifest.get("module_files", [])
+        if isinstance(module_files, list):
+            for entry in module_files:
+                if (
+                    isinstance(entry, dict)
+                    and entry.get("path") == "workctl_modules/kernel/controller.py"
+                ):
+                    entry["sha256"] = controller_sha256
+                    break
+            else:
+                raise AssertionError("runtime bundle kernel controller manifest entry missing")
+        else:
+            raise AssertionError("runtime bundle module_files drifted")
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -288,7 +307,7 @@ def patch_runtime_controller_for_legacy_schema_tests(project: Path) -> None:
     ]
     for candidate in receipt_paths:
         payload = read_json_object(candidate)
-        payload["controller_sha256"] = controller_sha256
+        payload["controller_sha256"] = receipt_controller_sha256
         payload["runtime_manifest_sha256"] = manifest_sha256
         candidate.write_text(
             json.dumps(payload, indent=2, sort_keys=True) + "\n",

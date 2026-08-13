@@ -9,6 +9,15 @@ from typing import cast
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CONTROLLER = REPOSITORY_ROOT / "plugins" / "work-governance" / "scripts" / "workctl.py"
+KERNEL_CONTROLLER = (
+    REPOSITORY_ROOT
+    / "plugins"
+    / "work-governance"
+    / "scripts"
+    / "workctl_modules"
+    / "kernel"
+    / "controller.py"
+)
 PATH_HELPERS = (
     REPOSITORY_ROOT / "plugins" / "work-governance" / "scripts" / "workctl_modules" / "paths.py"
 )
@@ -46,7 +55,7 @@ def test_all_normal_controller_paths_derive_from_governance_root(
 
 def test_legacy_root_literals_are_confined_to_bootstrap_compatibility() -> None:
     """Prevent new normal writers to root .logs or .worktree."""
-    controller = CONTROLLER.read_text(encoding="utf-8")
+    controller = KERNEL_CONTROLLER.read_text(encoding="utf-8")
     path_helpers = PATH_HELPERS.read_text(encoding="utf-8")
     bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
 
@@ -83,9 +92,10 @@ def test_public_contracts_name_only_canonical_normal_paths() -> None:
 
 def test_controller_runtime_bootstrap_has_no_external_script_dependency() -> None:
     """Cold hook bootstrap must not require fetching PyYAML into a new cache."""
-    controller = CONTROLLER.read_text(encoding="utf-8")
+    wrapper = CONTROLLER.read_text(encoding="utf-8")
+    controller = KERNEL_CONTROLLER.read_text(encoding="utf-8")
 
-    assert "# dependencies = []" in controller
+    assert "# dependencies = []" in wrapper
     assert "yaml_compat" in controller
 
 
