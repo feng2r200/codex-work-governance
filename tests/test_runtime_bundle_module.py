@@ -48,17 +48,19 @@ def test_runtime_bundle_manifest_payload_preserves_optional_module_files() -> No
 def test_validated_runtime_bundle_module_files_returns_typed_entries(tmp_path: Path) -> None:
     """Module-file validation checks shape, location, and content digest."""
     bundle = tmp_path / "bundle"
-    module_path = bundle / "workctl_modules" / "helper.py"
+    module_path = bundle / "workctl_modules" / "kernel" / "controller.py"
     module_path.parent.mkdir(parents=True)
     module_path.write_text("VALUE = 1\n", encoding="utf-8")
     digest = filesystem_module.sha256_file(module_path)
-    manifest = {"module_files": [{"path": "workctl_modules/helper.py", "sha256": digest}]}
+    manifest = {
+        "module_files": [{"path": "workctl_modules/kernel/controller.py", "sha256": digest}]
+    }
 
     assert runtime_bundle_module.validated_runtime_bundle_module_files(
         bundle,
         manifest,
         sha256_pattern=SHA256_RE,
-    ) == [{"path": "workctl_modules/helper.py", "sha256": digest}]
+    ) == [{"path": "workctl_modules/kernel/controller.py", "sha256": digest}]
 
 
 def test_validated_runtime_bundle_module_files_rejects_invalid_entries(
@@ -89,6 +91,19 @@ def test_validated_runtime_bundle_module_files_rejects_invalid_entries(
                 "module_files": [
                     {
                         "path": "helper.py",
+                        "sha256": filesystem_module.sha256_file(module_path),
+                    }
+                ]
+            },
+            sha256_pattern=SHA256_RE,
+        )
+    with pytest.raises(RuntimeBundleError, match="BOOTSTRAP_RUNTIME_BUNDLE_INVALID"):
+        runtime_bundle_module.validated_runtime_bundle_module_files(
+            bundle,
+            {
+                "module_files": [
+                    {
+                        "path": "workctl_modules/../workctl.py",
                         "sha256": filesystem_module.sha256_file(module_path),
                     }
                 ]

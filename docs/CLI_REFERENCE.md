@@ -1,6 +1,6 @@
 # Work Governance CLI reference
 
-> Generated from `plugins/work-governance/scripts/workctl.py` by `generate_cli_reference.py`; edit the parser, not this file.
+> Generated from the public `plugins/work-governance/scripts/workctl.py` entrypoint and current kernel parser by `generate_cli_reference.py`; edit the kernel parser, not this file.
 
 ## Invocation contract
 

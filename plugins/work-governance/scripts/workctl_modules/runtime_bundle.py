@@ -63,16 +63,26 @@ def validated_runtime_bundle_module_files(
             or sha256_pattern.fullmatch(entry["sha256"]) is None
         ):
             raise RuntimeBundleError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
-        module_path = bundle / entry["path"]
+        relative_path = Path(entry["path"])
+        if (
+            relative_path.is_absolute()
+            or ".." in relative_path.parts
+            or len(relative_path.parts) < 2
+            or relative_path.parts[0] != "workctl_modules"
+            or relative_path.suffix != ".py"
+        ):
+            raise RuntimeBundleError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
+        module_path = bundle / relative_path
+        probe = bundle
+        for part in relative_path.parts:
+            probe /= part
+            if probe.is_symlink():
+                raise RuntimeBundleError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
         try:
             digest = sha256_file(module_path)
         except FilesystemError as exc:
             raise RuntimeBundleError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID") from exc
-        if (
-            module_path.parent.parent != bundle
-            or module_path.is_symlink()
-            or digest != entry["sha256"]
-        ):
+        if not module_path.is_file() or digest != entry["sha256"]:
             raise RuntimeBundleError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
         typed_files.append({"path": entry["path"], "sha256": entry["sha256"]})
     return typed_files

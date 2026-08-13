@@ -1577,12 +1577,22 @@ def validate_runtime_bundle(
                 or not SHA256_RE.fullmatch(entry["sha256"])
             ):
                 raise BootstrapError("RUNTIME_BUNDLE_INVALID")
-            candidate = bundle / entry["path"]
+            relative_path = Path(entry["path"])
             if (
-                candidate.is_symlink()
-                or not candidate.is_file()
-                or sha256_file(candidate) != entry["sha256"]
+                relative_path.is_absolute()
+                or ".." in relative_path.parts
+                or len(relative_path.parts) < 2
+                or relative_path.parts[0] != "workctl_modules"
+                or relative_path.suffix != ".py"
             ):
+                raise BootstrapError("RUNTIME_BUNDLE_INVALID")
+            candidate = bundle / relative_path
+            probe = bundle
+            for part in relative_path.parts:
+                probe /= part
+                if probe.is_symlink():
+                    raise BootstrapError("RUNTIME_BUNDLE_INVALID")
+            if not candidate.is_file() or sha256_file(candidate) != entry["sha256"]:
                 raise BootstrapError("RUNTIME_BUNDLE_INVALID")
     try:
         actual = json.loads(manifest.read_text(encoding="utf-8"))

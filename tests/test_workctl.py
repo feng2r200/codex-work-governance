@@ -19,6 +19,15 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "plugins" / "work-governance" / "scripts" / "workctl.py"
+KERNEL_CONTROLLER = (
+    REPO_ROOT
+    / "plugins"
+    / "work-governance"
+    / "scripts"
+    / "workctl_modules"
+    / "kernel"
+    / "controller.py"
+)
 LIFECYCLE_SKILL = (
     REPO_ROOT / "plugins" / "work-governance" / "skills" / "work-lifecycle" / "SKILL.md"
 )
@@ -46,7 +55,8 @@ def ensure_test_ready_receipt(
     plugin_manifest_sha256 = ("1" if allow_legacy_contract else "2") * 64
     bundle = root / ".work-governance" / "runtime" / "plugin-builds" / plugin_manifest_sha256
     bundle.mkdir(parents=True, exist_ok=True)
-    controller_source = SCRIPT.read_text(encoding="utf-8")
+    wrapper_source = SCRIPT.read_text(encoding="utf-8")
+    controller_source = KERNEL_CONTROLLER.read_text(encoding="utf-8")
     if allow_legacy_contract:
         strict_marker = "STRICT_INITIAL_INTAKE_REQUIRED = True\n"
         if controller_source.count(strict_marker) != 1:
@@ -172,10 +182,14 @@ def ensure_test_ready_receipt(
     )
     controller = bundle / "workctl.py"
     lifecycle = bundle / "work-lifecycle.SKILL.md"
-    controller.write_text(controller_source, encoding="utf-8")
+    controller.write_text(wrapper_source, encoding="utf-8")
     module_source = SCRIPT.parent / "workctl_modules"
     if module_source.is_dir():
         shutil.copytree(module_source, bundle / "workctl_modules", dirs_exist_ok=True)
+    (bundle / "workctl_modules" / "kernel" / "controller.py").write_text(
+        controller_source,
+        encoding="utf-8",
+    )
     lifecycle.write_bytes(LIFECYCLE_SKILL.read_bytes())
     controller_sha256 = hashlib.sha256(controller.read_bytes()).hexdigest()
     lifecycle_sha256 = hashlib.sha256(lifecycle.read_bytes()).hexdigest()
