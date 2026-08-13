@@ -6777,6 +6777,102 @@ def test_closeout_requires_terminal_route_and_complete_work(tmp_path: Path) -> N
     assert frontmatter["status"] == "complete"
 
 
+def test_verified_tasks_do_not_make_historical_active_plan_terminal(
+    tmp_path: Path,
+) -> None:
+    """Task completion evidence cannot replace closeout transitions for old active Plans."""
+    plan_id = "PLAN-20260806-001"
+    run_workctl(tmp_path, "layout", "migrate")
+    frontmatter = schema_v4_admission_plan(plan_id)
+    frontmatter["title"] = "Governance friction reduction round 1"
+    frontmatter["obligations"] = [
+        {"id": f"O-{index:03d}", "description": f"Obligation {index}", "status": "pending"}
+        for index in range(1, 3)
+    ]
+    frontmatter["tasks"] = [
+        {
+            "id": f"T-{index:03d}",
+            "description": f"Task {index}",
+            "status": "verified",
+            "unknowns": [],
+            "expected_evidence_delta": f"Task {index} evidence is recorded.",
+            "evidence_ref": f"evidence:.work-governance/_Plan/.evidence/{plan_id}/{index}.json",
+            "evidence_sha256": f"{index}" * 64,
+            "verified_at": "2026-08-06T15:57:14+00:00",
+        }
+        for index in range(1, 3)
+    ]
+    frontmatter["validations"] = [
+        {
+            "id": "V-001",
+            "description": "Validation",
+            "status": "pending",
+            "provenance": {"kind": "confirmed-obligation", "source_ref": "project:O-001"},
+        }
+    ]
+    frontmatter["artifacts"] = [
+        {
+            "id": "A-001",
+            "path": "plugins/work-governance/scripts/workctl.py",
+            "status": "pending",
+        }
+    ]
+    frontmatter["delivery"] = {
+        "status": "pending",
+        "boundary": "local-branch-and-local-commit",
+        "evidence_ref": "project:not-yet-delivered",
+    }
+    frontmatter["activation"] = {
+        "status": "not_required",
+        "current_ref": "not-applicable",
+        "target_ref": "not-applicable",
+        "decision_ref": "user:local-implementation-boundary",
+    }
+    frontmatter["route"] = {
+        "route_status": "active",
+        "slice_status": "admitted",
+        "next_phase": "Execute T-001 baseline and implementation mapping.",
+        "validation_standard": "Fresh local command and file evidence covers the selected task.",
+        "confirmation_gate": "none",
+    }
+    frontmatter["handoff"] = {
+        "route_status": "active",
+        "next_step": "Execute T-001 baseline and implementation mapping.",
+    }
+    prepared = tmp_path / "candidate.md"
+    write_markdown_plan(prepared, frontmatter, "# Historical Active Plan\n")
+    admission = {
+        "schema_version": 1,
+        "kind": "plan-admission",
+        "transaction_id": "ADM-20260806-001",
+        "prepared_plan": prepared.name,
+        "plan_id": plan_id,
+        "plan_sha256": sha256_path(prepared),
+        "confirmation_id": "C-ADMISSION",
+        "confirmation_ref": "user:observed-admission",
+    }
+    admission_path = tmp_path / "admission.yaml"
+    admission_path.write_text(yaml.safe_dump(admission, sort_keys=False), encoding="utf-8")
+    run_workctl(tmp_path, "plan", "admit", "apply", "--manifest", str(admission_path))
+
+    closeout = run_workctl(tmp_path, "plan", "closeout-check", check=False)
+    status = json.loads(run_workctl(tmp_path, "plan", "status", "--full").stdout)
+    blockers = json.loads(closeout.stdout)["blockers"]
+
+    assert closeout.returncode == 1
+    assert not any(blocker.startswith("tasks not complete") for blocker in blockers)
+    assert "obligations not complete: O-001" in blockers
+    assert "validations not complete: V-001" in blockers
+    assert "artifact not final: A-001" in blockers
+    assert "delivery is not complete" in blockers
+    assert "route_status is not terminal" in blockers
+    assert "handoff route_status is not terminal" in blockers
+    assert "closeout evidence manifest required" in blockers
+    assert status["completion_claims"]["level"] == "in_progress"
+    assert status["completion_claims"]["route_complete"] is False
+    assert status["completion_claims"]["no_required_next_step_allowed"] is False
+
+
 def test_pending_activation_blocks_terminal_and_no_next_claims(tmp_path: Path) -> None:
     """Local delivery completion cannot erase a pending live-activation decision."""
     init_plan(tmp_path)
