@@ -59,6 +59,8 @@ from workctl_modules.history import find_plan_history_target as module_find_plan
 from workctl_modules.history import (
     tolerant_plan_history_summary as module_tolerant_plan_history_summary,
 )
+from workctl_modules import manifest as module_manifest
+from workctl_modules.manifest import ManifestError as ModuleManifestError
 from workctl_modules.migration import (
     REFRESH_NEXT_MODEL_ACTION,
     REFRESH_NOT_MIGRATED,
@@ -1130,60 +1132,23 @@ def reject_legacy_plan_authority_path(root: Path, raw_path: str, path: Path) -> 
 
 
 def tree_manifest(path: Path, *, exclude_names: set[str] | None = None) -> list[dict[str, object]]:
-    """Return a stable, content-addressed manifest for one regular directory tree.
-
-    Symlinks are rejected because a migration input must be closed under the
-    project directory. Transient lock files may be excluded by exact name.
-    """
-    if path.is_symlink() or not path.is_dir():
-        raise WorkctlError(f"MANIFEST_ROOT_INVALID: {path}")
-    excluded = exclude_names or set()
-    entries: list[dict[str, object]] = []
-    for candidate in sorted(path.rglob("*"), key=lambda item: item.relative_to(path).as_posix()):
-        relative = candidate.relative_to(path).as_posix()
-        if candidate.name in excluded:
-            continue
-        if candidate.is_symlink():
-            raise WorkctlError(f"LAYOUT_PATH_SYMLINK: {candidate}")
-        if candidate.is_dir():
-            entries.append({"path": relative, "kind": "directory"})
-        elif candidate.is_file():
-            entries.append(
-                {
-                    "path": relative,
-                    "kind": "file",
-                    "size": candidate.stat().st_size,
-                    "sha256": sha256_file(candidate),
-                }
-            )
-        else:
-            raise WorkctlError(f"LAYOUT_PATH_NOT_REGULAR: {candidate}")
-    return entries
+    """Return a stable, content-addressed manifest for one regular directory tree."""
+    try:
+        return module_manifest.tree_manifest(path, exclude_names=exclude_names)
+    except ModuleManifestError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def manifest_sha256(entries: list[dict[str, object]]) -> str:
     """Hash a stable tree manifest without depending on YAML presentation."""
-    payload = json.dumps(entries, sort_keys=True, separators=(",", ":")).encode()
-    return sha256_bytes(payload)
+    return module_manifest.manifest_sha256(entries)
 
 
 def proposal_manifest_from_plan_manifest(
     legacy_manifest: list[dict[str, object]],
 ) -> list[dict[str, object]]:
     """Project the exact ``proposals/`` subtree from a complete legacy Plan manifest."""
-    prefix = "proposals/"
-    projected: list[dict[str, object]] = []
-    for entry in legacy_manifest:
-        raw_path = entry.get("path")
-        if not isinstance(raw_path, str) or not raw_path.startswith(prefix):
-            continue
-        projected.append(
-            {
-                **entry,
-                "path": raw_path.removeprefix(prefix),
-            }
-        )
-    return projected
+    return module_manifest.proposal_manifest_from_plan_manifest(legacy_manifest)
 
 
 def manifest_matches_allowed_subset(
@@ -1192,18 +1157,14 @@ def manifest_matches_allowed_subset(
     expected_file_hashes: dict[str, str] | None = None,
 ) -> bool:
     """Return whether a regular tree contains only journal-bound paths and bytes."""
-    expected_hashes = expected_file_hashes or {}
-    for entry in tree_manifest(path):
-        raw_path = entry.get("path")
-        if not isinstance(raw_path, str) or raw_path not in allowed_paths:
-            return False
-        if (
-            entry.get("kind") == "file"
-            and raw_path in expected_hashes
-            and entry.get("sha256") != expected_hashes[raw_path]
-        ):
-            return False
-    return True
+    try:
+        return module_manifest.manifest_matches_allowed_subset(
+            path,
+            allowed_paths,
+            expected_file_hashes,
+        )
+    except ModuleManifestError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def bootstrap_claim_input_sha256(root: Path) -> str:
