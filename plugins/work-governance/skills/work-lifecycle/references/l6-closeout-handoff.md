@@ -63,18 +63,23 @@ Do not claim complete when:
 - activation is `deferred`, `pending_confirmation`, or `in_progress`;
 - local delivery is complete but route-level activation is unresolved.
 
-Use `plan closeout-check` before a terminal claim. `plan complete` is legal only
-when `route.route_status=terminal`, every obligation/task/validation is
-verified or skipped, every artifact is final, every required confirmation is
-consistently resolved, and both route and handoff have no remaining next phase,
-next step, or confirmation gate. A declined decision is resolved only when its
-bound tasks are skipped, exclusion disposition is resolved, and activation is
-`declined` where applicable. Schema-v4 terminal closeout additionally requires
-complete delivery, no unresolved exclusion disposition, and resolved
-activation with typed decision or runtime evidence.
+Use `plan closeout-check` before a terminal claim. Schema-v5 closeout is
+runtime-backed: task completion comes from the runtime state bundle, not Plan
+frontmatter, and `plan complete --expected-state-sequence <state_sequence>`
+records the terminal contract event, releases the active pointer, and leaves
+the completed Plan as history after readiness is true. For schema v4, `plan
+complete` remains revision/intake guarded and is legal only when
+`route.route_status=terminal`, every obligation/task/validation is verified or
+skipped, every artifact is final, every required confirmation is consistently
+resolved, and both route and handoff have no remaining next phase, next step,
+or confirmation gate. A declined decision is resolved only when its bound tasks
+are skipped, exclusion disposition is resolved, and activation is `declined`
+where applicable. Schema-v4 terminal closeout additionally requires complete
+delivery, no unresolved exclusion disposition, and resolved activation with
+typed decision or runtime evidence.
 
-When all non-route readiness conditions already hold and the current route gate
-is resolved, use
+For schema v4, when all non-route readiness conditions already hold and the
+current route gate is resolved, use
 `plan complete --finalize-route --confirmation C-... --evidence-manifest ...`
 to terminalize route and handoff and complete the Plan in one atomic write. Do
 not insert a separate route-adaptation write that stales the current intake and

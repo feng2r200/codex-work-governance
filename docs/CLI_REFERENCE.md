@@ -429,7 +429,8 @@ options:
 ### `goal close`
 
 ```text
-usage: workctl goal close [-h] --expected-revision EXPECTED_REVISION
+usage: workctl goal close [-h] [--expected-revision EXPECTED_REVISION]
+                          [--expected-state-sequence EXPECTED_STATE_SEQUENCE]
                           [--evidence-manifest EVIDENCE_MANIFEST]
                           [--finalize-route] [--confirmation CONFIRMATION]
                           [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
@@ -438,6 +439,7 @@ usage: workctl goal close [-h] --expected-revision EXPECTED_REVISION
 options:
   -h, --help            show this help message and exit
   --expected-revision EXPECTED_REVISION
+  --expected-state-sequence EXPECTED_STATE_SEQUENCE
   --evidence-manifest EVIDENCE_MANIFEST
   --finalize-route
   --confirmation CONFIRMATION
@@ -796,7 +798,8 @@ options:
 ### `plan complete`
 
 ```text
-usage: workctl plan complete [-h] --expected-revision EXPECTED_REVISION
+usage: workctl plan complete [-h] [--expected-revision EXPECTED_REVISION]
+                             [--expected-state-sequence EXPECTED_STATE_SEQUENCE]
                              [--evidence-manifest EVIDENCE_MANIFEST]
                              [--finalize-route] [--confirmation CONFIRMATION]
                              [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
@@ -805,6 +808,7 @@ usage: workctl plan complete [-h] --expected-revision EXPECTED_REVISION
 options:
   -h, --help            show this help message and exit
   --expected-revision EXPECTED_REVISION
+  --expected-state-sequence EXPECTED_STATE_SEQUENCE
   --evidence-manifest EVIDENCE_MANIFEST
   --finalize-route
   --confirmation CONFIRMATION

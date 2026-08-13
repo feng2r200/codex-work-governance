@@ -4142,6 +4142,78 @@ def v5_runtime_frontmatter(
     return runtime
 
 
+def v5_terminal_runtime_view(
+    root: Path,
+    frontmatter: Mapping[str, Any],
+    state: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the schema-v5 runtime authority view used for terminal closeout."""
+    view = v5_runtime_frontmatter(root, frontmatter, state)
+    view["route"] = {
+        "route_status": "terminal",
+        "slice_status": "complete",
+        "next_phase": "none",
+        "validation_standard": "schema-v5 runtime state is terminal-ready",
+        "confirmation_gate": "none",
+    }
+    view["handoff"] = {"route_status": "terminal", "next_step": "none"}
+    return view
+
+
+def require_v5_expected_state_sequence(
+    state: Mapping[str, Any],
+    expected: int | None,
+) -> None:
+    """Fail unless a v5 runtime write is guarded by the current state sequence."""
+    if expected is None:
+        raise WorkctlError("EXPECTED_STATE_SEQUENCE_REQUIRED")
+    if state["state_sequence"] != expected:
+        raise WorkctlError(
+            f"STATE_SEQUENCE_MISMATCH: expected {expected}, found {state['state_sequence']}"
+        )
+
+
+def v5_runtime_closeout_readiness(
+    root: Path,
+    frontmatter: Mapping[str, Any],
+    report: AuthorityReport,
+    validation_errors: list[str] | None = None,
+    state: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compute schema-v5 closeout readiness from runtime state, not contract task text."""
+    if state is None:
+        state = load_v5_state(root, frontmatter)
+    runtime = v5_terminal_runtime_view(root, frontmatter, state)
+    return closeout_readiness(cast(dict[str, Any], runtime), report, validation_errors)
+
+
+def completion_claim_readiness(
+    frontmatter: Mapping[str, Any],
+    readiness: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Separate readiness-to-complete from already-complete route claims."""
+    if frontmatter.get("schema_version") != 5 or frontmatter.get("status") == "complete":
+        return copy.deepcopy(dict(readiness))
+    raw_blockers = readiness.get("blockers", [])
+    blockers = list(raw_blockers) if isinstance(raw_blockers, list) else []
+    blockers.append("plan completion event not recorded")
+    return {"ready": False, "blockers": blockers}
+
+
+def release_v5_active_index(root: Path, plan_id: str) -> None:
+    """Remove the active pointer after a v5 Plan becomes terminal history."""
+    path = index_path(root)
+    if not path.exists():
+        return
+    if path.is_symlink():
+        raise WorkctlError("INDEX_PATH_SYMLINK")
+    index = load_yaml_file(path)
+    if index.get("active_plan_id") != plan_id:
+        raise WorkctlError("INDEX_ACTIVE_PLAN_DRIFT")
+    path.unlink()
+    fsync_directory(path.parent)
+
+
 def v5_read_events(root: Path, plan_id: str) -> list[dict[str, Any]]:
     """Read the append-only v5 event ledger with canonical JSON validation."""
     path = v5_event_path(root, plan_id)
@@ -13536,7 +13608,12 @@ def cmd_plan_status(args: argparse.Namespace) -> None:
     if doc.frontmatter.get("schema_version") == 5:
         v5_state = load_v5_state(root, doc.frontmatter)
         runtime_doc = v5_runtime_frontmatter(root, doc.frontmatter, v5_state)
-    readiness = closeout_readiness(runtime_doc, report, validate_plan(root))
+    validation_errors = validate_plan(root)
+    readiness = (
+        v5_runtime_closeout_readiness(root, doc.frontmatter, report, validation_errors, v5_state)
+        if doc.frontmatter.get("schema_version") == 5
+        else closeout_readiness(runtime_doc, report, validation_errors)
+    )
     legacy_ids = legacy_unknown_ids(doc.frontmatter)
     if not args.full:
         scheduler = (
@@ -13601,7 +13678,10 @@ def cmd_plan_status(args: argparse.Namespace) -> None:
         "handoff": doc.frontmatter.get("handoff", {}),
         "route": doc.frontmatter.get("route", {}),
         "closeout_readiness": readiness,
-        "completion_claims": completion_claims(runtime_doc, readiness),
+        "completion_claims": completion_claims(
+            runtime_doc,
+            completion_claim_readiness(doc.frontmatter, readiness),
+        ),
     }
     if v5_state is not None:
         summary["events"] = v5_read_events(root, str(doc.frontmatter["plan_id"]))
@@ -18239,7 +18319,17 @@ def cmd_plan_closeout_check(args: argparse.Namespace) -> None:
     root = project_root()
     report = inspect_authority(root)
     doc = load_plan(active_plan_path(root))
-    readiness = closeout_readiness(doc.frontmatter, report, validate_plan(root))
+    validation_errors = validate_plan(root)
+    if doc.frontmatter.get("schema_version") == 5:
+        v5_recover_pending_event(root, doc.frontmatter)
+        readiness = v5_runtime_closeout_readiness(
+            root,
+            doc.frontmatter,
+            report,
+            validation_errors,
+        )
+    else:
+        readiness = closeout_readiness(doc.frontmatter, report, validation_errors)
     if doc.frontmatter.get("schema_version") == 4:
         if not args.evidence_manifest:
             readiness["ready"] = False
@@ -18266,6 +18356,52 @@ def cmd_plan_complete(args: argparse.Namespace) -> None:
     with lock(root):
         report = require_governed_authority(root)
         doc = load_plan(active_plan_path(root))
+        if doc.frontmatter.get("schema_version") == 5:
+            v5_recover_pending_event(root, doc.frontmatter)
+            state = load_v5_state(root, doc.frontmatter)
+            require_v5_expected_state_sequence(state, args.expected_state_sequence)
+            if args.evidence_manifest:
+                verify_evidence_manifest(
+                    root,
+                    args.evidence_manifest,
+                    plan_id=str(doc.frontmatter["plan_id"]),
+                    subject="closeout",
+                )
+            require_independent_target(root, doc.frontmatter, "route")
+            validation_errors = validate_plan(root)
+            readiness = v5_runtime_closeout_readiness(
+                root,
+                doc.frontmatter,
+                report,
+                validation_errors,
+                state,
+            )
+            if not readiness["ready"]:
+                raise WorkctlError(
+                    "CLOSEOUT_BLOCKED: "
+                    + "; ".join(str(item) for item in readiness["blockers"])
+                )
+            doc.frontmatter["status"] = "complete"
+            doc.frontmatter["updated_at"] = utc_now()
+            doc.frontmatter["completion"] = {
+                "state_sequence": state["state_sequence"],
+                "completed_at": doc.frontmatter["updated_at"],
+            }
+            require_valid_candidate(doc)
+            v5_persist_contract_transition(
+                root,
+                doc,
+                event="plan.completed",
+                subject=f"plan:{doc.frontmatter['plan_id']}",
+                payload={
+                    "state_sequence": state["state_sequence"],
+                    "status": "complete",
+                    "evidence_manifest": args.evidence_manifest,
+                },
+            )
+            release_v5_active_index(root, str(doc.frontmatter["plan_id"]))
+            print(f"PLAN_COMPLETED state_sequence={state['state_sequence']} active_released=true")
+            return
         require_expected_revision(doc.frontmatter, args.expected_revision)
         require_current_intake(
             root,
@@ -20929,7 +21065,8 @@ def build_parser() -> argparse.ArgumentParser:
     goal_revise.add_argument("--manifest", required=True)
     goal_revise.set_defaults(func=cmd_plan_contract_revise)
     goal_close = goal_sub.add_parser("close")
-    goal_close.add_argument("--expected-revision", type=int, required=True)
+    goal_close.add_argument("--expected-revision", type=int)
+    goal_close.add_argument("--expected-state-sequence", type=int)
     goal_close.add_argument("--evidence-manifest")
     goal_close.add_argument("--finalize-route", action="store_true")
     goal_close.add_argument("--confirmation")
@@ -21477,7 +21614,8 @@ def build_parser() -> argparse.ArgumentParser:
     closeout_check.add_argument("--evidence-manifest")
     closeout_check.set_defaults(func=cmd_plan_closeout_check)
     complete = plan_sub.add_parser("complete")
-    complete.add_argument("--expected-revision", type=int, required=True)
+    complete.add_argument("--expected-revision", type=int)
+    complete.add_argument("--expected-state-sequence", type=int)
     complete.add_argument("--evidence-manifest")
     complete.add_argument("--finalize-route", action="store_true")
     complete.add_argument("--confirmation")
