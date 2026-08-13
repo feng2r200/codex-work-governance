@@ -20,6 +20,11 @@
 - 任务完成且证据就是当前输出或文件时，用
   `task done --task-id T-001 --evidence-stdin|--from-file`。它会记录 direct
   evidence、生成 canonical Plan evidence，并完成 task verify。
+- 结束 schema-v5 Plan 前，用 `plan closeout-check` 读取 runtime-backed
+  readiness；任务状态来自 runtime state，不来自 frontmatter。ready 后用
+  `plan complete --expected-state-sequence <state_sequence>`，不要传 v4
+  `--expected-revision` 或当前 intake 参数。完成会释放 active pointer，下一轮
+  新工作从 `UNMANAGED_EMPTY` 重新 `goal init`。
 - 查旧 Plan 时，用 `plan history list|show`。这是宽松只读读取，不用旧历史
   格式约束当前 active schema。
 - active Plan 只有插件当前声明的 schema-v5 可继续写。遇到 V3/V4 或任何

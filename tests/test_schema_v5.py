@@ -180,6 +180,128 @@ def test_task_done_captures_raw_evidence_and_verifies_v5_task(tmp_path: Path) ->
     assert (tmp_path / payload["evidence_ref"].removeprefix("evidence:")).is_file()
 
 
+def test_v5_closeout_and_complete_use_runtime_state(tmp_path: Path) -> None:
+    """A v5 Plan closes from runtime task state without v4 revision or route fields."""
+    init_minimal_v5_goal(tmp_path, "PLAN-20260806-106")
+    run_workctl(
+        tmp_path,
+        "task",
+        "done",
+        "--task-id",
+        "T-001",
+        "--expected-state-sequence",
+        "0",
+        "--evidence-stdin",
+        "--summary",
+        "runtime closeout evidence",
+        input_text="runtime task verified\n",
+        env=STRICT_CONTROLLER_ENV,
+    )
+
+    closeout = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "closeout-check",
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    ready_status = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "status",
+            "--full",
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    completed = run_workctl(
+        tmp_path,
+        "plan",
+        "complete",
+        "--expected-state-sequence",
+        "1",
+        env=STRICT_CONTROLLER_ENV,
+    )
+    frontmatter, _body = read_plan_by_id(tmp_path, "PLAN-20260806-106")
+    state_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "plans"
+        / "PLAN-20260806-106"
+        / "state.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    events = (state_path.parent / "events.jsonl").read_text(encoding="utf-8").splitlines()
+
+    assert closeout == {"blockers": [], "ready": True}
+    assert ready_status["status"] == "active"
+    assert ready_status["closeout_readiness"] == {"blockers": [], "ready": True}
+    assert ready_status["completion_claims"]["route_complete"] is False
+    assert ready_status["completion_claims"]["no_required_next_step_allowed"] is False
+    assert ready_status["completion_claims"]["level"] == "in_progress"
+    assert "PLAN_COMPLETED state_sequence=1 active_released=true" in completed.stdout
+    assert frontmatter["status"] == "complete"
+    assert frontmatter["completion"]["state_sequence"] == 1
+    assert "revision" not in frontmatter
+    assert state["state_sequence"] == 1
+    assert state["event_sequence"] == 3
+    assert json.loads(events[-1])["event"] == "plan.completed"
+    assert not (tmp_path / ".work-governance" / "_Plan" / "index.yaml").exists()
+    assert run_workctl(tmp_path, "plan", "validate", env=STRICT_CONTROLLER_ENV).stdout.strip() == (
+        "PLAN_VALID"
+    )
+    intake = json.loads(run_workctl(tmp_path, "intake", "status", env=STRICT_CONTROLLER_ENV).stdout)
+    status = json.loads(run_workctl(tmp_path, "plan", "status", env=STRICT_CONTROLLER_ENV).stdout)
+    assert intake["authority_state"] == "UNMANAGED_EMPTY"
+    assert status["plan_id"] is None
+    assert status["ready"] == []
+    next_plan = run_workctl(
+        tmp_path,
+        "goal",
+        "init",
+        "--stdin",
+        input_text=json.dumps(minimal_goal_contract("PLAN-20260806-108")),
+        env=STRICT_CONTROLLER_ENV,
+    )
+    assert json.loads(next_plan.stdout)["status"] == "GOAL_INITIALIZED"
+
+
+def test_v5_complete_rejects_stale_state_sequence(tmp_path: Path) -> None:
+    """V5 terminal completion is guarded by runtime state sequence."""
+    init_minimal_v5_goal(tmp_path, "PLAN-20260806-107")
+    run_workctl(
+        tmp_path,
+        "task",
+        "done",
+        "--task-id",
+        "T-001",
+        "--expected-state-sequence",
+        "0",
+        "--evidence-stdin",
+        "--summary",
+        "runtime closeout evidence",
+        input_text="runtime task verified\n",
+        env=STRICT_CONTROLLER_ENV,
+    )
+
+    stale = run_workctl(
+        tmp_path,
+        "plan",
+        "complete",
+        "--expected-state-sequence",
+        "0",
+        check=False,
+        env=STRICT_CONTROLLER_ENV,
+    )
+    frontmatter, _body = read_plan_by_id(tmp_path, "PLAN-20260806-107")
+
+    assert stale.returncode == 2
+    assert "STATE_SEQUENCE_MISMATCH: expected 0, found 1" in stale.stderr
+    assert frontmatter["status"] == "active"
+
+
 def test_plan_history_tolerates_malformed_historical_plan(tmp_path: Path) -> None:
     """History inspection is loose and does not block active Plan status."""
     init_minimal_v5_goal(tmp_path, "PLAN-20260806-104")

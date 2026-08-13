@@ -310,12 +310,16 @@ Allowed structural changes:
   state requires a future controller-authenticated platform attestor; this
   build fails closed without one, and different context strings or
   caller-authored evidence never satisfy the gate.
-- `plan closeout-check|complete`: compute full route readiness and set Plan
+- `plan closeout-check|complete`: compute closeout readiness and set Plan
   status complete only through the dedicated closeout command; `plan revise`
-  cannot assign complete directly. When every non-route obligation is ready,
-  `plan complete --finalize-route --confirmation C-...` binds the accepted
-  current slice gate and atomically terminalizes route and handoff with Plan
-  completion, avoiding a structural intermediate state that would stale intake.
+  cannot assign complete directly. Schema-v5 readiness is backed by runtime
+  task state and completes with `--expected-state-sequence`, then releases the
+  active pointer so later work can start from `UNMANAGED_EMPTY`. Schema-v4
+  readiness remains revision/intake guarded; when every non-route obligation is
+  ready, `plan complete --finalize-route --confirmation C-...` binds the
+  accepted current slice gate and atomically terminalizes route and handoff
+  with Plan completion, avoiding a structural intermediate state that would
+  stale intake.
 - `plan verify-entry`: mark one obligation or validation verified only with a
   typed evidence reference, reviewed SHA256, and accepted current-slice gate.
 - `plan finalize-artifact`: change an artifact to final only with the same
