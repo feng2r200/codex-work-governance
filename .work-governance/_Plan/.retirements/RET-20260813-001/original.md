@@ -2,11 +2,11 @@
 schema_version: 4
 plan_id: PLAN-20260806-001
 title: Governance friction reduction round 1
-status: retired
+status: active
 mode: autonomous
-revision: 18
+revision: 17
 created_at: "2026-08-06T08:20:17Z"
-updated_at: "2026-08-13T04:09:43+00:00"
+updated_at: "2026-08-13T04:07:53+00:00"
 goal:
   statement: "Implement the first-round Work Governance friction reduction so the controller exposes model-friendly workflow commands, minimal active contracts, read-only historical tolerance, model-owned confirmation judgment support, and non-authoritative worktree logs without weakening local evidence, receipt, layout, recovery, and regression guarantees."
   success_conditions:
@@ -79,19 +79,6 @@ confirmations:
           - route
         basis_ref: project:confirmation-basis/8a6da666f43b73ced724e520252a9bbe6a80c1c37ed5fa51f3fac72c318ef74d
         basis_sha256: 8a6da666f43b73ced724e520252a9bbe6a80c1c37ed5fa51f3fac72c318ef74d
-    -
-      id: C-PLAN-RETIREMENT
-      description: Approve retirement of the exact obsolete Plan without claiming completion.
-      status: accepted
-      ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-      accepted_at: "2026-08-13T04:04:15Z"
-      evidence_sha256: e543e22f6989a428e57778dbbcdcd3ed82c6bc0a99f07b609a01b84a79ac71c7
-      intervention:
-        kind: external_authority
-        blocks:
-          - route
-        basis_ref: project:confirmation-basis/e543e22f6989a428e57778dbbcdcd3ed82c6bc0a99f07b609a01b84a79ac71c7
-        basis_sha256: e543e22f6989a428e57778dbbcdcd3ed82c6bc0a99f07b609a01b84a79ac71c7
 unknowns: []
 obligations:
   -
@@ -369,13 +356,6 @@ revision_history:
     changed_at: "2026-08-13T04:07:53+00:00"
     rationale: Record intake for user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e.
     decision_basis_sha256: 36b91f84d951bfe85b958b065c08042f09be51c677b2ca2b562d62586c65c511
-  -
-    revision: 18
-    kind: retirement
-    changed_at: "2026-08-13T04:09:43+00:00"
-    rationale: "The historical route was superseded by subsequent local implementation and refactor work; verified task evidence is preserved, but non-terminal closeout surfaces must not be converted into a completion claim."
-    confirmation_id: C-PLAN-RETIREMENT
-    decision_basis_sha256: 36b91f84d951bfe85b958b065c08042f09be51c677b2ca2b562d62586c65c511
 intake:
   protocol_version: 2
   current:
@@ -394,118 +374,6 @@ intake:
     storage: project-local-immutable
     head_sha256: 0a50b690eb5d5acbbb661d61e7ebf5785329d3e8d341dc90fdc1a8c368ed6a53
     record_count: 7
-retirement:
-  retirement_id: RET-20260813-001
-  reason: "The historical route was superseded by subsequent local implementation and refactor work; verified task evidence is preserved, but non-terminal closeout surfaces must not be converted into a completion claim."
-  retired_at: "2026-08-13T04:04:15Z"
-  proposal_sha256: e543e22f6989a428e57778dbbcdcd3ed82c6bc0a99f07b609a01b84a79ac71c7
-  original_path: .work-governance/_Plan/.retirements/RET-20260813-001/original.md
-  original_sha256: b594cd0ae3322f5fba74be968c8415a29d2f2880afe67adc08c04269143dd466
-  confirmation:
-    id: C-PLAN-RETIREMENT
-    ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-    evidence_sha256: e543e22f6989a428e57778dbbcdcd3ed82c6bc0a99f07b609a01b84a79ac71c7
-  dispositions:
-    obligations:
-      -
-        id: O-001
-        disposition: superseded
-        reason: "The old obligation is historical; do not claim verification without a dedicated closeout transition."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-      -
-        id: O-002
-        disposition: superseded
-        reason: "The old obligation is historical; do not claim verification without a dedicated closeout transition."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-      -
-        id: O-003
-        disposition: superseded
-        reason: "The old obligation is historical; do not claim verification without a dedicated closeout transition."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-      -
-        id: O-004
-        disposition: superseded
-        reason: "The old obligation is historical; do not claim verification without a dedicated closeout transition."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-      -
-        id: O-005
-        disposition: superseded
-        reason: "The old obligation is historical; do not claim verification without a dedicated closeout transition."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-      -
-        id: O-006
-        disposition: superseded
-        reason: "The old obligation is historical; do not claim verification without a dedicated closeout transition."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-    validations:
-      -
-        id: V-001
-        disposition: superseded
-        reason: "The old validation item is historical; do not claim verification without current closeout evidence."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-      -
-        id: V-002
-        disposition: superseded
-        reason: "The old validation item is historical; do not claim verification without current closeout evidence."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-      -
-        id: V-003
-        disposition: superseded
-        reason: "The old validation item is historical; do not claim verification without current closeout evidence."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-      -
-        id: V-004
-        disposition: superseded
-        reason: "The old validation item is historical; do not claim verification without current closeout evidence."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-      -
-        id: V-005
-        disposition: superseded
-        reason: "The old validation item is historical; do not claim verification without current closeout evidence."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-    artifacts:
-      -
-        id: A-001
-        disposition: preserved
-        reason: "The artifact reference remains historical evidence only; finality is not asserted."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-      -
-        id: A-002
-        disposition: preserved
-        reason: "The artifact reference remains historical evidence only; finality is not asserted."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-      -
-        id: A-003
-        disposition: preserved
-        reason: "The artifact reference remains historical evidence only; finality is not asserted."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-      -
-        id: A-004
-        disposition: preserved
-        reason: "The artifact reference remains historical evidence only; finality is not asserted."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-      -
-        id: A-005
-        disposition: preserved
-        reason: "The artifact reference remains historical evidence only; finality is not asserted."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-      -
-        id: A-006
-        disposition: preserved
-        reason: "The artifact reference remains historical evidence only; finality is not asserted."
-        resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-    delivery:
-      disposition: superseded
-      reason: The old delivery surface is retired instead of being claimed complete.
-      resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-    route:
-      disposition: superseded
-      reason: The old route is obsolete and should no longer hold active authority.
-      resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
-    handoff:
-      disposition: superseded
-      reason: The old handoff points to already historical work and should not remain an active next step.
-      resolution_ref: user:session/019fd628-853b-7121-b41b-03885bff6197/turn/019ff94a-2918-7d01-bfbd-3ca5a502b7a4/sha256/6bca86168d86e72ee628ebe35dad3429e268342a0e1f13fce9ac29dfae09768e
 ---
 # Governance Friction Reduction Round 1
 
