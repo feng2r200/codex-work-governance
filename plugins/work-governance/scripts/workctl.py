@@ -79,6 +79,8 @@ from workctl_modules.references import valid_reference as module_valid_reference
 from workctl_modules.risk import action_reversibility as module_action_reversibility
 from workctl_modules.risk import risk_factors_for_action as module_risk_factors_for_action
 from workctl_modules.risk import risk_inspection_payload as module_risk_inspection_payload
+from workctl_modules import runtime_bundle as module_runtime_bundle
+from workctl_modules.runtime_bundle import RuntimeBundleError as ModuleRuntimeBundleError
 from workctl_modules.status import blocking_artifacts as module_blocking_artifacts
 from workctl_modules.status import compact_plan_status as module_compact_plan_status
 from workctl_modules.status import completion_claims as module_completion_claims
@@ -994,20 +996,16 @@ def runtime_bundle_manifest_payload(
     module_files: object | None = None,
 ) -> dict[str, object]:
     """Build the canonical runtime bundle manifest projection."""
-    payload: dict[str, object] = {
-        "schema_version": 1,
-        "kind": "work-governance-runtime-bundle",
-        "plugin_build": plugin_build,
-        "plugin_manifest_sha256": plugin_manifest_sha256,
-        "current_plan_schema_version": current_plan_schema_version,
-        "controller_ref": controller_ref,
-        "controller_sha256": controller_sha256,
-        "lifecycle_ref": lifecycle_ref,
-        "lifecycle_sha256": lifecycle_sha256,
-    }
-    if module_files is not None:
-        payload["module_files"] = module_files
-    return payload
+    return module_runtime_bundle.runtime_bundle_manifest_payload(
+        plugin_build=plugin_build,
+        plugin_manifest_sha256=plugin_manifest_sha256,
+        current_plan_schema_version=current_plan_schema_version,
+        controller_ref=controller_ref,
+        controller_sha256=controller_sha256,
+        lifecycle_ref=lifecycle_ref,
+        lifecycle_sha256=lifecycle_sha256,
+        module_files=module_files,
+    )
 
 
 def validated_runtime_bundle_module_files(
@@ -1015,31 +1013,14 @@ def validated_runtime_bundle_module_files(
     manifest: Mapping[str, Any],
 ) -> list[dict[str, str]] | None:
     """Validate the optional module file manifest and return it unchanged."""
-    module_files = manifest.get("module_files")
-    if module_files is None:
-        return None
-    if not isinstance(module_files, list):
-        raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
-    typed_files: list[dict[str, str]] = []
-    for entry in module_files:
-        if (
-            not isinstance(entry, dict)
-            or set(entry) != {"path", "sha256"}
-            or not isinstance(entry.get("path"), str)
-            or not isinstance(entry.get("sha256"), str)
-            or not SHA256_RE.fullmatch(entry["sha256"])
-        ):
-            raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
-        module_path = bundle / entry["path"]
-        if (
-            module_path.parent.parent != bundle
-            or module_path.is_symlink()
-            or not module_path.is_file()
-            or sha256_file(module_path) != entry["sha256"]
-        ):
-            raise WorkctlError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
-        typed_files.append({"path": entry["path"], "sha256": entry["sha256"]})
-    return typed_files
+    try:
+        return module_runtime_bundle.validated_runtime_bundle_module_files(
+            bundle,
+            manifest,
+            sha256_pattern=SHA256_RE,
+        )
+    except ModuleRuntimeBundleError as exc:
+        raise WorkctlError(str(exc)) from exc
 
 
 def validate_current_ready_receipt(
