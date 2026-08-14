@@ -386,6 +386,14 @@ def test_v5_closeout_and_complete_use_runtime_state(tmp_path: Path) -> None:
     assert closeout_record["source_type"] == "generated"
     assert closeout_record["task_ref"] is None
     assert closeout_record["closeout_item_count"] == 1
+    closeout_blob = json.loads(
+        (tmp_path / closeout_record["blob_ref"].removeprefix("evidence:")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "created_at" not in closeout_blob
+    assert closeout_blob["items"] == closeout_record["closeout_items"]
+    assert closeout_blob["state_sequence"] == 1
     assert "revision" not in frontmatter
     assert state["state_sequence"] == 1
     assert state["event_sequence"] == 3

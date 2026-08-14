@@ -210,7 +210,6 @@ def v5_closeout_evidence(
         "kind": "work-governance-closeout-evidence",
         "plan_id": plan_id,
         "subject": "closeout",
-        "created_at": utc_now(),
         "producer_ref": "runtime:workctl/plan-complete",
         "state_sequence": state["state_sequence"],
         "items": items,
