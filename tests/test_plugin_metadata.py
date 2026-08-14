@@ -7,6 +7,7 @@ import json
 import os
 import runpy
 import subprocess
+import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import ModuleType
@@ -73,26 +74,22 @@ def test_public_workctl_entry_is_bash_first_wrapper() -> None:
     assert os.access(wrapper, os.X_OK)
 
 
-def test_public_workctl_wrapper_prewarms_for_script_dependency_cache_miss(
-    tmp_path: Path,
-) -> None:
-    """The public wrapper recovers from a script dependency cache miss."""
-    fake_uv = tmp_path / "uv"
-    uv_log = tmp_path / "uv.log"
-    fake_uv.write_text(
+def test_public_workctl_wrapper_uses_registered_python_without_uv(tmp_path: Path) -> None:
+    """The public wrapper dispatches directly to Python instead of UV."""
+    fake_python = tmp_path / "python"
+    python_log = tmp_path / "python.log"
+    fake_python.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$*" >> "${UV_LOG}"
-if [[ "$*" == *"--offline"* ]]; then
-  printf '%s\n' 'script dependency was not found in the cache' >&2
-  printf '%s\n' 'Packages were unavailable because the network was disabled' >&2
-  exit 1
+printf '%s\n' "$*" >> "${PYTHON_LOG}"
+if [[ "${1:-}" == "-c" ]]; then
+  exit 0
 fi
-printf '%s\n' 'network-prewarm-ok'
+printf '%s\n' 'direct-python-ok'
 """,
         encoding="utf-8",
     )
-    fake_uv.chmod(0o755)
+    fake_python.chmod(0o755)
     wrapper = PLUGIN_ROOT / "scripts" / "workctl"
 
     result = subprocess.run(
@@ -103,35 +100,21 @@ printf '%s\n' 'network-prewarm-ok'
         check=False,
         env={
             **os.environ,
-            "UV": str(fake_uv),
-            "UV_LOG": str(uv_log),
-            "WORK_GOVERNANCE_PROJECT_ROOT": str(tmp_path),
+            "WORK_GOVERNANCE_PYTHON": str(fake_python),
+            "PYTHON_LOG": str(python_log),
         },
     )
 
     assert result.returncode == 0
-    assert result.stdout == "network-prewarm-ok\n"
-    calls = uv_log.read_text(encoding="utf-8").splitlines()
+    assert result.stdout == "direct-python-ok\n"
+    calls = python_log.read_text(encoding="utf-8").splitlines()
     assert len(calls) == 2
-    assert "--offline" in calls[0]
-    assert "--offline" not in calls[1]
+    assert calls[0].startswith("-c ")
+    assert calls[1].endswith("workctl.py help")
 
 
-def test_public_workctl_wrapper_can_remain_strictly_offline(tmp_path: Path) -> None:
-    """Strict-offline mode preserves fail-closed behavior for dependency misses."""
-    fake_uv = tmp_path / "uv"
-    uv_log = tmp_path / "uv.log"
-    fake_uv.write_text(
-        """#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$*" >> "${UV_LOG}"
-printf '%s\n' 'script dependency was not found in the cache' >&2
-printf '%s\n' 'Packages were unavailable because the network was disabled' >&2
-exit 1
-""",
-        encoding="utf-8",
-    )
-    fake_uv.chmod(0o755)
+def test_public_workctl_wrapper_runs_without_uv_on_path(tmp_path: Path) -> None:
+    """A project can use the registered tool even when UV is absent from PATH."""
     wrapper = PLUGIN_ROOT / "scripts" / "workctl"
 
     result = subprocess.run(
@@ -142,18 +125,62 @@ exit 1
         check=False,
         env={
             **os.environ,
-            "UV": str(fake_uv),
-            "UV_LOG": str(uv_log),
-            "WORK_GOVERNANCE_PROJECT_ROOT": str(tmp_path),
-            "WORK_GOVERNANCE_STRICT_OFFLINE": "1",
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "WORK_GOVERNANCE_PYTHON": sys.executable,
         },
     )
 
-    assert result.returncode == 1
-    assert "script dependency was not found in the cache" in result.stderr
-    calls = uv_log.read_text(encoding="utf-8").splitlines()
-    assert len(calls) == 1
-    assert "--offline" in calls[0]
+    assert result.returncode == 0
+    assert "goal init --stdin|--from-file" in result.stdout
+
+
+def test_registered_workctl_bootstraps_schema_v5_without_hooks_or_uv(tmp_path: Path) -> None:
+    """Direct runtime use initializes schema-v5 work without Hook receipts or UV cache."""
+    wrapper = PLUGIN_ROOT / "scripts" / "workctl"
+    environment = {
+        **os.environ,
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "WORK_GOVERNANCE_PYTHON": sys.executable,
+    }
+    goal = {
+        "plan_id": "PLAN-20260814-901",
+        "title": "Hookless Smoke",
+        "goal": "Prove direct runtime bootstrap.",
+        "success_conditions": ["Direct workctl creates a governed Plan."],
+        "tasks": [{"id": "T-001", "description": "Run the hookless smoke."}],
+    }
+
+    migrate = subprocess.run(
+        [str(wrapper), "layout", "migrate"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=environment,
+    )
+    init = subprocess.run(
+        [str(wrapper), "goal", "init", "--stdin"],
+        cwd=tmp_path,
+        input=json.dumps(goal),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=environment,
+    )
+    status = subprocess.run(
+        [str(wrapper), "intake", "status"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=environment,
+    )
+
+    assert migrate.returncode == 0, migrate.stderr
+    assert init.returncode == 0, init.stderr
+    assert status.returncode == 0, status.stderr
+    assert json.loads(status.stdout)["intake_state"] == "INTAKE_READY"
+    assert not (tmp_path / ".work-governance" / "cache" / "uv").exists()
 
 
 def test_yaml_compat_fallback_loads_and_dumps_governance_yaml() -> None:

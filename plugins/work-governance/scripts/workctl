@@ -2,46 +2,23 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-project_root="${WORK_GOVERNANCE_PROJECT_ROOT:-}"
-if [[ -z "${project_root}" ]]; then
-  if git_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-    project_root="${git_root}"
-  else
-    project_root="$(pwd -P)"
+
+python_candidates=()
+if [[ -n "${WORK_GOVERNANCE_PYTHON:-}" ]]; then
+  python_candidates+=("${WORK_GOVERNANCE_PYTHON}")
+fi
+python_candidates+=("python3.12" "/opt/homebrew/bin/python3" "/usr/local/bin/python3" "python3")
+
+for python_bin in "${python_candidates[@]}"; do
+  if [[ "${python_bin}" == */* ]]; then
+    [[ -x "${python_bin}" ]] || continue
+  elif ! command -v "${python_bin}" >/dev/null 2>&1; then
+    continue
   fi
-fi
+  if "${python_bin}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' >/dev/null 2>&1; then
+    exec "${python_bin}" "${script_dir}/workctl.py" "$@"
+  fi
+done
 
-uv_bin="${UV:-uv}"
-cache_dir="${WORK_GOVERNANCE_UV_CACHE_DIR:-${project_root}/.work-governance/cache/uv}"
-strict_offline="${WORK_GOVERNANCE_STRICT_OFFLINE:-0}"
-
-stdout_file="$(mktemp "${TMPDIR:-/tmp}/workctl.stdout.XXXXXX")"
-stderr_file="$(mktemp "${TMPDIR:-/tmp}/workctl.stderr.XXXXXX")"
-cleanup() {
-  rm -f "${stdout_file}" "${stderr_file}"
-}
-trap cleanup EXIT
-
-offline_command=(
-  "${uv_bin}" run --no-project --offline --cache-dir "${cache_dir}"
-  --no-python-downloads --script "${script_dir}/workctl.py"
-)
-
-if "${offline_command[@]}" "$@" >"${stdout_file}" 2>"${stderr_file}"; then
-  cat "${stdout_file}"
-  cat "${stderr_file}" >&2
-  exit 0
-else
-  status=$?
-fi
-
-if [[ "${strict_offline}" != "1" ]] && grep -Eq \
-  "was not found in the cache|Packages were unavailable because the network was disabled|No solution found when resolving script dependencies" \
-  "${stderr_file}"; then
-  exec "${uv_bin}" run --no-project --cache-dir "${cache_dir}" \
-    --no-python-downloads --script "${script_dir}/workctl.py" "$@"
-fi
-
-cat "${stdout_file}"
-cat "${stderr_file}" >&2
-exit "${status}"
+printf '%s\n' "PYTHON_3_12_REQUIRED: set WORK_GOVERNANCE_PYTHON to a Python >= 3.12 executable" >&2
+exit 2

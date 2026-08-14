@@ -924,24 +924,12 @@ def prepare_strict_contract_upgrade(
 
 
 def test_user_prompt_submit_hook_is_registered() -> None:
-    """The plugin must register the trusted per-turn receipt hook."""
+    """The plugin no longer registers a per-turn receipt hook."""
     payload: dict[str, object] = json.loads(HOOKS_CONFIG.read_text(encoding="utf-8"))
     hooks = payload["hooks"]
 
     assert isinstance(hooks, dict)
-    assert hooks["UserPromptSubmit"] == [
-        {
-            "hooks": [
-                {
-                    "type": "command",
-                    "command": "python3 ${PLUGIN_ROOT}/hooks/user_prompt_submit.py",
-                    "statusMessage": "Binding Work Governance intake to this turn",
-                    "timeout": 30,
-                }
-            ]
-        }
-    ]
-    assert TURN_HOOK.is_file()
+    assert hooks == {}
 
 
 def test_controller_exposes_turn_bound_intake_receipt_command() -> None:

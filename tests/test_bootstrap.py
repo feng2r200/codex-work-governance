@@ -870,20 +870,10 @@ def test_session_start_bootstraps_only_the_nearest_linked_worktree(tmp_path: Pat
 
 
 def test_default_hook_config_is_stable_and_covers_every_session_source() -> None:
-    """Use the default plugin hook path with one short stable command."""
+    """The plugin no longer registers lifecycle hooks by default."""
     payload = json.loads(HOOKS_CONFIG.read_text(encoding="utf-8"))
-    session = payload["hooks"]["SessionStart"]
 
-    assert len(session) == 1
-    assert session[0]["matcher"] == "startup|resume|clear|compact"
-    assert session[0]["hooks"] == [
-        {
-            "type": "command",
-            "command": "python3 ${PLUGIN_ROOT}/hooks/session_start.py",
-            "statusMessage": "Checking Work Governance layout",
-            "timeout": 120,
-        }
-    ]
+    assert payload["hooks"] == {}
 
 
 def test_unchanged_bootstrap_is_incremental_and_offline(tmp_path: Path) -> None:

@@ -141,29 +141,28 @@ def test_summary_is_reply_protocol_not_plan_schema() -> None:
     assert "turn the Plan into a process log" in skill
 
 
-def test_lifecycle_requires_current_bootstrap_and_canonical_layout() -> None:
-    """Plan-controlled work fails closed when SessionStart readiness is absent."""
+def test_lifecycle_requires_direct_workctl_and_canonical_layout() -> None:
+    """Plan-controlled work starts from direct workctl layout readiness."""
     skill = SKILL_PATH.read_text(encoding="utf-8")
 
+    assert "registered direct `workctl` executable" in skill
+    assert "without `uv run`" in skill
+    assert "without Codex\n  lifecycle hooks" in skill
     assert ".work-governance/bootstrap-state.json" in skill
-    assert "untrusted, disabled, skipped by managed policy, absent, or stale" in skill
-    assert "`ENVIRONMENT_BLOCKED`" in skill
     assert ".work-governance/_Plan/index.yaml" in skill
     assert ".work-governance/workctl.lock" in skill
-    assert "controller commands require `LAYOUT_READY`" in skill
+    assert "All non-layout commands\nrequire `LAYOUT_READY`" in skill
 
 
-def test_lifecycle_uses_receipt_bound_runtime_controller() -> None:
-    """The exact SessionStart bundle, not a repository-relative path, drives intake."""
+def test_lifecycle_uses_hookless_direct_workctl() -> None:
+    """The direct executable, not a SessionStart command, drives intake."""
     skill = SKILL_PATH.read_text(encoding="utf-8")
 
     assert "--script plugins/work-governance/scripts/workctl.py" not in skill
-    assert "runtime_bundle_ref" in skill
-    assert "controller_ref" in skill
-    assert "controller_sha256" in skill
-    assert "receipt_sha256" in skill
+    assert ".work-governance/cache/uv" not in skill
+    assert "Run the registered direct `workctl` executable" in skill
     assert "intake status" in skill
-    assert "--no-project" in skill
+    assert "--no-project" not in skill
 
 
 def test_goal_anchor_reality_probe_and_test_provenance_are_required() -> None:

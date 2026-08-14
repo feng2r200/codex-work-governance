@@ -1656,7 +1656,7 @@ def test_layout_never_claims_a_preexisting_unversioned_governance_root(
 def test_unauthenticated_controller_cannot_create_a_governance_claim(
     tmp_path: Path,
 ) -> None:
-    """A test interruption variable cannot bypass the receipt gate on a fresh root."""
+    """A direct bootstrap interruption leaves only an uncommitted staging claim."""
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "layout", "migrate"],
         cwd=tmp_path,
@@ -1670,9 +1670,10 @@ def test_unauthenticated_controller_cannot_create_a_governance_claim(
     )
 
     assert result.returncode == 2
-    assert "BOOTSTRAP_RECEIPT_REQUIRED" in result.stderr
+    assert "BOOTSTRAP_TEST_INTERRUPTED_AFTER_CLAIM" in result.stderr
     assert not (tmp_path / ".work-governance").exists()
-    assert not (tmp_path / ".work-governance.bootstrap").exists()
+    claim = tmp_path / ".work-governance.bootstrap" / "runtime" / "bootstrap-claim.json"
+    assert claim.is_file()
 
 
 def test_durable_replace_fsyncs_both_directory_entries(

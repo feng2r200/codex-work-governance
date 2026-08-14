@@ -134,8 +134,10 @@ codex plugin marketplace add /path/to/codex-work-governance
 codex plugin add work-governance@work-governance-local
 ```
 
-Review and trust the bundled SessionStart hook, then start a new Codex thread.
-Plugin installation or enabling does not itself trust non-managed hooks.
+After installation, use the registered `workctl` executable directly. The
+runtime does not require Codex lifecycle hooks or a project-local UV cache.
+Plugin installation or enabling still does not perform a live activation switch;
+activate or replace a live plugin only after a separate confirmation.
 
 ## Project Layout
 
@@ -149,7 +151,7 @@ Work Governance 1.0 owns exactly one project-level root:
 │   └── .evidence/<plan-id>/<sha256>.json
 ├── logs/
 ├── worktrees/
-├── cache/uv/
+├── cache/
 ├── proposals/
 ├── evidence/
 ├── runtime/
@@ -164,50 +166,22 @@ and committed migration proofs are versionable. The exact
 `bootstrap-state.json`, and `workctl.lock`. A No-Plan bootstrap creates the
 layout contract and local infrastructure but no Plan or index.
 
-Canonical runtime identity is session-scoped under
-`.work-governance/runtime/sessions/<session_id>/`: `bootstrap-state.json`,
-`bootstrap-capability.json`, and `current-turn-receipt.json`. The root
-bootstrap receipt and the old runtime capability/current-turn paths remain
-compatibility surfaces for older installed sessions; a newer session never
-overwrites a READY or current-turn compatibility record owned by another
-session. Always use the exact receipt digest emitted by the hook instead of
-deriving a path or choosing the newest file.
-
-The SessionStart hook is a short wakener. Its standard-library runner
-fingerprints the bootstrap action, installed Plugin payload, and relevant
-project layout inputs. Before issuing READY it snapshots the exact controller
-and `work-lifecycle` skill into
-`.work-governance/runtime/plugin-builds/<plugin-manifest-sha256>/`, then binds
-receipt schema v2 to those paths and hashes plus the current session. It
-first writes an ignored
-`.work-governance/runtime/sessions/<session_id>/bootstrap-capability.json` with
-`BOOTSTRAPPING` state. That capability authorizes only the exact bundled
-controller to perform layout migration or recovery for this SessionStart; it
-cannot authorize Plan or other ordinary writes. A same-session SessionStart
-replaces it, so an older capability for that session fails closed; capabilities
-from different sessions neither authorize nor supersede one another.
-The hook then proves the controller can start from `.work-governance/cache/uv`,
-trying the existing cache offline before using permitted dependency access only
-for a script-dependency miss, disables Python downloads, and runs migration,
-validation, and status commands offline. The bundled controller has a
-stdlib-backed YAML compatibility layer, so a fresh project does not need PyPI
-or a pre-existing PyYAML wheel just to bootstrap. Exact Plugin builds and
-incremental state live in the ignored session-scoped bootstrap receipt; detailed
-command evidence stays under `.work-governance/evidence/`. The runtime snapshot
-remains available if the Codex Plugin cache entry is replaced or removed after
-SessionStart.
-
-When a same-session compaction emits another SessionStart and the trusted
-runtime identity is unchanged, the hook preserves the exact READY receipt
-bytes. The active turn therefore remains valid. A structural or build identity
-change produces a new receipt and correctly invalidates the prior turn.
+Runtime bootstrap is explicit and hookless. `workctl layout migrate` commits
+the layout contract without creating a Plan or index, and `workctl goal init`
+admits the first schema-v5 Plan when authority is `UNMANAGED_EMPTY`. Legacy
+`bootstrap-state.json`, session receipt, bootstrap capability, and current-turn
+receipt files may remain under `.work-governance/` from older installed
+versions, but they are compatibility artifacts only. They do not override
+`.work-governance/_Plan/index.yaml`, and ordinary schema-v5 commands do not
+require them.
 
 The local bootstrap action revision and the versioned legacy layout-migration
 revision are independent. Bootstrap action revision 5 introduces the runtime
 bundle and receipt v2 while layout version remains 1 and legacy migration
-action revision remains 4. When a supported earlier layout action revision is already committed, the next
-SessionStart treats it as `LAYOUT_MIGRATION_REQUIRED` and runs a recoverable
-action upgrade before issuing a new `READY` receipt. Action revision 4 corrects
+action revision remains 4. When a supported earlier layout action revision is
+already committed, direct `workctl layout migrate` treats it as
+`LAYOUT_MIGRATION_REQUIRED` and runs a recoverable action upgrade. Action
+revision 4 corrects
 only active Plan scope entries exactly equal to `_Plan` or `_Plan/`; paths such
 as `_Plan/business-output` remain project-owned and unchanged. A changed active
 Plan receives one revision bump, the original migration commitment remains
@@ -216,46 +190,23 @@ unchanged, and a separate versionable action-upgrade proof is written under
 snapshots support deterministic recovery, while `version.yaml` is still written
 last. No-Plan layouts upgrade the action contract without creating a Plan.
 
-If no SessionStart hook ran because it is untrusted, disabled, skipped by
-managed policy, or absent, a current `READY` receipt cannot be established and
-Plan-controlled work is `ENVIRONMENT_BLOCKED`. If the hook itself emits an
-`ENVIRONMENT_BLOCKED` result, that output proves the hook ran: it reports
-`hook=executed`, the startup or resume source, the observed failure, a local
-evidence reference, the exact capability-bound `layout_command_prefix` when
-layout recovery is available, and the cause-specific next recovery action. The
-prefix is valid only for layout commands and is not a READY receipt. Do not
-reinterpret such output as a hook-trust failure. Restore the reported
-precondition and obtain a current `READY` receipt in a fresh session.
-
-Every trusted `UserPromptSubmit` atomically replaces its session-scoped
-`.work-governance/runtime/sessions/<session_id>/current-turn-receipt.json`.
-The ignored receipt binds
-the installed build, current SessionStart receipt hash, official `session_id`
-and `turn_id`, exact UTF-8 prompt SHA256, project root, and
-`request_ref=user:session/<session>/turn/<turn>/sha256/<prompt-sha256>`. A new
-turn supersedes the old receipt without creating a project history log.
-Missing, disabled, mismatched, or stale hooks block Plan advancement; simple
-No-Plan answers remain ephemeral and create no Plan, index, or project log.
+Hook execution is no longer part of the normal runtime contract. A missing
+`SessionStart` or `UserPromptSubmit` hook does not block ordinary local work.
+For high-impact decisions, the model still asks at the appropriate boundary
+and records the explicit user authority selected by the Plan/controller
+workflow. Legacy schema-v4 compatibility paths may still validate explicitly
+provided current-turn receipt files, but the preferred route is to migrate
+active work to schema-v5.
 
 ## Controller
 
 The public CLI entrypoint is the Bash wrapper
-`plugins/work-governance/scripts/workctl`; it routes to the receipt-bound
-private Python transaction engine. In a governed session, use the exact
-controller path and receipt emitted by SessionStart. The stable
+`plugins/work-governance/scripts/workctl`; it selects Python >= 3.12 and routes
+directly to the private Python transaction engine without `uv run`. The stable
 high-frequency workflow surface is available through
-`<receipt-bound-workctl> help <workflow>`. The complete parser-generated
+`workctl help <workflow>`. The complete parser-generated
 command and option reference is [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md);
 regenerate it after changing `build_parser()`:
-
-The wrapper first tries the project-local UV cache offline. If the failure is a
-script-dependency cache miss, it performs one normal `uv run` prewarm using the
-same project-local cache, then continues. Set
-`WORK_GOVERNANCE_STRICT_OFFLINE=1` to keep fail-closed offline-only behavior.
-SessionStart remains the required trusted path for Plan-controlled work;
-wrapper prewarm only makes `workctl help`, diagnostics, and later
-receipt-bound controller calls executable if a future controller adds a script
-dependency.
 
 ```sh
 .venv/bin/python plugins/work-governance/scripts/generate_cli_reference.py
@@ -277,35 +228,22 @@ does not adapt legacy task status into the refreshed runtime state.
 `not_migrated`, and `next_model_action` so the model can read old progress
 without treating it as current runtime authority. After refresh, `plan status`
 exposes `legacy_refresh` with the archive path, archive health, and the same
-state-reset warning. `migrate recover` is receipt-bound because it can finish
-an interrupted replacement.
-
-Run only the exact `intake_command` emitted by the current SessionStart. It uses
-`controller_ref`, `controller_sha256`, and `receipt_sha256` from the READY
-receipt; do not derive a controller from a repository or Plugin-cache path:
+state-reset warning. `migrate recover` can finish an interrupted replacement
+and remains guarded by layout, lock, journal, and expected-contract checks.
 
 ```sh
-uv run --no-project --offline --cache-dir .work-governance/cache/uv \
-  --no-python-downloads --script <absolute-runtime-controller> \
-  --receipt-sha256 <current-receipt-sha256> intake status
+workctl intake status
 ```
-
-Use the same absolute controller and receipt digest for subsequent commands.
-Every write is bound to that session's receipt; after a replacement
-SessionStart for the same session, the old receipt is superseded. An unrelated
-session cannot supersede it. The bootstrap-only capability
-described above is a separate fail-closed channel for SessionStart layout
-mutation and never satisfies this READY requirement.
 
 For each non-simple request, show a fresh `proceed`, `explore`, or `ask`
 decision. Mutable schema-v4 Plan work also generates and records it:
 
 ```sh
-<receipt-bound-workctl> intake receipt \
+workctl intake receipt \
   --turn-receipt-sha256 <turn-receipt-sha256> \
   --classification plan_controlled --decision proceed \
   --rationale "<decision basis>" --targets task:T-001
-<receipt-bound-workctl> plan intake record \
+workctl plan intake record \
   --manifest /path/to/intake.json --expected-revision <revision>
 ```
 
@@ -315,10 +253,9 @@ decision basis, and every exact command target. `route` covers all targets;
 other target types do not imply cross-layer coverage.
 Schema-v5 ordinary exploration, scheduling, evidence recording, task transitions,
 and reprioritization do not consume a UserPromptSubmit receipt or persist intake.
-They use the SessionStart READY receipt plus `state_sequence`, dependency,
-confirmation, and evidence guards. A compatibility turn receipt may still be
-emitted while mutable schema-v4 writes remain supported, but ordinary v5 work
-does not consume it.
+They use `state_sequence`, dependency, confirmation, and evidence guards. A
+compatibility turn receipt may still be present from older sessions, but
+ordinary v5 work does not consume it.
 Non-simple No-Plan work keeps only the current runtime receipt and visible
 reply; it does not call the Plan controller or persist an intake record.
 Intake rationale records only a minimal decision summary; never copy raw prompt
@@ -334,13 +271,13 @@ For schema-v5 Plans, task-bound capture updates only runtime state and event
 ledger entries; it does not rewrite the Plan contract:
 
 ```sh
-some_command | <receipt-bound-workctl> evidence capture \
+some_command | workctl evidence capture \
   --task T-001 \
   --kind command-output \
   --summary "focused validation output" \
   --idempotency-key task-T-001-validation
 
-<receipt-bound-workctl> evidence capture \
+workctl evidence capture \
   --task T-001 \
   --kind artifact \
   --summary "generated validation report" \
@@ -497,13 +434,12 @@ Missing authority for a live action creates a pending confirmation and keeps
 the project route open. It cannot be converted into an absolute no-next claim
 by placing the action in `scope.exclude`.
 
-Start Plan-controlled work with the exact receipt-bound controller prefix from
-the current `intake_command`:
+Start Plan-controlled work with the registered `workctl` executable:
 
 ```sh
-<receipt-bound-workctl> layout status
-<receipt-bound-workctl> plan authority inspect
-<receipt-bound-workctl> plan authority check
+workctl layout status
+workctl plan authority inspect
+workctl plan authority check
 ```
 
 Only `LAYOUT_READY` plus `GOVERNED_ACTIVE` permits ordinary Plan writes or task
@@ -516,7 +452,7 @@ A strictly recognized old Work Governance layout first requires an explicit
 worktree-local adoption receipt:
 
 ```sh
-<receipt-bound-workctl> layout adopt \
+workctl layout adopt \
   --expected-manifest-sha256 <digest-from-layout-status> \
   --expected-active-plan-id PLAN-YYYYMMDD-NNN \
   --ref user:<confirmation-reference>
@@ -528,12 +464,10 @@ reference. It cannot be replayed from main into a sibling worktree. Generated
 historical pointers and `AGENTS.md`/`CLAUDE.md` never authorize adoption, and
 layout migration never generates or rewrites project-rule files.
 
-On the first RC session for a recognized legacy layout, SessionStart creates
-only the local governance infrastructure and fails closed with
-`LEGACY_CLASSIFICATION_REQUIRED`. Review `layout status`, run the exact
-`layout adopt` command above, and start a new session. That new session may
-complete the migration; later unchanged sessions remain incremental and
-offline.
+For a recognized legacy layout, direct bootstrap creates only the local
+governance infrastructure and reports `LEGACY_CLASSIFICATION_REQUIRED`. Review
+`layout status`, run the exact `layout adopt` command above, then run
+`layout migrate` again. Later unchanged runs remain incremental.
 
 After adoption, migration runs through a durable transaction: stable new lock,
 legacy lock, complete manifest and Git baseline, staged field-level conversion,
@@ -570,8 +504,8 @@ Creating initial authority is also manifest-driven. `plan init` is not a
 normal admission path:
 
 ```sh
-<receipt-bound-workctl> plan admit apply --manifest /path/to/admission.yaml
-<receipt-bound-workctl> plan admit recover
+workctl plan admit apply --manifest /path/to/admission.yaml
+workctl plan admit recover
 ```
 
 Admission validates the prepared schema-v4 Plan, its exact hash, accepted
@@ -585,8 +519,8 @@ request.
 Completion evidence is recorded separately before it is consumed:
 
 ```sh
-<receipt-bound-workctl> plan evidence record --manifest /path/to/evidence.yaml
-<receipt-bound-workctl> plan validate --evidence-manifest /path/to/evidence.yaml
+workctl plan evidence record --manifest /path/to/evidence.yaml
+workctl plan validate --evidence-manifest /path/to/evidence.yaml
 ```
 
 The manifest contains bounded typed metadata, not arbitrary payloads or log
@@ -596,11 +530,11 @@ appends cannot alter or invalidate the stored evidence.
 Reconciliation is manifest-driven:
 
 ```sh
-<receipt-bound-workctl> plan reconcile apply \
+workctl plan reconcile apply \
   --manifest /path/to/reconcile.yaml --dry-run
-<receipt-bound-workctl> plan reconcile apply \
+workctl plan reconcile apply \
   --manifest /path/to/reconcile.yaml
-<receipt-bound-workctl> plan reconcile recover
+workctl plan reconcile recover
 ```
 
 The transaction verifies source hashes/revisions and an optional Git baseline,
@@ -621,9 +555,9 @@ For historical recovery only, the composed schema-v3 reconciliation plus
 schema-v4 upgrade entry remains available:
 
 ```sh
-<receipt-bound-workctl> plan reconcile-upgrade apply \
+workctl plan reconcile-upgrade apply \
   --manifest /path/to/reconcile-upgrade.yaml
-<receipt-bound-workctl> plan reconcile-upgrade recover \
+workctl plan reconcile-upgrade recover \
   --workflow-id RCU-YYYYMMDD-NNN
 ```
 
@@ -660,11 +594,11 @@ A complete terminal Plan starts a distinct successor through a confirmed
 rollover instead of reopening or overwriting the predecessor:
 
 ```sh
-<receipt-bound-workctl> plan rollover apply \
+workctl plan rollover apply \
   --manifest /path/to/rollover.yaml --dry-run
-<receipt-bound-workctl> plan rollover apply \
+workctl plan rollover apply \
   --manifest /path/to/rollover.yaml
-<receipt-bound-workctl> plan rollover recover \
+workctl plan rollover recover \
   --rollover-id ROL-YYYYMMDD-NNN
 ```
 
@@ -686,11 +620,11 @@ competing authority after activation.
 An obsolete active Plan is retired rather than falsely completed:
 
 ```sh
-<receipt-bound-workctl> plan retire apply \
+workctl plan retire apply \
   --manifest /path/to/retirement.yaml --dry-run
-<receipt-bound-workctl> plan retire apply \
+workctl plan retire apply \
   --manifest /path/to/retirement.yaml
-<receipt-bound-workctl> plan retire recover \
+workctl plan retire recover \
   --retirement-id RET-YYYYMMDD-NNN
 ```
 
@@ -712,9 +646,9 @@ references remain valid.
 ## Validate
 
 ```sh
-uv run --group dev ruff check .
-uv run --group dev mypy --strict plugins/work-governance/scripts/workctl.py tests
-uv run --group dev pytest -q
+.venv/bin/ruff check .
+.venv/bin/mypy --strict plugins/work-governance/scripts/workctl.py tests
+.venv/bin/python -m pytest -q
 ```
 
 ## License

@@ -67,11 +67,6 @@ def cache_dir(root: Path, governance_dir_name: str) -> Path:
     return governance_root(root, governance_dir_name) / "cache"
 
 
-def uv_cache_dir(root: Path, governance_dir_name: str) -> Path:
-    """Return the isolated UV cache used by bootstrap and the controller."""
-    return cache_dir(root, governance_dir_name) / "uv"
-
-
 def proposals_dir(root: Path, governance_dir_name: str) -> Path:
     """Return the local non-authoritative proposal directory."""
     return governance_root(root, governance_dir_name) / "proposals"

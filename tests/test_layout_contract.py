@@ -36,7 +36,7 @@ def test_all_normal_controller_paths_derive_from_governance_root(
         "plan_dir",
         "logs_dir",
         "worktrees_dir",
-        "uv_cache_dir",
+        "cache_dir",
         "proposals_dir",
         "evidence_dir",
         "runtime_dir",
@@ -90,27 +90,27 @@ def test_public_contracts_name_only_canonical_normal_paths() -> None:
     assert 'worktree_root="$repo_root/.worktree"' not in git_skill
 
 
-def test_controller_runtime_bootstrap_has_no_external_script_dependency() -> None:
-    """Cold hook bootstrap must not require fetching PyYAML into a new cache."""
+def test_controller_runtime_bootstrap_has_no_uv_script_dependency() -> None:
+    """Runtime entrypoints must not require UV script execution."""
     wrapper = CONTROLLER.read_text(encoding="utf-8")
     controller = KERNEL_CONTROLLER.read_text(encoding="utf-8")
 
-    assert "# dependencies = []" in wrapper
+    assert "uv run" not in wrapper
+    assert "# /// script" not in wrapper
     assert "yaml_compat" in controller
 
 
-def test_public_contract_explains_proposal_and_executed_hook_boundaries() -> None:
-    """Keep the public recovery and local-evidence claims aligned with 1.0.2."""
+def test_public_contract_explains_proposal_and_direct_tool_boundaries() -> None:
+    """Keep recovery and local-evidence claims aligned with the hookless runtime."""
     readme = README.read_text(encoding="utf-8")
     privacy = PRIVACY.read_text(encoding="utf-8")
     readme_flat = " ".join(readme.split())
     privacy_flat = " ".join(privacy.split())
 
-    assert "`hook=executed`" in readme
-    assert "Do not reinterpret such output as a hook-trust failure" in readme_flat
+    assert "registered `workctl` executable" in readme
+    assert "does not require Codex lifecycle hooks" in readme_flat
     assert "The directory name `proposals/` alone is not ownership evidence" in readme_flat
     assert "it never places proposals under the canonical Plan root" in readme_flat
-    assert "bounded SessionStart source and session identifier" in privacy_flat
+    assert "bounded local command context" in privacy_flat
     assert "migration does not apply it or accept its confirmations" in privacy_flat
-    assert "one session cannot supersede another" in privacy_flat
     assert "raw prompt content is not copied into those records" in privacy_flat

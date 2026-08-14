@@ -43,7 +43,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="workctl")
     parser.add_argument(
         "--receipt-sha256",
-        help="SHA256 of the exact current SessionStart READY receipt.",
+        help="Optional SHA256 of a legacy READY bootstrap receipt.",
     )
     sub = parser.add_subparsers(dest="domain", required=True)
 

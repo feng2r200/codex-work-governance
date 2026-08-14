@@ -6,9 +6,8 @@ facts, confirmation gates, artifacts, acceptance criteria, or rollback state.
 ## Authority discovery
 
 Every project uses a single active execution authority under a separately
-validated project layout. Before Plan-controlled work, require a current READY
-bootstrap receipt, require `layout status` to report `LAYOUT_READY`, then the
-Agent discovers:
+validated project layout. Before Plan-controlled work, require the registered
+direct `workctl` executable to report `LAYOUT_READY`, then the Agent discovers:
 
 - a Plan explicitly named by the current user;
 - a Plan designated as current, authoritative, or mandatory by `AGENTS.md` or
@@ -91,10 +90,9 @@ from Plan authority:
   path is invalid.
 
 Only `layout status|validate|migrate|recover` are available until
-`LAYOUT_READY`. During SessionStart, these layout mutations may use only the
-exact controller and digest bound by the current ignored
-`runtime/sessions/<session_id>/bootstrap-capability.json`; that capability never authorizes Plan
-writes. No-Plan bootstrap does not create a Plan or index.
+`LAYOUT_READY`. Direct layout bootstrap does not create a Plan or index. Legacy
+bootstrap capability files may be inspected for compatibility but are not normal
+execution authority.
 
 Schema-v4 Plans carry:
 
@@ -121,7 +119,7 @@ declares one current active Plan schema; this release uses schema-v5. An active
 V3/V4 or otherwise outdated Plan is readable but ordinary writes fail closed
 with `PLAN_SCHEMA_REFRESH_REQUIRED` in both authority and status views; use
 `migrate inspect`,
-`migrate apply --dry-run`, then receipt-bound
+`migrate apply --dry-run`, then guarded
 `migrate apply --expected-contract-revision <revision>` to archive the legacy
 Plan and rebuild a fresh v5 contract. Do not adapt legacy task state or use
 `plan contract upgrade`/`plan reconcile-upgrade` for new work. The controller
@@ -349,8 +347,8 @@ Allowed structural changes:
   activation gate; local tasks and ambiguous multiple route owners fail closed.
   The command atomically freezes that build and rebinds the activation, task,
   pending exclusion, and route gates while preserving the old decision as
-  history. The target must also equal the current trusted SessionStart
-  controller build. Canonical `+codex.pending` targets, non-blocked tasks,
+  history. The target must also equal the currently installed direct controller
+  build. Canonical `+codex.pending` targets, non-blocked tasks,
   mismatched Plugin identities or controller builds, incomplete gates, and
   stale intake or revisions fail closed; normal activation evidence equality
   remains unchanged.
@@ -365,16 +363,17 @@ Allowed structural changes:
   receipt.
 - `migrate apply`: with expected contract revision, write backup, staging,
   versioned legacy archive, fresh runtime state, event ledger, and journal data,
-  then replace the active Plan. It is receipt-bound; it does not require a fixed
+  then replace the active Plan. It is guarded by direct layout, lock, journal,
+  and expected-contract checks; it does not require a fixed
   migration confirmation gate and does not carry legacy task status into runtime.
   Its output includes `legacy_summary`, `state_reset`, `legacy_state_migrated:
   false`, `not_migrated`, and `next_model_action`.
 - `migrate recover`: finish only the authenticated current-schema refresh
-  journal and is receipt-bound because it can replace Plan/runtime files.
+  journal and is guarded because it can replace Plan/runtime files.
 - `migrate rollback-info`: show archive, backup, staging, recovery command and
   manual rollback boundary without writing state.
 - `doctor`: report layout, authority, current-schema refresh journals, and generic
-  runtime transactions. `doctor --clean-stale-transactions` is receipt-bound
+  runtime transactions. `doctor --clean-stale-transactions` is guarded
   and removes only stale generic transaction directories that have no journal;
   it never deletes schema refresh journals, archives, or backup/staging bundles.
 - `risk inspect`: return read-only action kind, target, reversibility, digest,

@@ -1,30 +1,4 @@
 {
-  "description": "Prepare and verify the project-local Work Governance layout.",
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup|resume|clear|compact",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ${PLUGIN_ROOT}/hooks/session_start.py",
-            "statusMessage": "Checking Work Governance layout",
-            "timeout": 120
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ${PLUGIN_ROOT}/hooks/user_prompt_submit.py",
-            "statusMessage": "Binding Work Governance intake to this turn",
-            "timeout": 30
-          }
-        ]
-      }
-    ]
-  }
+  "description": "Work Governance runs through the registered workctl executable; no Codex lifecycle hooks are registered.",
+  "hooks": {}
 }
