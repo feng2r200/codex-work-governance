@@ -193,6 +193,50 @@ def test_goal_init_reports_conventional_history_candidates_without_adopting_them
     assert status["plan_id"] == "PLAN-20260806-110"
 
 
+def test_plan_history_surfaces_conventional_plan_source_without_adopting_it(
+    tmp_path: Path,
+) -> None:
+    """History uses the shared Plan source index for conventional historical Plans."""
+    run_workctl(tmp_path, "layout", "migrate")
+    historical = tmp_path / "docs" / "Plan.md"
+    historical.parent.mkdir()
+    historical.write_text(
+        "# Historical Plan\n\n"
+        "Goal: exercise a deliberately different workflow.\n\n"
+        "Tasks:\n"
+        "- Keep this file as non-authoritative project history.\n",
+        encoding="utf-8",
+    )
+
+    history = json.loads(
+        run_workctl(tmp_path, "plan", "history", "list", env=STRICT_CONTROLLER_ENV).stdout
+    )
+    shown = json.loads(
+        run_workctl(
+            tmp_path,
+            "plan",
+            "history",
+            "show",
+            "--path",
+            "docs/Plan.md",
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    report = json.loads(
+        run_workctl(tmp_path, "plan", "authority", "inspect", env=STRICT_CONTROLLER_ENV).stdout
+    )
+
+    listed = next(item for item in history["plans"] if item["path"] == "docs/Plan.md")
+    assert listed["classification"] == "NON_AUTHORITY"
+    assert listed["origin"] == "conventional-path"
+    assert listed["reason"] == "historical_conventional_plan_ignored"
+    assert listed["sha256"] == sha256_path(historical)
+    assert listed["parse_state"] == "error"
+    assert shown["classification"] == listed["classification"]
+    assert shown["reason"] == listed["reason"]
+    assert report["authority_state"] == "UNMANAGED_EMPTY"
+
+
 def test_task_done_captures_raw_evidence_and_verifies_v5_task(tmp_path: Path) -> None:
     """task done combines direct evidence capture and v5 task verification."""
     init_minimal_v5_goal(tmp_path, "PLAN-20260806-103")

@@ -26,7 +26,9 @@
   `--expected-revision` 或当前 intake 参数。完成会释放 active pointer，下一轮
   新工作从 `UNMANAGED_EMPTY` 重新 `goal init`。
 - 查旧 Plan 时，用 `plan history list|show`。这是宽松只读读取，不用旧历史
-  格式约束当前 active schema。
+  格式约束当前 active schema；常规路径里的历史 `Plan.md` 会作为
+  `NON_AUTHORITY` 候选显示，不能替代 `.work-governance/_Plan/index.yaml`
+  指向的当前 active Plan。
 - active Plan 只有插件当前声明的 schema-v5 可继续写。遇到 V3/V4 或任何
   非当前 schema 的 active Plan 时，只做只读摘要，然后用
   `migrate apply --expected-contract-revision <revision>` 归档旧 Plan 并重建

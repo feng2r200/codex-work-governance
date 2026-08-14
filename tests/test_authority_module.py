@@ -13,6 +13,9 @@ if str(SCRIPT_ROOT) not in sys.path:
 authority_module = importlib.import_module("workctl_modules.authority")
 candidate_to_dict = authority_module.candidate_to_dict
 parse_candidate_specs = authority_module.parse_candidate_specs
+plan_sources_module = importlib.import_module("workctl_modules.plan_sources")
+discover_plan_sources = plan_sources_module.discover_plan_sources
+PlanSourceError = plan_sources_module.PlanSourceError
 
 
 @dataclass(frozen=True)
@@ -96,3 +99,47 @@ def test_parse_candidate_specs_preserves_controller_error_codes() -> None:
             assert str(exc) == expected
         else:
             raise AssertionError(f"invalid candidate spec was accepted: {values}")
+
+
+def test_plan_source_index_marks_conventional_plan_as_history_visible(
+    tmp_path: Path,
+) -> None:
+    """Shared source discovery keeps conventional Plans visible but non-authoritative."""
+    docs_plan = tmp_path / "docs" / "Plan.md"
+    docs_plan.parent.mkdir()
+    docs_plan.write_text(
+        "# Historical Plan\n\n"
+        "Goal: keep prior work visible without granting execution authority.\n",
+        encoding="utf-8",
+    )
+
+    source = next(item for item in discover_plan_sources(tmp_path) if item.path == "docs/Plan.md")
+
+    assert source.classification == "NON_AUTHORITY"
+    assert source.origin == "conventional-path"
+    assert source.reason == "historical_conventional_plan_ignored"
+    assert source.history_visible is True
+
+
+def test_plan_source_index_rejects_conflicting_samefile_explicit_candidates(
+    tmp_path: Path,
+) -> None:
+    """Explicit candidate classification conflicts stay physical-file based."""
+    docs_plan = tmp_path / "docs" / "Plan.md"
+    docs_plan.parent.mkdir()
+    docs_plan.write_text("# Candidate\n", encoding="utf-8")
+    alias = tmp_path / "docs" / "alias.md"
+    alias.symlink_to(docs_plan.name)
+
+    try:
+        discover_plan_sources(
+            tmp_path,
+            explicit_candidates=[
+                ("docs/Plan.md", "NON_AUTHORITY"),
+                ("docs/alias.md", "LIKELY_AUTHORITY"),
+            ],
+        )
+    except PlanSourceError as exc:
+        assert str(exc) == "CONFLICTING_CANDIDATE_CLASSIFICATION: docs/Plan.md"
+    else:
+        raise AssertionError("conflicting samefile candidate classifications were accepted")
