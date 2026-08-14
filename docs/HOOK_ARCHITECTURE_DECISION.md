@@ -40,7 +40,8 @@ schema-v4 intake and turn-bound confirmation provenance.
 
 ## Verification
 
-- The plugin hook registry is empty.
+- The plugin hook registry is empty, and the source package no longer ships
+  dormant hook implementation scripts.
 - `scripts/workctl` invokes Python directly and contains no UV prewarm path.
 - A fresh temporary project can run `layout migrate`, `goal init`, and
   `intake status` with a PATH that does not contain `uv`.

@@ -21,7 +21,6 @@ KERNEL_CONTROLLER = (
 PATH_HELPERS = (
     REPOSITORY_ROOT / "plugins" / "work-governance" / "scripts" / "workctl_modules" / "paths.py"
 )
-BOOTSTRAP = REPOSITORY_ROOT / "plugins" / "work-governance" / "hooks" / "session_start.py"
 README = REPOSITORY_ROOT / "README.md"
 PRIVACY = REPOSITORY_ROOT / "PRIVACY.md"
 
@@ -53,21 +52,16 @@ def test_all_normal_controller_paths_derive_from_governance_root(
         assert helper(tmp_path).is_relative_to(governance)
 
 
-def test_legacy_root_literals_are_confined_to_bootstrap_compatibility() -> None:
+def test_legacy_root_literals_are_confined_to_controller_compatibility() -> None:
     """Prevent new normal writers to root .logs or .worktree."""
     controller = KERNEL_CONTROLLER.read_text(encoding="utf-8")
     path_helpers = PATH_HELPERS.read_text(encoding="utf-8")
-    bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
 
     assert controller.count('root / ".logs"') == 0
     assert path_helpers.count('root / ".logs"') == 1
     assert controller.count('Path(".logs")') == 1
     assert 'root / ".worktree"' not in controller
     assert 'Path(".worktree")' not in controller
-    assert bootstrap.count('project_root / ".logs"') == 1
-    assert bootstrap.count('project_root / "_Plan"') == 1
-    assert 'project_root / ".worktree"' not in bootstrap
-    assert 'Path(".worktree")' not in bootstrap
 
 
 def test_public_contracts_name_only_canonical_normal_paths() -> None:

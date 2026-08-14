@@ -1,4 +1,4 @@
-"""Trusted per-turn intake contract tests."""
+"""Direct receipt/intake compatibility contract tests."""
 
 from __future__ import annotations
 
@@ -18,9 +18,8 @@ import yaml
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_ROOT = REPOSITORY_ROOT / "plugins" / "work-governance"
 HOOKS_CONFIG = PLUGIN_ROOT / "hooks" / "hooks.json"
-SESSION_HOOK = PLUGIN_ROOT / "hooks" / "session_start.py"
-TURN_HOOK = PLUGIN_ROOT / "hooks" / "user_prompt_submit.py"
 WORKCTL = PLUGIN_ROOT / "scripts" / "workctl.py"
+LIFECYCLE_SKILL = PLUGIN_ROOT / "skills" / "work-lifecycle" / "SKILL.md"
 STOCKLENS_REPLAY = REPOSITORY_ROOT / "tests" / "fixtures" / "stocklens_goal_driven_replay.json"
 
 
@@ -29,115 +28,182 @@ def sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def install_fake_uv(directory: Path) -> Path:
-    """Install a UV-shaped wrapper that executes the bundled controller."""
-    wrapper = directory / "uv"
-    wrapper.write_text(
-        f"#!{sys.executable}\n"
-        + """
-import os
-import subprocess
-import sys
+def controller_receipt_digest(payload: dict[str, object]) -> str:
+    """Hash one READY receipt using the controller-compatible JSON encoding."""
+    return sha256_bytes((json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"))
 
-arguments = sys.argv[1:]
-script_index = arguments.index("--script")
-controller = arguments[script_index + 1]
-controller_arguments = arguments[script_index + 2:]
-cache = arguments[arguments.index("--cache-dir") + 1]
-if controller_arguments == ["--help"]:
-    os.makedirs(cache, exist_ok=True)
-result = subprocess.run(
-    [sys.executable, controller, *controller_arguments],
-    env=os.environ,
-    check=False,
-)
-raise SystemExit(result.returncode)
-""",
-        encoding="utf-8",
+
+def turn_receipt_digest(payload: dict[str, object]) -> str:
+    """Hash a current-turn receipt projection without the self digest."""
+    projection = {key: value for key, value in payload.items() if key != "receipt_sha256"}
+    return sha256_bytes(
+        json.dumps(
+            projection,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
     )
-    wrapper.chmod(0o755)
-    return wrapper
 
 
-def run_session_hook(
-    project: Path,
-    fake_bin: Path,
-    session_id: str,
-    *,
-    source: str = "startup",
-    plugin_root: Path = PLUGIN_ROOT,
-    environment_overrides: dict[str, str] | None = None,
-) -> dict[str, object]:
-    """Run the real SessionStart hook for one temporary project."""
-    environment = dict(os.environ)
-    environment["PLUGIN_ROOT"] = str(plugin_root)
-    environment["PATH"] = str(fake_bin) + os.pathsep + environment.get("PATH", "")
-    environment.update(environment_overrides or {})
+def ensure_direct_layout(project: Path, *, plugin_root: Path = PLUGIN_ROOT) -> None:
+    """Initialize the test project through the direct workctl controller."""
+    if (project / ".work-governance" / "version.yaml").is_file():
+        return
     result = subprocess.run(
-        [sys.executable, str(plugin_root / "hooks" / "session_start.py")],
-        input=json.dumps(
-            {
-                "session_id": session_id,
-                "cwd": str(project),
-                "hook_event_name": "SessionStart",
-                "source": source,
-            }
-        ),
+        [sys.executable, str(plugin_root / "scripts" / "workctl.py"), "layout", "migrate"],
+        cwd=project,
         text=True,
         capture_output=True,
-        env=environment,
-        check=True,
+        check=False,
     )
-    output: object = json.loads(result.stdout)
-    assert isinstance(output, dict)
-    return output
+    assert result.returncode == 0, result.stderr
 
 
-def run_turn_hook(
+def write_ready_receipt(
+    project: Path,
+    session_id: str,
+    *,
+    plugin_root: Path = PLUGIN_ROOT,
+) -> dict[str, object]:
+    """Create a controller-valid test receipt without invoking lifecycle hooks."""
+    ensure_direct_layout(project, plugin_root=plugin_root)
+    manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
+    plugin_manifest_sha256 = sha256_bytes(manifest_path.read_bytes())
+    bundle = (
+        project
+        / ".work-governance"
+        / "runtime"
+        / "plugin-builds"
+        / plugin_manifest_sha256
+    )
+    bundle.mkdir(parents=True, exist_ok=True)
+    controller = bundle / "workctl.py"
+    lifecycle = bundle / "work-lifecycle.SKILL.md"
+    controller.write_bytes((plugin_root / "scripts" / "workctl.py").read_bytes())
+    shutil.copytree(
+        plugin_root / "scripts" / "workctl_modules",
+        bundle / "workctl_modules",
+        dirs_exist_ok=True,
+    )
+    lifecycle.write_bytes((plugin_root / "skills" / "work-lifecycle" / "SKILL.md").read_bytes())
+    controller_sha256 = sha256_bytes(controller.read_bytes())
+    lifecycle_sha256 = sha256_bytes(lifecycle.read_bytes())
+    module_controller = bundle / "workctl_modules" / "kernel" / "controller.py"
+    module_controller_sha256 = sha256_bytes(module_controller.read_bytes())
+    runtime_manifest = {
+        "schema_version": 1,
+        "kind": "work-governance-runtime-bundle",
+        "plugin_build": read_json_object(manifest_path)["version"],
+        "plugin_manifest_sha256": plugin_manifest_sha256,
+        "current_plan_schema_version": 5,
+        "controller_ref": controller.relative_to(project).as_posix(),
+        "controller_sha256": controller_sha256,
+        "lifecycle_ref": lifecycle.relative_to(project).as_posix(),
+        "lifecycle_sha256": lifecycle_sha256,
+        "module_files": [
+            {
+                "path": "workctl_modules/kernel/controller.py",
+                "sha256": module_controller_sha256,
+            }
+        ],
+    }
+    runtime_manifest_path = bundle / "manifest.json"
+    runtime_manifest_path.write_text(
+        json.dumps(runtime_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    receipt: dict[str, object] = {
+        "schema_version": 2,
+        "bootstrap_contract_version": 1,
+        "action_revision": 5,
+        "updated_at": "2026-08-14T00:00:00+00:00",
+        "status": "READY",
+        "plugin_build": runtime_manifest["plugin_build"],
+        "plugin_manifest_sha256": plugin_manifest_sha256,
+        "current_plan_schema_version": 5,
+        "project_input_sha256": "2" * 64,
+        "project_output_sha256": "3" * 64,
+        "layout_state": "LAYOUT_READY",
+        "evidence_ref": "evidence:.work-governance/evidence/bootstrap/direct-test.json",
+        "session_id": session_id,
+        "runtime_bundle_ref": bundle.relative_to(project).as_posix(),
+        "runtime_manifest_sha256": sha256_bytes(runtime_manifest_path.read_bytes()),
+        "controller_ref": controller.relative_to(project).as_posix(),
+        "controller_sha256": controller_sha256,
+        "lifecycle_ref": lifecycle.relative_to(project).as_posix(),
+        "lifecycle_sha256": lifecycle_sha256,
+    }
+    receipt_text = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+    (project / ".work-governance" / "bootstrap-state.json").write_text(
+        receipt_text,
+        encoding="utf-8",
+    )
+    session_dir = project / ".work-governance" / "runtime" / "sessions" / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "bootstrap-state.json").write_text(receipt_text, encoding="utf-8")
+    return receipt
+
+
+def prepare_session_receipt(
+    project: Path,
+    session_id: str,
+    *,
+    plugin_root: Path = PLUGIN_ROOT,
+) -> dict[str, object]:
+    """Prepare direct layout and a controller-valid session receipt."""
+    return write_ready_receipt(project, session_id, plugin_root=plugin_root)
+
+
+def issue_turn_receipt(
     project: Path,
     *,
     session_id: str,
     turn_id: str,
     prompt: str,
     plugin_root: Path = PLUGIN_ROOT,
-    environment_overrides: dict[str, str] | None = None,
 ) -> dict[str, object]:
-    """Run the real UserPromptSubmit hook against the current SessionStart receipt."""
-    return run_raw_turn_hook(
-        {
-            "session_id": session_id,
-            "turn_id": turn_id,
-            "cwd": str(project),
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": prompt,
-        },
-        plugin_root=plugin_root,
-        environment_overrides=environment_overrides,
+    """Create a controller-valid current-turn receipt without invoking hooks."""
+    session_receipt_path = (
+        project
+        / ".work-governance"
+        / "runtime"
+        / "sessions"
+        / session_id
+        / "bootstrap-state.json"
     )
-
-
-def run_raw_turn_hook(
-    payload: dict[str, object],
-    *,
-    plugin_root: Path = PLUGIN_ROOT,
-    environment_overrides: dict[str, str] | None = None,
-) -> dict[str, object]:
-    """Run the prompt hook with one exact JSON input object."""
-    environment = dict(os.environ)
-    environment["PLUGIN_ROOT"] = str(plugin_root)
-    environment.update(environment_overrides or {})
-    result = subprocess.run(
-        [sys.executable, str(plugin_root / "hooks" / "user_prompt_submit.py")],
-        input=json.dumps(payload, ensure_ascii=False),
-        text=True,
-        capture_output=True,
-        env=environment,
-        check=True,
+    if not session_receipt_path.is_file():
+        prepare_session_receipt(project, session_id, plugin_root=plugin_root)
+    session_receipt = read_json_object(session_receipt_path)
+    prompt_sha256 = sha256_bytes(prompt.encode("utf-8"))
+    receipt: dict[str, object] = {
+        "schema_version": 1,
+        "kind": "work-governance-current-turn-receipt",
+        "plugin_build": session_receipt["plugin_build"],
+        "session_start_receipt_sha256": controller_receipt_digest(session_receipt),
+        "session_id": session_id,
+        "turn_id": turn_id,
+        "prompt_sha256": prompt_sha256,
+        "request_ref": f"user:session/{session_id}/turn/{turn_id}/sha256/{prompt_sha256}",
+        "project_root": project.resolve().as_posix(),
+        "issued_at": "2026-08-14T00:00:00+00:00",
+    }
+    receipt["receipt_sha256"] = turn_receipt_digest(receipt)
+    receipt_text = json.dumps(receipt, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    legacy_path = project / ".work-governance" / "runtime" / "current-turn-receipt.json"
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_text(receipt_text, encoding="utf-8")
+    session_path = (
+        project
+        / ".work-governance"
+        / "runtime"
+        / "sessions"
+        / session_id
+        / "current-turn-receipt.json"
     )
-    assert result.stderr == ""
-    output: object = json.loads(result.stdout)
-    assert isinstance(output, dict)
-    return output
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    session_path.write_text(receipt_text, encoding="utf-8")
+    return receipt
 
 
 def read_json_object(path: Path) -> dict[str, object]:
@@ -211,7 +277,7 @@ def rewrite_plan_with_pyyaml_escaped_continuation(project: Path, plan_id: str) -
 
 
 def runtime_controller(project: Path) -> tuple[Path, str]:
-    """Return the current runtime controller and SessionStart receipt digest."""
+    """Return the current runtime controller and bootstrap receipt digest."""
     receipt_path = project / ".work-governance" / "bootstrap-state.json"
     receipt = read_json_object(receipt_path)
     return (
@@ -470,13 +536,10 @@ def prepare_admitted_project(
     legacy_contract_compat: bool = True,
 ) -> tuple[Path, str]:
     """Bootstrap and transactionally admit one schema-v4 test Plan."""
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    install_fake_uv(fake_bin)
     project = tmp_path / "project"
     project.mkdir()
     session_id = "session-intake"
-    run_session_hook(project, fake_bin, session_id)
+    prepare_session_receipt(project, session_id)
     if legacy_contract_compat:
         patch_runtime_controller_for_legacy_schema_tests(project)
     plan = prepared_plan or strict_admission_plan("PLAN-20260729-001", unknowns=unknowns)
@@ -487,7 +550,7 @@ def prepare_admitted_project(
         f"---\n{yaml.safe_dump(plan, sort_keys=False)}---\n# Intake test Plan\n",
         encoding="utf-8",
     )
-    run_turn_hook(
+    issue_turn_receipt(
         project,
         session_id=session_id,
         turn_id="turn-admission",
@@ -572,7 +635,7 @@ def issue_intake(
     current_unknown_id: str | None = None,
 ) -> tuple[dict[str, object], Path, str]:
     """Issue a turn, generate an intake proposal, and optionally record it."""
-    run_turn_hook(
+    issue_turn_receipt(
         project,
         session_id=session_id,
         turn_id=turn_id,
@@ -670,7 +733,7 @@ def prepare_strict_rollover(
         f"---\n{yaml.safe_dump(target, sort_keys=False)}---\n# Strict successor\n",
         encoding="utf-8",
     )
-    run_turn_hook(
+    issue_turn_receipt(
         project,
         session_id=session_id,
         turn_id="turn-rollover",
@@ -754,13 +817,10 @@ def prepare_strict_contract_upgrade(
     tmp_path: Path,
 ) -> tuple[Path, str, Path]:
     """Create a schema-v3 authority and a current-turn strict upgrade manifest."""
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    install_fake_uv(fake_bin)
     project = tmp_path / "project"
     project.mkdir()
     session_id = "session-upgrade"
-    run_session_hook(project, fake_bin, session_id)
+    prepare_session_receipt(project, session_id)
     patch_runtime_controller_for_legacy_schema_tests(project)
     plan_id = "PLAN-20260729-001"
     source = strict_admission_plan(plan_id)
@@ -858,7 +918,7 @@ def prepare_strict_contract_upgrade(
         f"---\n{yaml.safe_dump(candidate, sort_keys=False)}---\n# Upgraded contract\n",
         encoding="utf-8",
     )
-    run_turn_hook(
+    issue_turn_receipt(
         project,
         session_id=session_id,
         turn_id="turn-upgrade",
@@ -923,8 +983,8 @@ def prepare_strict_contract_upgrade(
     return project, session_id, manifest_path
 
 
-def test_user_prompt_submit_hook_is_registered() -> None:
-    """The plugin no longer registers a per-turn receipt hook."""
+def test_lifecycle_hook_registry_is_empty() -> None:
+    """The plugin no longer registers lifecycle hooks."""
     payload: dict[str, object] = json.loads(HOOKS_CONFIG.read_text(encoding="utf-8"))
     hooks = payload["hooks"]
 
@@ -1177,387 +1237,18 @@ def test_schema_v4_risk_acceptance_requires_the_current_receipt_bound_user_turn(
     assert risk["ref"] == proposal["request_ref"]
 
 
-def test_turn_hook_hashes_exact_utf8_prompt_and_atomically_replaces(
-    tmp_path: Path,
-) -> None:
-    """Each new turn replaces the prior receipt and binds exact prompt bytes."""
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    install_fake_uv(fake_bin)
-    project = tmp_path / "project"
-    project.mkdir()
-    run_session_hook(project, fake_bin, "session-alpha")
-    session_receipt = project / ".work-governance" / "bootstrap-state.json"
-    turn_receipt = project / ".work-governance" / "runtime" / "current-turn-receipt.json"
-    prompt = "药材\n🌿"
-
-    first_output = run_turn_hook(
-        project,
-        session_id="session-alpha",
-        turn_id="turn-one",
-        prompt=prompt,
-    )
-    first = read_json_object(turn_receipt)
-    first_digest = cast(str, first["receipt_sha256"])
-
-    assert first["prompt_sha256"] == sha256_bytes(prompt.encode("utf-8"))
-    assert first["session_start_receipt_sha256"] == sha256_bytes(session_receipt.read_bytes())
-    assert first["request_ref"] == (
-        "user:session/session-alpha/turn/turn-one/sha256/" + sha256_bytes(prompt.encode("utf-8"))
-    )
-    hook_specific = first_output["hookSpecificOutput"]
-    assert isinstance(hook_specific, dict)
-    context = cast(dict[str, object], hook_specific)["additionalContext"]
-    assert isinstance(context, str)
-    assert first_digest in context
-
-    run_turn_hook(
-        project,
-        session_id="session-alpha",
-        turn_id="turn-two",
-        prompt="second request",
-    )
-    second = read_json_object(turn_receipt)
-
-    assert second["turn_id"] == "turn-two"
-    assert second["receipt_sha256"] != first_digest
-    assert not list(turn_receipt.parent.glob(f".{turn_receipt.name}.*"))
-
-
-def test_turn_hook_stays_trusted_after_pyyaml_continuation_plan_resume(
-    tmp_path: Path,
-) -> None:
-    """A PyYAML-wrapped active Plan must not cause SESSION_RECEIPT_MISMATCH."""
-    fake_bin = tmp_path / "resume-bin"
-    fake_bin.mkdir()
-    install_fake_uv(fake_bin)
-    project = tmp_path / "project"
-    project.mkdir()
-    session_id = "session-intake"
-    run_session_hook(project, fake_bin, session_id)
-    plan_id = "PLAN-20260729-001"
-    plan = strict_admission_plan(plan_id)
-    plan_dir = project / ".work-governance" / "_Plan"
-    plan_dir.mkdir(parents=True, exist_ok=True)
-    (plan_dir / "index.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "schema_version": 1,
-                "active_plan_id": plan_id,
-                "plans": [{"id": plan_id, "path": f"{plan_id}.md"}],
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-    (plan_dir / f"{plan_id}.md").write_text(
-        f"---\n{yaml.safe_dump(plan, sort_keys=False)}---\n# Intake test Plan\n",
-        encoding="utf-8",
-    )
-    rewrite_plan_with_pyyaml_escaped_continuation(project, plan_id)
-
-    session_output = run_session_hook(
-        project,
-        fake_bin,
-        session_id,
-        source="resume",
-        environment_overrides={"WORK_GOVERNANCE_DISABLE_PYYAML": "1"},
-    )
-    turn_output = run_turn_hook(
-        project,
-        session_id=session_id,
-        turn_id="turn-after-pyyaml-continuation",
-        prompt="continue after fallback YAML continuation",
-        environment_overrides={"WORK_GOVERNANCE_DISABLE_PYYAML": "1"},
-    )
-    session_context = cast(dict[str, object], session_output["hookSpecificOutput"])[
-        "additionalContext"
-    ]
-    turn_context = cast(dict[str, object], turn_output["hookSpecificOutput"])[
-        "additionalContext"
-    ]
-    current_turn = read_json_object(
-        project
-        / ".work-governance"
-        / "runtime"
-        / "sessions"
-        / session_id
-        / "current-turn-receipt.json"
-    )
-
-    assert isinstance(session_context, str)
-    assert isinstance(turn_context, str)
-    assert "WORK_GOVERNANCE_BOOTSTRAP READY" in session_context
-    assert "WORK_GOVERNANCE_TURN_RECEIPT READY" in turn_context
-    assert "SESSION_RECEIPT_MISMATCH" not in turn_context
-    assert current_turn["kind"] == "work-governance-current-turn-receipt"
-
-
-def test_session_receipts_are_isolated_and_compaction_preserves_active_turn(
-    tmp_path: Path,
-) -> None:
-    """Another session and same-session compact cannot supersede a valid turn."""
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    install_fake_uv(fake_bin)
-    project = tmp_path / "project"
-    project.mkdir()
-
-    run_session_hook(project, fake_bin, "session-alpha")
-    alpha_session = (
-        project
-        / ".work-governance"
-        / "runtime"
-        / "sessions"
-        / "session-alpha"
-        / "bootstrap-state.json"
-    )
-    run_turn_hook(
-        project,
-        session_id="session-alpha",
-        turn_id="turn-alpha",
-        prompt="alpha request",
-    )
-    alpha_turn = alpha_session.parent / "current-turn-receipt.json"
-    alpha_session_bytes = alpha_session.read_bytes()
-    alpha_turn_bytes = alpha_turn.read_bytes()
-
-    run_session_hook(project, fake_bin, "session-beta")
-    run_turn_hook(
-        project,
-        session_id="session-beta",
-        turn_id="turn-beta",
-        prompt="beta request",
-    )
-    beta_session = (
-        project
-        / ".work-governance"
-        / "runtime"
-        / "sessions"
-        / "session-beta"
-        / "bootstrap-state.json"
-    )
-    beta_turn = beta_session.parent / "current-turn-receipt.json"
-
-    assert alpha_session.read_bytes() == alpha_session_bytes
-    assert alpha_turn.read_bytes() == alpha_turn_bytes
-    assert beta_session.is_file()
-    assert beta_turn.is_file()
-
-    run_session_hook(project, fake_bin, "session-alpha", source="compact")
-
-    assert alpha_session.read_bytes() == alpha_session_bytes
-    assert alpha_turn.read_bytes() == alpha_turn_bytes
-    alpha_receipt = read_json_object(alpha_session)
-    alpha_turn_receipt = read_json_object(alpha_turn)
-    controller = project / cast(str, alpha_receipt["controller_ref"])
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(controller),
-            "--receipt-sha256",
-            sha256_bytes(alpha_session_bytes),
-            "intake",
-            "receipt",
-            "--turn-receipt-sha256",
-            cast(str, alpha_turn_receipt["receipt_sha256"]),
-            "--classification",
-            "no_plan",
-            "--decision",
-            "proceed",
-            "--rationale",
-            "The isolated turn remains current after compaction.",
-            "--targets",
-            "route",
-        ],
-        cwd=project,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["request_ref"] == alpha_turn_receipt["request_ref"]
-
-
-def test_same_session_resumes_on_candidate_after_older_build_receipt(
-    tmp_path: Path,
-) -> None:
-    """A reopened session replaces its old build authority and accepts a fresh turn."""
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    install_fake_uv(fake_bin)
-    project = tmp_path / "project"
-    project.mkdir()
-    old_plugin = tmp_path / "old-plugin"
-    shutil.copytree(PLUGIN_ROOT, old_plugin)
-    old_manifest_path = old_plugin / ".codex-plugin" / "plugin.json"
-    old_manifest = read_json_object(old_manifest_path)
-    old_manifest["version"] = "1.0.6+codex.old-session-probe"
-    old_manifest_path.write_text(
-        json.dumps(old_manifest, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    candidate_manifest = read_json_object(PLUGIN_ROOT / ".codex-plugin" / "plugin.json")
-    candidate_build = cast(str, candidate_manifest["version"])
-    session_id = "reopened-older-build-session"
-
-    run_session_hook(project, fake_bin, session_id, plugin_root=old_plugin)
-    run_turn_hook(
-        project,
-        session_id=session_id,
-        turn_id="old-turn",
-        prompt="old build request",
-        plugin_root=old_plugin,
-    )
-    session_path = (
-        project / ".work-governance" / "runtime" / "sessions" / session_id / "bootstrap-state.json"
-    )
-    old_receipt_bytes = session_path.read_bytes()
-    old_receipt = read_json_object(session_path)
-
-    resumed = run_session_hook(project, fake_bin, session_id, source="resume")
-    candidate_receipt = read_json_object(session_path)
-    run_turn_hook(
-        project,
-        session_id=session_id,
-        turn_id="candidate-turn",
-        prompt="continue the existing goal on the candidate",
-    )
-    candidate_turn = read_json_object(session_path.parent / "current-turn-receipt.json")
-    controller_status = json.loads(run_controller(project, "intake", "status").stdout)
-    hook_specific = cast(dict[str, object], resumed["hookSpecificOutput"])
-    context = cast(str, hook_specific["additionalContext"])
-
-    assert candidate_build.startswith("1.1.0+codex.")
-    assert old_receipt["plugin_build"] == "1.0.6+codex.old-session-probe"
-    assert candidate_receipt["plugin_build"] == candidate_build
-    assert session_path.read_bytes() != old_receipt_bytes
-    assert candidate_receipt["controller_ref"] != old_receipt["controller_ref"]
-    assert candidate_turn["plugin_build"] == candidate_build
-    assert candidate_turn["session_start_receipt_sha256"] == sha256_bytes(session_path.read_bytes())
-    assert controller_status["authority_state"] == "UNMANAGED_EMPTY"
-    assert f"build={candidate_build}" in context
-    assert "WORK_GOVERNANCE_BOOTSTRAP READY" in context
-
-
-def test_turn_hook_invalidates_prior_receipt_before_field_validation(tmp_path: Path) -> None:
-    """Even malformed later-turn input atomically invalidates the prior receipt."""
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    install_fake_uv(fake_bin)
-    project = tmp_path / "project"
-    project.mkdir()
-    run_session_hook(project, fake_bin, "session-alpha")
-    run_turn_hook(
-        project,
-        session_id="session-alpha",
-        turn_id="turn-valid",
-        prompt="first governed request",
-    )
-    turn_path = (
-        project
-        / ".work-governance"
-        / "runtime"
-        / "sessions"
-        / "session-alpha"
-        / "current-turn-receipt.json"
-    )
-    prior = read_json_object(turn_path)
-    prior_sha256 = cast(str, prior["receipt_sha256"])
-
-    output = run_raw_turn_hook(
-        {
-            "session_id": "session-alpha",
-            "cwd": str(project),
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": "malformed later request",
-        }
-    )
-
-    hook_specific = output["hookSpecificOutput"]
-    assert isinstance(hook_specific, dict)
-    context = cast(dict[str, object], hook_specific)["additionalContext"]
-    assert isinstance(context, str)
-    assert "ENVIRONMENT_BLOCKED" in context
-    assert "TURN_ID_REQUIRED" in context
-    assert read_json_object(turn_path)["kind"] == "work-governance-current-turn-invalid"
-
-    replay = run_controller(
-        project,
-        "intake",
-        "receipt",
-        "--turn-receipt-sha256",
-        prior_sha256,
-        "--classification",
-        "plan_controlled",
-        "--decision",
-        "proceed",
-        "--rationale",
-        "Attempt stale receipt replay.",
-        "--targets",
-        "route",
-        check=False,
-    )
-    assert replay.returncode == 2
-    assert "TURN_RECEIPT_INVALID" in replay.stderr
-
-
-def test_turn_hook_fails_closed_without_managed_session_receipt(
-    tmp_path: Path,
-) -> None:
-    """A missing SessionStart receipt cannot authorize Plan-controlled writes."""
-    project = tmp_path / "project"
-    project.mkdir()
-
-    output = run_turn_hook(
-        project,
-        session_id="session-alpha",
-        turn_id="turn-one",
-        prompt="do governed work",
-    )
-
-    hook_specific = cast(dict[str, object], output["hookSpecificOutput"])
-    context = cast(str, hook_specific["additionalContext"])
-    assert "ENVIRONMENT_BLOCKED" in context
-    assert "SESSION_RECEIPT_REQUIRED" in context
-
-
-def test_turn_hook_hashes_empty_prompt_bytes(tmp_path: Path) -> None:
-    """The exact official prompt includes the valid empty UTF-8 byte sequence."""
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    install_fake_uv(fake_bin)
-    project = tmp_path / "project"
-    project.mkdir()
-    run_session_hook(project, fake_bin, "session-empty")
-
-    run_turn_hook(
-        project,
-        session_id="session-empty",
-        turn_id="turn-empty",
-        prompt="",
-    )
-
-    turn = read_json_object(project / ".work-governance" / "runtime" / "current-turn-receipt.json")
-    assert turn["prompt_sha256"] == sha256_bytes(b"")
-
-
 def test_no_plan_intake_remains_runtime_only(tmp_path: Path) -> None:
     """A No-Plan turn creates only its replaceable runtime receipt."""
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    install_fake_uv(fake_bin)
     project = tmp_path / "project"
     project.mkdir()
-    run_session_hook(project, fake_bin, "session-alpha")
+    prepare_session_receipt(project, "session-alpha")
     before_files = {
         path.relative_to(project)
         for path in project.rglob("*")
         if path.is_file() or path.is_symlink()
     }
 
-    run_turn_hook(
+    issue_turn_receipt(
         project,
         session_id="session-alpha",
         turn_id="turn-no-plan",
@@ -1593,7 +1284,8 @@ def test_no_plan_intake_remains_runtime_only(tmp_path: Path) -> None:
         Path(".work-governance/runtime/sessions/session-alpha/current-turn-receipt.json"),
     }
     assert not (project / ".work-governance" / "_Plan").exists()
-    assert not any((project / ".work-governance" / "logs").iterdir())
+    logs = project / ".work-governance" / "logs"
+    assert not logs.exists() or not any(logs.iterdir())
 
 
 def test_redacted_stocklens_replay_keeps_runtime_signals_out_of_plan_revision(
@@ -1615,7 +1307,7 @@ def test_redacted_stocklens_replay_keeps_runtime_signals_out_of_plan_revision(
         assert isinstance(event, dict)
         prompt = event.get("prompt")
         assert isinstance(prompt, str)
-        run_turn_hook(
+        issue_turn_receipt(
             project,
             session_id=session_id,
             turn_id=f"turn-replay-{index}",
@@ -1650,25 +1342,22 @@ def test_redacted_stocklens_replay_keeps_runtime_signals_out_of_plan_revision(
 
 def test_controller_rejects_superseded_turn_receipt(tmp_path: Path) -> None:
     """The newest turn invalidates the prior turn digest for intake generation."""
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    install_fake_uv(fake_bin)
     project = tmp_path / "project"
     project.mkdir()
-    run_session_hook(project, fake_bin, "session-alpha")
+    prepare_session_receipt(project, "session-alpha")
     session_receipt = project / ".work-governance" / "bootstrap-state.json"
     session_digest = sha256_bytes(session_receipt.read_bytes())
     session_payload = read_json_object(session_receipt)
     controller = project / cast(str, session_payload["controller_ref"])
     turn_receipt = project / ".work-governance" / "runtime" / "current-turn-receipt.json"
-    run_turn_hook(
+    issue_turn_receipt(
         project,
         session_id="session-alpha",
         turn_id="turn-one",
         prompt="first request",
     )
     first_digest = cast(str, read_json_object(turn_receipt)["receipt_sha256"])
-    run_turn_hook(
+    issue_turn_receipt(
         project,
         session_id="session-alpha",
         turn_id="turn-two",
@@ -1741,7 +1430,7 @@ def test_admission_recovery_uses_bound_journal_after_turn_changes(
     )
     index = project / ".work-governance" / "_Plan" / "index.yaml"
     assert not index.exists()
-    run_turn_hook(
+    issue_turn_receipt(
         project,
         session_id=session_id,
         turn_id="turn-recovery",
@@ -1803,7 +1492,7 @@ def test_rollover_rejects_stale_intake_after_confirmation_turn(
         project,
         session_id=session_id,
     )
-    run_turn_hook(
+    issue_turn_receipt(
         project,
         session_id=session_id,
         turn_id="turn-rollover-confirmation",
@@ -1836,7 +1525,7 @@ def test_rollover_confirmation_digest_survives_current_turn_intake_refresh(
         project,
         session_id=session_id,
     )
-    run_turn_hook(
+    issue_turn_receipt(
         project,
         session_id=session_id,
         turn_id="turn-rollover-confirmation",
@@ -1917,7 +1606,7 @@ def test_rollover_recovery_replays_bound_successor_across_turns(
         env={"WORKCTL_TEST_INTERRUPT_AFTER": "rollover-target-plan"},
     )
     assert "SIMULATED_MIGRATION_INTERRUPT" in interrupted.stderr
-    run_turn_hook(
+    issue_turn_receipt(
         project,
         session_id=session_id,
         turn_id="turn-rollover-recovery",
@@ -2110,7 +1799,7 @@ def test_schema_upgrade_recovery_does_not_require_original_turn(
         env={"WORKCTL_TEST_UPGRADE_INTERRUPT_AFTER": "plan-replaced"},
     )
     assert "PLAN_CONTRACT_UPGRADE_TEST_INTERRUPTED" in interrupted.stderr
-    run_turn_hook(
+    issue_turn_receipt(
         project,
         session_id=session_id,
         turn_id="turn-upgrade-recovery",
@@ -2724,7 +2413,7 @@ def test_unknown_owner_controls_intake_decision(
         "expected_evidence": "The owning party resolves the question.",
     }
     project, session_id = prepare_admitted_project(tmp_path, unknowns=[unknown])
-    run_turn_hook(
+    issue_turn_receipt(
         project,
         session_id=session_id,
         turn_id="turn-owner",
@@ -2780,7 +2469,7 @@ def test_target_matrix_uses_exact_matching_and_any_blocker_stops_multi_target(
         "expected_evidence": "A user decision.",
     }
     project, session_id = prepare_admitted_project(tmp_path, unknowns=[unknown])
-    run_turn_hook(
+    issue_turn_receipt(
         project,
         session_id=session_id,
         turn_id="turn-target",
@@ -3662,7 +3351,7 @@ def test_route_blocker_covers_artifact_delivery_and_activation(tmp_path: Path) -
         "expected_evidence": "A route-level user decision.",
     }
     project, session_id = prepare_admitted_project(tmp_path, unknowns=[unknown])
-    run_turn_hook(
+    issue_turn_receipt(
         project,
         session_id=session_id,
         turn_id="turn-route",
@@ -3734,7 +3423,7 @@ def test_ask_record_cannot_advance_and_new_turn_cannot_reuse_prior_decision(
     )
     assert "INTAKE_DECISION_NOT_PROCEED" in ask_blocked.stderr
 
-    run_turn_hook(
+    issue_turn_receipt(
         project,
         session_id=session_id,
         turn_id="turn-next",

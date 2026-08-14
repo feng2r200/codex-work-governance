@@ -136,6 +136,8 @@ codex plugin add work-governance@work-governance-local
 
 After installation, use the registered `workctl` executable directly. The
 runtime does not require Codex lifecycle hooks or a project-local UV cache.
+The plugin source keeps only `hooks/hooks.json` as an empty registry; dormant
+Hook implementation scripts are not shipped.
 Plugin installation or enabling still does not perform a live activation switch;
 activate or replace a live plugin only after a separate confirmation.
 
