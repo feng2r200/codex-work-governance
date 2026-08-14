@@ -17,6 +17,5 @@ if str(SCRIPT_DIR) not in sys.path:
 from workctl_modules.kernel.controller import *  # noqa: F401,F403,E402
 from workctl_modules.kernel.controller import main  # noqa: E402
 
-
 if __name__ == "__main__":
     raise SystemExit(main())
