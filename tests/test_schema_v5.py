@@ -180,6 +180,81 @@ def test_task_done_captures_raw_evidence_and_verifies_v5_task(tmp_path: Path) ->
     assert (tmp_path / payload["evidence_ref"].removeprefix("evidence:")).is_file()
 
 
+def test_evidence_command_transcript_can_complete_v5_task(tmp_path: Path) -> None:
+    """A command transcript direct evidence record can be used by task done."""
+    init_minimal_v5_goal(tmp_path, "PLAN-20260806-109")
+
+    captured = json.loads(
+        run_workctl(
+            tmp_path,
+            "evidence",
+            "command",
+            "--task",
+            "T-001",
+            "--summary",
+            "run proof command token=summary-secret",
+            "--expected-state-sequence",
+            "0",
+            "--",
+            sys.executable,
+            "-c",
+            "print('command ok'); print('Authorization: Bearer output-secret')",
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    completed = json.loads(
+        run_workctl(
+            tmp_path,
+            "task",
+            "done",
+            "--task-id",
+            "T-001",
+            "--expected-state-sequence",
+            "1",
+            "--evidence-ref",
+            str(captured["evidence_ref"]),
+            "--evidence-sha256",
+            str(captured["evidence_sha256"]),
+            "--summary",
+            "proof command completed",
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    state_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "plans"
+        / "PLAN-20260806-109"
+        / "state.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    record = json.loads(
+        (tmp_path / str(captured["evidence_ref"]).removeprefix("evidence:")).read_text(
+            encoding="utf-8"
+        )
+    )
+    blob = (
+        tmp_path / str(captured["blob_ref"]).removeprefix("evidence:")
+    ).read_text(encoding="utf-8")
+
+    assert captured["status"] == "COMMAND_EVIDENCE_CAPTURED"
+    assert captured["command_exit_code"] == 0
+    assert captured["state_sequence"] == 1
+    assert completed["status"] == "TASK_DONE"
+    assert completed["state_sequence"] == 2
+    assert completed["direct_evidence_ref"] == captured["evidence_ref"]
+    assert state["tasks"]["T-001"]["status"] == "verified"
+    assert state["tasks"]["T-001"]["evidence_refs"] == [captured["evidence_ref"]]
+    assert record["source_type"] == "command"
+    assert record["command_exit_code"] == 0
+    assert record["command_cwd"] == "."
+    assert "summary-secret" not in record["summary"]
+    assert "output-secret" not in json.dumps(record, sort_keys=True)
+    assert "output-secret" not in blob
+    assert "command ok" in blob
+
+
 def test_v5_closeout_and_complete_use_runtime_state(tmp_path: Path) -> None:
     """A v5 Plan closes from runtime task state without v4 revision or route fields."""
     init_minimal_v5_goal(tmp_path, "PLAN-20260806-106")
@@ -244,10 +319,15 @@ def test_v5_closeout_and_complete_use_runtime_state(tmp_path: Path) -> None:
     assert "PLAN_COMPLETED state_sequence=1 active_released=true" in completed.stdout
     assert frontmatter["status"] == "complete"
     assert frontmatter["completion"]["state_sequence"] == 1
+    assert frontmatter["completion"]["evidence_ref"].startswith(
+        "evidence:.work-governance/_Plan/.evidence/PLAN-20260806-106/"
+    )
     assert "revision" not in frontmatter
     assert state["state_sequence"] == 1
     assert state["event_sequence"] == 3
-    assert json.loads(events[-1])["event"] == "plan.completed"
+    completed_event = json.loads(events[-1])
+    assert completed_event["event"] == "plan.completed"
+    assert completed_event["payload"]["evidence_ref"] == frontmatter["completion"]["evidence_ref"]
     assert not (tmp_path / ".work-governance" / "_Plan" / "index.yaml").exists()
     assert run_workctl(tmp_path, "plan", "validate", env=STRICT_CONTROLLER_ENV).stdout.strip() == (
         "PLAN_VALID"
@@ -266,6 +346,12 @@ def test_v5_closeout_and_complete_use_runtime_state(tmp_path: Path) -> None:
         env=STRICT_CONTROLLER_ENV,
     )
     assert json.loads(next_plan.stdout)["status"] == "GOAL_INITIALIZED"
+
+    history = json.loads(
+        run_workctl(tmp_path, "plan", "history", "show", "--plan-id", "PLAN-20260806-106").stdout
+    )
+    assert history["task_counts"] == {"verified": 1}
+    assert history["tasks"][0]["status"] == "verified"
 
 
 def test_v5_complete_rejects_stale_state_sequence(tmp_path: Path) -> None:

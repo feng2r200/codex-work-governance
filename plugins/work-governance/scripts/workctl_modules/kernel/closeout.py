@@ -176,6 +176,51 @@ def cmd_plan_closeout_check(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def v5_closeout_evidence(
+    root: Any,
+    frontmatter: dict[str, Any],
+    state: dict[str, Any],
+    evidence_manifest: str | None,
+) -> tuple[str, str]:
+    """Return or create the canonical v5 closeout evidence record."""
+    plan_id = str(frontmatter["plan_id"])
+    if evidence_manifest:
+        return verify_evidence_manifest(
+            root,
+            evidence_manifest,
+            plan_id=plan_id,
+            subject="closeout",
+        )
+    items: list[dict[str, str]] = []
+    state_tasks = state.get("tasks", {})
+    for task in frontmatter.get("tasks", []):
+        if not isinstance(task, dict) or not isinstance(task.get("id"), str):
+            continue
+        state_task = state_tasks.get(task["id"]) if isinstance(state_tasks, dict) else None
+        if not isinstance(state_task, dict):
+            continue
+        evidence_ref = state_task.get("evidence_ref")
+        evidence_sha256 = state_task.get("evidence_sha256")
+        if isinstance(evidence_ref, str) and isinstance(evidence_sha256, str):
+            items.append({"ref": evidence_ref, "sha256": evidence_sha256})
+    if not items:
+        raise WorkctlError("CLOSEOUT_EVIDENCE_ITEMS_REQUIRED")
+    return record_evidence_payload(
+        root,
+        plan_id=plan_id,
+        payload={
+            "schema_version": 1,
+            "kind": "work-governance-evidence",
+            "plan_id": plan_id,
+            "subject": "closeout",
+            "created_at": utc_now(),
+            "producer_ref": "runtime:workctl/plan-complete",
+            "items": items,
+        },
+        expected_subject="closeout",
+    )
+
+
 def cmd_plan_complete(args: argparse.Namespace) -> None:
     """Mark a Plan complete, optionally finalizing a ready route atomically."""
     root = project_root()
@@ -186,13 +231,6 @@ def cmd_plan_complete(args: argparse.Namespace) -> None:
             v5_recover_pending_event(root, doc.frontmatter)
             state = load_v5_state(root, doc.frontmatter)
             require_v5_expected_state_sequence(state, args.expected_state_sequence)
-            if args.evidence_manifest:
-                verify_evidence_manifest(
-                    root,
-                    args.evidence_manifest,
-                    plan_id=str(doc.frontmatter["plan_id"]),
-                    subject="closeout",
-                )
             require_independent_target(root, doc.frontmatter, "route")
             validation_errors = validate_plan(root)
             readiness = v5_runtime_closeout_readiness(
@@ -206,11 +244,19 @@ def cmd_plan_complete(args: argparse.Namespace) -> None:
                 raise WorkctlError(
                     "CLOSEOUT_BLOCKED: " + "; ".join(str(item) for item in readiness["blockers"])
                 )
+            evidence_ref, evidence_sha256 = v5_closeout_evidence(
+                root,
+                doc.frontmatter,
+                state,
+                args.evidence_manifest,
+            )
             doc.frontmatter["status"] = "complete"
             doc.frontmatter["updated_at"] = utc_now()
             doc.frontmatter["completion"] = {
                 "state_sequence": state["state_sequence"],
                 "completed_at": doc.frontmatter["updated_at"],
+                "evidence_ref": evidence_ref,
+                "evidence_sha256": evidence_sha256,
             }
             require_valid_candidate(doc)
             v5_persist_contract_transition(
@@ -221,6 +267,8 @@ def cmd_plan_complete(args: argparse.Namespace) -> None:
                 payload={
                     "state_sequence": state["state_sequence"],
                     "status": "complete",
+                    "evidence_ref": evidence_ref,
+                    "evidence_sha256": evidence_sha256,
                     "evidence_manifest": args.evidence_manifest,
                 },
             )

@@ -43,13 +43,13 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
             "task block",
             "task unblock",
             "task verify [--evidence-stdin]",
-            "task done --task-id T-001 --evidence-stdin|--from-file",
+            "task done --task-id T-001 --evidence-ref REF --evidence-sha256 SHA",
             "task reprioritize",
         ],
         "note": (
-            "Use task done when raw evidence capture and verification are the same "
-            "workflow; low-level transitions remain available when exact state control "
-            "is needed."
+            "Prefer evidence command followed by task done with the direct evidence "
+            "record reference; stdin/file compatibility remains available for small "
+            "structured evidence."
         ),
     },
     "gate": {
@@ -84,12 +84,14 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
     "evidence": {
         "commands": [
             "evidence capture --task T-001 --kind command-output --summary TEXT",
+            "evidence command --task T-001 --summary TEXT -- COMMAND [ARGS...]",
             "evidence record --stdin",
             "plan evidence record --manifest PATH|--stdin",
         ],
         "note": (
-            "Direct capture writes redacted blobs and an append-only ledger; "
-            "Plan evidence records remain the bounded canonical compatibility path."
+            "Command evidence stores redacted stdout/stderr transcript blobs plus "
+            "argv/cwd/exit metadata; Plan evidence records remain the bounded "
+            "canonical compatibility path."
         ),
     },
     "action": {

@@ -49,10 +49,15 @@ class AuthorityCandidateView(Protocol):
         """Plan status parsed from the candidate, if any."""
         ...
 
+    @property
+    def reason(self) -> str | None:
+        """Optional model-facing reason for a non-authority classification."""
+        ...
+
 
 def candidate_to_dict(candidate: AuthorityCandidateView) -> dict[str, object]:
     """Convert a candidate into stable JSON output."""
-    return {
+    payload: dict[str, object] = {
         "path": candidate.path,
         "classification": candidate.classification,
         "origin": candidate.origin,
@@ -62,6 +67,10 @@ def candidate_to_dict(candidate: AuthorityCandidateView) -> dict[str, object]:
         "revision": candidate.revision,
         "status": candidate.status,
     }
+    reason = getattr(candidate, "reason", None)
+    if reason is not None:
+        payload["reason"] = reason
+    return payload
 
 
 def parse_candidate_specs(

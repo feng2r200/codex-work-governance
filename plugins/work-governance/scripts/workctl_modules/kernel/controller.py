@@ -323,6 +323,10 @@ RETIREMENT_DISPOSITIONS = {
 EVIDENCE_MANIFEST_MAX_BYTES = 64 * 1024
 EVIDENCE_MANIFEST_MAX_ITEMS = 64
 EVIDENCE_CAPTURE_MAX_BYTES = 1024 * 1024
+COMMAND_EVIDENCE_DEFAULT_TIMEOUT_SECONDS = 120
+COMMAND_EVIDENCE_MAX_TIMEOUT_SECONDS = 600
+COMMAND_EVIDENCE_DEFAULT_OUTPUT_BYTES = 256 * 1024
+COMMAND_EVIDENCE_MAX_OUTPUT_BYTES = EVIDENCE_CAPTURE_MAX_BYTES
 EVIDENCE_CAPTURE_KIND_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 EVIDENCE_CAPTURE_IDEMPOTENCY_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 EVIDENCE_CAPTURE_ID_RE = re.compile(r"^E-\d{8}T\d{6}Z-[0-9a-f]{12}$")
@@ -675,6 +679,7 @@ class AuthorityCandidate:
     plan_id: str | None = None
     revision: int | None = None
     status: str | None = None
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2895,6 +2900,14 @@ def discover_authority_candidates(
             ),
         )
         plan_id, revision, status = optional_plan_metadata(path)
+        reason: str | None = None
+        if classification == "NON_AUTHORITY":
+            if "conventional-path" in origins:
+                reason = "historical_conventional_plan_ignored"
+            elif status == "complete":
+                reason = "completed_plan_ignored"
+            elif status == "retired":
+                reason = "retired_plan_ignored"
         candidates.append(
             AuthorityCandidate(
                 path=raw_path,
@@ -2905,6 +2918,7 @@ def discover_authority_candidates(
                 plan_id=plan_id,
                 revision=revision,
                 status=status,
+                reason=reason,
             )
         )
     return candidates
@@ -3393,7 +3407,7 @@ def allowed_commands_for_state(state: str) -> list[str]:
                 "task start|block|verify|skip",
                 "plan ready|next|blocked",
                 "task reprioritize",
-                "evidence record",
+                "evidence capture|command|record",
                 "migrate inspect|apply|recover",
                 "log append",
             ]
@@ -11492,6 +11506,7 @@ def persist_direct_evidence_bytes(
     source_type: str,
     source_ref: str | None,
     idempotency_key: str | None,
+    extra_metadata: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """Persist direct evidence bytes and return the ledger-compatible record."""
     try:
@@ -11507,6 +11522,7 @@ def persist_direct_evidence_bytes(
                 source_type=source_type,
                 source_ref=source_ref,
                 idempotency_key=idempotency_key,
+                extra_metadata=extra_metadata,
                 governance_dir_name=GOVERNANCE_DIR_NAME,
             ),
         )
@@ -11540,6 +11556,13 @@ def canonical_workflow_evidence(
 
 def read_task_done_source(root: Path, args: argparse.Namespace) -> tuple[bytes, str, str | None]:
     """Read high-level task completion evidence bytes."""
+    if isinstance(getattr(args, "evidence_ref", None), str) or isinstance(
+        getattr(args, "evidence_sha256", None),
+        str,
+    ):
+        if args.evidence_stdin or isinstance(args.evidence_from_file, str):
+            raise WorkctlError("TASK_DONE_EVIDENCE_SOURCE_CONFLICT")
+        raise WorkctlError("TASK_DONE_EVIDENCE_REFERENCE_SOURCE")
     if bool(args.evidence_stdin) and isinstance(args.evidence_from_file, str):
         raise WorkctlError("TASK_DONE_EVIDENCE_SOURCE_CONFLICT")
     if args.evidence_stdin:
@@ -11563,6 +11586,217 @@ def read_task_done_source(root: Path, args: argparse.Namespace) -> tuple[bytes, 
     if len(content) > EVIDENCE_CAPTURE_MAX_BYTES:
         raise WorkctlError("EVIDENCE_CAPTURE_TOO_LARGE")
     return content, "file", relative_project_path(root, candidate)
+
+
+def command_evidence_argv(args: argparse.Namespace) -> list[str]:
+    """Return the command argv after argparse remainder normalization."""
+    command = list(getattr(args, "command", []) or [])
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command or any(not isinstance(item, str) or item == "" for item in command):
+        raise WorkctlError("COMMAND_EVIDENCE_ARGV_REQUIRED")
+    return command
+
+
+def command_evidence_cwd(root: Path, raw_cwd: str | None) -> Path:
+    """Resolve a project-local command evidence working directory."""
+    candidate = root if raw_cwd is None else checked_project_path(root, raw_cwd)
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise WorkctlError(f"PATH_OUTSIDE_PROJECT: {raw_cwd}") from exc
+    reject_symlink_components(root, candidate)
+    if candidate.is_symlink() or not candidate.is_dir():
+        raise WorkctlError("COMMAND_EVIDENCE_CWD_INVALID")
+    return candidate
+
+
+def bounded_command_timeout(value: int) -> int:
+    """Validate a command evidence timeout."""
+    if value < 1 or value > COMMAND_EVIDENCE_MAX_TIMEOUT_SECONDS:
+        raise WorkctlError("COMMAND_EVIDENCE_TIMEOUT_INVALID")
+    return value
+
+
+def bounded_command_output_bytes(value: int) -> int:
+    """Validate a command evidence output byte cap."""
+    if value < 1024 or value > COMMAND_EVIDENCE_MAX_OUTPUT_BYTES:
+        raise WorkctlError("COMMAND_EVIDENCE_OUTPUT_LIMIT_INVALID")
+    return value
+
+
+def truncate_command_stream(content: bytes, limit: int) -> tuple[bytes, bool]:
+    """Return at most *limit* bytes and whether truncation occurred."""
+    if len(content) <= limit:
+        return content, False
+    return content[:limit], True
+
+
+def command_stream_text(content: bytes) -> str:
+    """Decode command output for JSON transcript storage."""
+    return content.decode("utf-8", errors="replace")
+
+
+def redacted_command_stream_bytes(content: bytes) -> bytes:
+    """Return redacted command output bytes for transcript metadata."""
+    return redact_capture_text(command_stream_text(content)).encode("utf-8")
+
+
+def redacted_command_argv(argv: Sequence[str]) -> list[str]:
+    """Return command argv with credential-like substrings removed for persistence."""
+    return [redact_capture_text(item) for item in argv]
+
+
+def command_transcript_bytes(
+    *,
+    argv: list[str],
+    cwd_ref: str,
+    timeout_seconds: int,
+    max_output_bytes: int,
+    exit_code: int | None,
+    timed_out: bool,
+    duration_ms: int,
+    stdout_bytes: bytes,
+    stderr_bytes: bytes,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+) -> bytes:
+    """Build deterministic command transcript bytes for the evidence blob."""
+    transcript = {
+        "schema_version": 1,
+        "kind": "work-governance-command-transcript",
+        "argv": argv,
+        "cwd": cwd_ref,
+        "timeout_seconds": timeout_seconds,
+        "max_output_bytes": max_output_bytes,
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "duration_ms": duration_ms,
+        "stdout": command_stream_text(stdout_bytes),
+        "stderr": command_stream_text(stderr_bytes),
+        "stdout_sha256": sha256_bytes(stdout_bytes),
+        "stderr_sha256": sha256_bytes(stderr_bytes),
+        "stdout_size": len(stdout_bytes),
+        "stderr_size": len(stderr_bytes),
+        "stdout_truncated": stdout_truncated,
+        "stderr_truncated": stderr_truncated,
+    }
+    return json.dumps(transcript, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+
+
+def run_command_for_evidence(
+    root: Path,
+    args: argparse.Namespace,
+) -> tuple[bytes, dict[str, object]]:
+    """Execute one bounded local command and return transcript bytes plus metadata."""
+    argv = command_evidence_argv(args)
+    cwd = command_evidence_cwd(root, getattr(args, "cwd", None))
+    timeout_seconds = bounded_command_timeout(int(args.timeout_seconds))
+    max_output_bytes = bounded_command_output_bytes(int(args.max_output_bytes))
+    started = time.monotonic()
+    timed_out = False
+    exit_code: int | None
+    stdout: bytes
+    stderr: bytes
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=cwd,
+            input=None,
+            capture_output=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+        exit_code = completed.returncode
+        stdout = completed.stdout
+        stderr = completed.stderr
+    except FileNotFoundError as exc:
+        raise WorkctlError(f"COMMAND_EVIDENCE_EXEC_NOT_FOUND: {argv[0]}") from exc
+    except PermissionError as exc:
+        raise WorkctlError(f"COMMAND_EVIDENCE_EXEC_PERMISSION_DENIED: {argv[0]}") from exc
+    except subprocess.TimeoutExpired as exc:
+        timed_out = True
+        exit_code = None
+        stdout = exc.stdout if isinstance(exc.stdout, bytes) else b""
+        stderr = exc.stderr if isinstance(exc.stderr, bytes) else b""
+    duration_ms = int((time.monotonic() - started) * 1000)
+    stdout_bytes, stdout_truncated = truncate_command_stream(stdout, max_output_bytes)
+    stderr_bytes, stderr_truncated = truncate_command_stream(stderr, max_output_bytes)
+    persisted_argv = redacted_command_argv(argv)
+    persisted_stdout_bytes = redacted_command_stream_bytes(stdout_bytes)
+    persisted_stderr_bytes = redacted_command_stream_bytes(stderr_bytes)
+    cwd_ref = relative_project_path(root, cwd)
+    transcript = command_transcript_bytes(
+        argv=persisted_argv,
+        cwd_ref=cwd_ref,
+        timeout_seconds=timeout_seconds,
+        max_output_bytes=max_output_bytes,
+        exit_code=exit_code,
+        timed_out=timed_out,
+        duration_ms=duration_ms,
+        stdout_bytes=persisted_stdout_bytes,
+        stderr_bytes=persisted_stderr_bytes,
+        stdout_truncated=stdout_truncated,
+        stderr_truncated=stderr_truncated,
+    )
+    metadata: dict[str, object] = {
+        "command_argv": persisted_argv,
+        "command_cwd": cwd_ref,
+        "command_exit_code": exit_code,
+        "command_timed_out": timed_out,
+        "command_duration_ms": duration_ms,
+        "command_timeout_seconds": timeout_seconds,
+        "command_stdout_sha256": sha256_bytes(persisted_stdout_bytes),
+        "command_stderr_sha256": sha256_bytes(persisted_stderr_bytes),
+        "command_stdout_size": len(persisted_stdout_bytes),
+        "command_stderr_size": len(persisted_stderr_bytes),
+        "command_stdout_truncated": stdout_truncated,
+        "command_stderr_truncated": stderr_truncated,
+    }
+    return transcript, metadata
+
+
+def load_direct_evidence_record(
+    root: Path,
+    *,
+    evidence_ref: str,
+    evidence_sha256: str,
+    plan_id: str,
+    task_id: str,
+) -> dict[str, Any]:
+    """Load and verify a direct evidence record for task completion."""
+    require_evidence_args(evidence_ref, evidence_sha256)
+    expected_ref = f"evidence:{GOVERNANCE_DIR_NAME}/evidence/records/{evidence_sha256}.json"
+    if evidence_ref != expected_ref:
+        raise WorkctlError("DIRECT_EVIDENCE_REF_INVALID")
+    relative = evidence_ref.removeprefix("evidence:")
+    path = checked_project_path(root, relative)
+    reject_symlink_components(root, path)
+    if path.is_symlink() or not path.is_file():
+        raise WorkctlError("DIRECT_EVIDENCE_RECORD_MISSING")
+    if sha256_file(path) != evidence_sha256:
+        raise WorkctlError("DIRECT_EVIDENCE_RECORD_HASH_MISMATCH")
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise WorkctlError("DIRECT_EVIDENCE_RECORD_INVALID") from exc
+    if not isinstance(record, dict):
+        raise WorkctlError("DIRECT_EVIDENCE_RECORD_INVALID")
+    ledger_record = {**record, "evidence_ref": evidence_ref, "evidence_sha256": evidence_sha256}
+    try:
+        capture_module_call("verify_capture_record_file")(
+            root,
+            ledger_record,
+            governance_dir_name=GOVERNANCE_DIR_NAME,
+        )
+    except ValueError as exc:
+        raise WorkctlError(str(exc)) from exc
+    if record.get("plan_id") != plan_id:
+        raise WorkctlError("DIRECT_EVIDENCE_PLAN_MISMATCH")
+    if record.get("task_ref") != f"task:{task_id}":
+        raise WorkctlError("DIRECT_EVIDENCE_TASK_MISMATCH")
+    return cast(dict[str, Any], ledger_record)
 
 
 def verify_task_done_v5(
@@ -11721,7 +11955,22 @@ def preflight_task_done_v4(root: Path, doc: PlanDocument, args: argparse.Namespa
 def cmd_task_done(args: argparse.Namespace) -> None:
     """Capture raw evidence and verify one task through a single workflow command."""
     root = project_root()
-    raw_content, source_type, source_ref = read_task_done_source(root, args)
+    raw_content: bytes | None = None
+    source_type: str | None = None
+    source_ref: str | None = None
+    evidence_ref_arg = getattr(args, "evidence_ref", None)
+    evidence_sha256_arg = getattr(args, "evidence_sha256", None)
+    uses_direct_evidence_ref = isinstance(evidence_ref_arg, str) or isinstance(
+        evidence_sha256_arg,
+        str,
+    )
+    if uses_direct_evidence_ref:
+        if not isinstance(evidence_ref_arg, str) or not isinstance(evidence_sha256_arg, str):
+            raise WorkctlError("TASK_DONE_EVIDENCE_REFERENCE_REQUIRED")
+        if args.evidence_stdin or isinstance(args.evidence_from_file, str):
+            raise WorkctlError("TASK_DONE_EVIDENCE_SOURCE_CONFLICT")
+    else:
+        raw_content, source_type, source_ref = read_task_done_source(root, args)
     with lock(root):
         require_governed_authority(root)
         doc = load_plan(active_plan_path(root))
@@ -11736,22 +11985,37 @@ def cmd_task_done(args: argparse.Namespace) -> None:
             )
         else:
             preflight_task_done_v4(root, doc, args)
-        direct_record = persist_direct_evidence_bytes(
-            root,
-            plan_id=plan_id,
-            task_id=args.task_id,
-            kind=args.kind,
-            summary=args.summary or f"Complete {args.task_id}.",
-            raw_content=raw_content,
-            source_type=source_type,
-            source_ref=source_ref,
-            idempotency_key=args.idempotency_key,
-        )
+        if uses_direct_evidence_ref:
+            direct_record = load_direct_evidence_record(
+                root,
+                evidence_ref=str(evidence_ref_arg),
+                evidence_sha256=str(evidence_sha256_arg),
+                plan_id=plan_id,
+                task_id=args.task_id,
+            )
+        else:
+            assert raw_content is not None
+            assert source_type is not None
+            direct_record = persist_direct_evidence_bytes(
+                root,
+                plan_id=plan_id,
+                task_id=args.task_id,
+                kind=args.kind,
+                summary=args.summary or f"Complete {args.task_id}.",
+                raw_content=raw_content,
+                source_type=source_type,
+                source_ref=source_ref,
+                idempotency_key=args.idempotency_key,
+            )
         evidence_ref, evidence_sha256 = canonical_workflow_evidence(
             root,
             plan_id=plan_id,
             subject=f"task:{args.task_id}",
-            producer_ref="runtime:workctl/task-done",
+            producer_ref=(
+                "runtime:workctl/task-done-direct-evidence"
+                if uses_direct_evidence_ref
+                else "runtime:workctl/task-done"
+            ),
             direct_record=direct_record,
         )
         if doc.frontmatter.get("schema_version") == 5:
@@ -11919,12 +12183,89 @@ def tolerant_plan_history_summary(root: Path, path: Path) -> dict[str, Any]:
         raise WorkctlError(str(exc)) from exc
 
 
+def load_v5_history_state(root: Path, plan_id: str) -> dict[str, Any] | None:
+    """Load v5 runtime state for history projection without requiring active authority."""
+    state_path = runtime_dir(root) / "plans" / plan_id / "state.json"
+    if state_path.is_symlink() or not state_path.is_file():
+        return None
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return cast(dict[str, Any], state) if isinstance(state, dict) else None
+
+
+def task_counts_from_v5_state(state: Mapping[str, Any]) -> dict[str, int]:
+    """Count v5 runtime task states for Plan history output."""
+    counts: dict[str, int] = {}
+    tasks = state.get("tasks", {})
+    if not isinstance(tasks, dict):
+        return counts
+    for value in tasks.values():
+        status = value.get("status", "unknown") if isinstance(value, dict) else "invalid"
+        status_name = str(status)
+        counts[status_name] = counts.get(status_name, 0) + 1
+    return counts
+
+
+def apply_v5_history_runtime_summary(root: Path, summary: dict[str, Any]) -> dict[str, Any]:
+    """Merge v5 runtime state into a loose history summary when present."""
+    if summary.get("schema_version") != 5 or not isinstance(summary.get("plan_id"), str):
+        return summary
+    state = load_v5_history_state(root, str(summary["plan_id"]))
+    if state is None:
+        summary["runtime_state"] = "missing"
+        return summary
+    summary["runtime_state"] = "ok"
+    summary["state_sequence"] = state.get("state_sequence")
+    summary["event_sequence"] = state.get("event_sequence")
+    runtime_counts = task_counts_from_v5_state(state)
+    if runtime_counts:
+        summary["task_counts"] = runtime_counts
+    return summary
+
+
+def v5_history_tasks(root: Path, doc: PlanDocument) -> list[dict[str, Any]]:
+    """Return v5 contract tasks enriched with runtime status and evidence."""
+    plan_id = doc.frontmatter.get("plan_id")
+    if not isinstance(plan_id, str):
+        return list(doc.frontmatter.get("tasks", []))
+    state = load_v5_history_state(root, plan_id)
+    if state is None:
+        return list(doc.frontmatter.get("tasks", []))
+    state_tasks = state.get("tasks", {})
+    result: list[dict[str, Any]] = []
+    for task in doc.frontmatter.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        projected = copy.deepcopy(task)
+        task_id = projected.get("id")
+        state_task = state_tasks.get(task_id) if isinstance(state_tasks, dict) else None
+        if isinstance(state_task, dict):
+            for key in (
+                "status",
+                "note",
+                "evidence_ref",
+                "evidence_sha256",
+                "verified_at",
+                "evidence_refs",
+                "evidence_sha256s",
+            ):
+                if key in state_task:
+                    projected[key] = copy.deepcopy(state_task[key])
+        result.append(projected)
+    return result
+
+
 def cmd_plan_history(args: argparse.Namespace) -> None:
     """Read historical Plans without applying active schema validation."""
     root = project_root()
     base = plan_dir(root)
     summaries = (
-        [tolerant_plan_history_summary(root, path) for path in sorted(base.glob("PLAN-*.md"))]
+        [
+            apply_v5_history_runtime_summary(root, tolerant_plan_history_summary(root, path))
+            for path in sorted(base.glob("PLAN-*.md"))
+        ]
         if base.is_dir()
         else []
     )
@@ -11947,7 +12288,11 @@ def cmd_plan_history(args: argparse.Namespace) -> None:
     if target.get("parse_state") == "ok":
         path = checked_project_path(root, str(target["path"]))
         doc = load_plan(path)
-        target["tasks"] = doc.frontmatter.get("tasks", [])
+        target["tasks"] = (
+            v5_history_tasks(root, doc)
+            if doc.frontmatter.get("schema_version") == 5
+            else doc.frontmatter.get("tasks", [])
+        )
         target["confirmations"] = doc.frontmatter.get("confirmations", {})
         target["goal"] = doc.frontmatter.get("goal")
         target["success_conditions"] = doc.frontmatter.get("success_conditions")
@@ -16815,6 +17160,80 @@ def cmd_evidence_capture(args: argparse.Namespace) -> None:
         if state_sequence is not None:
             output["state_sequence"] = state_sequence
         print(json.dumps(output, sort_keys=True))
+
+
+def cmd_evidence_command(args: argparse.Namespace) -> None:
+    """Run one bounded local command and persist its transcript as direct evidence."""
+    root = project_root()
+    task_id = validate_capture_args(args)
+    if task_id is None:
+        raise WorkctlError("COMMAND_EVIDENCE_TASK_REQUIRED")
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        plan_id = str(doc.frontmatter["plan_id"])
+        if doc.frontmatter.get("schema_version") == 5:
+            preflight_v5_capture_binding(
+                root,
+                doc,
+                task_id=task_id,
+                expected_state_sequence=args.expected_state_sequence,
+            )
+        else:
+            task_for(doc.frontmatter, task_id)
+    transcript, metadata = run_command_for_evidence(root, args)
+    with lock(root):
+        require_governed_authority(root)
+        doc = load_plan(active_plan_path(root))
+        if str(doc.frontmatter["plan_id"]) != plan_id:
+            raise WorkctlError("COMMAND_EVIDENCE_PLAN_CHANGED")
+        if doc.frontmatter.get("schema_version") == 5:
+            preflight_v5_capture_binding(
+                root,
+                doc,
+                task_id=task_id,
+                expected_state_sequence=args.expected_state_sequence,
+            )
+        direct_record = persist_direct_evidence_bytes(
+            root,
+            plan_id=plan_id,
+            task_id=task_id,
+            kind=args.kind,
+            summary=args.summary,
+            raw_content=transcript,
+            source_type="command",
+            source_ref=" ".join(redacted_command_argv(command_evidence_argv(args))),
+            idempotency_key=args.idempotency_key,
+            extra_metadata=metadata,
+        )
+        state_sequence: int | None = None
+        if doc.frontmatter.get("schema_version") == 5:
+            state_sequence = bind_v5_capture_record(
+                root,
+                doc,
+                task_id=task_id,
+                record_ref=str(direct_record["evidence_ref"]),
+                record_id=str(direct_record["id"]),
+                record_sha256=str(direct_record["evidence_sha256"]),
+                blob_ref=str(direct_record["blob_ref"]),
+                expected_state_sequence=args.expected_state_sequence,
+            )
+        output: dict[str, Any] = {
+            "status": "COMMAND_EVIDENCE_CAPTURED",
+            "id": direct_record["id"],
+            "plan_id": plan_id,
+            "task_id": task_id,
+            "evidence_ref": direct_record["evidence_ref"],
+            "evidence_sha256": direct_record["evidence_sha256"],
+            "blob_ref": direct_record["blob_ref"],
+            "source_digest": direct_record["source_digest"],
+            "idempotent": direct_record.get("idempotent", False),
+            "command_exit_code": metadata["command_exit_code"],
+            "command_timed_out": metadata["command_timed_out"],
+        }
+        if state_sequence is not None:
+            output["state_sequence"] = state_sequence
+        print(json.dumps(output, indent=2, sort_keys=True))
 
 
 def record_evidence_payload(

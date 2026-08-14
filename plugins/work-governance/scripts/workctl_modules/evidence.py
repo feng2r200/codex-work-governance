@@ -195,6 +195,17 @@ def redact_capture_text(value: str) -> str:
     return redacted
 
 
+def redact_capture_metadata(value: object) -> object:
+    """Redact string values in optional direct evidence metadata."""
+    if isinstance(value, str):
+        return redact_capture_text(value)
+    if isinstance(value, list):
+        return [redact_capture_metadata(item) for item in value]
+    if isinstance(value, dict):
+        return {key: redact_capture_metadata(item) for key, item in value.items()}
+    return value
+
+
 def redact_capture_bytes(content: bytes) -> tuple[bytes, bool]:
     """Return persistable evidence bytes and whether the source was textual."""
     if len(content) > EVIDENCE_CAPTURE_MAX_BYTES:
@@ -404,6 +415,7 @@ def persist_direct_evidence_bytes(
     source_type: str,
     source_ref: str | None,
     idempotency_key: str | None,
+    extra_metadata: Mapping[str, object] | None = None,
     governance_dir_name: str = ".work-governance",
 ) -> dict[str, object]:
     """Persist direct evidence bytes and return the ledger-compatible record."""
@@ -480,6 +492,11 @@ def persist_direct_evidence_bytes(
         "result": "captured",
         "created_at": created_at,
     }
+    if extra_metadata is not None:
+        for key, value in extra_metadata.items():
+            if key in record:
+                raise ValueError("EVIDENCE_CAPTURE_METADATA_KEY_CONFLICT")
+            record[key] = redact_capture_metadata(value)
     if idempotency_key is not None:
         record["idempotency_key"] = idempotency_key
     record_ref, record_sha256 = persist_capture_metadata(
