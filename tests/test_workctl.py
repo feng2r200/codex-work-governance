@@ -4946,6 +4946,7 @@ def test_root_plan_rule_is_ignored_after_layout_ready(tmp_path: Path) -> None:
         candidate for candidate in report["candidates"] if candidate["path"] == "Plan.md"
     )
     assert conventional_candidate["classification"] == "NON_AUTHORITY"
+    assert conventional_candidate["reason"] == "historical_conventional_plan_ignored"
     assert "project-rule-explicit" not in conventional_candidate["signals"]
     assert root_plan.read_bytes() == original_bytes
 

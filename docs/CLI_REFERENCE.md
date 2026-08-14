@@ -37,10 +37,11 @@ Doctor is read-only by default; cleanup only removes stale generic runtime trans
 ### `evidence`
 
 - `evidence capture --task T-001 --kind command-output --summary TEXT`
+- `evidence command --task T-001 --summary TEXT -- COMMAND [ARGS...]`
 - `evidence record --stdin`
 - `plan evidence record --manifest PATH|--stdin`
 
-Direct capture writes redacted blobs and an append-only ledger; Plan evidence records remain the bounded canonical compatibility path.
+Command evidence stores redacted stdout/stderr transcript blobs plus argv/cwd/exit metadata; Plan evidence records remain the bounded canonical compatibility path.
 
 ### `gate`
 
@@ -111,10 +112,10 @@ Read-only facts only: the controller reports action kind, target, reversibility,
 - `task block`
 - `task unblock`
 - `task verify [--evidence-stdin]`
-- `task done --task-id T-001 --evidence-stdin|--from-file`
+- `task done --task-id T-001 --evidence-ref REF --evidence-sha256 SHA`
 - `task reprioritize`
 
-Use task done when raw evidence capture and verification are the same workflow; low-level transitions remain available when exact state control is needed.
+Prefer evidence command followed by task done with the direct evidence record reference; stdin/file compatibility remains available for small structured evidence.
 
 ### `truth`
 
@@ -328,6 +329,32 @@ options:
   --stdin               Read evidence bytes from standard input; stdin is also
                         the default source.
   --redaction-policy REDACTION_POLICY
+  --idempotency-key IDEMPOTENCY_KEY
+  --expected-state-sequence EXPECTED_STATE_SEQUENCE
+```
+
+### `evidence command`
+
+```text
+usage: workctl evidence command [-h] --task TASK [--kind KIND] --summary
+                                SUMMARY [--cwd CWD]
+                                [--timeout-seconds TIMEOUT_SECONDS]
+                                [--max-output-bytes MAX_OUTPUT_BYTES]
+                                [--idempotency-key IDEMPOTENCY_KEY]
+                                [--expected-state-sequence EXPECTED_STATE_SEQUENCE]
+                                ...
+
+positional arguments:
+  command
+
+options:
+  -h, --help            show this help message and exit
+  --task TASK
+  --kind KIND
+  --summary SUMMARY
+  --cwd CWD
+  --timeout-seconds TIMEOUT_SECONDS
+  --max-output-bytes MAX_OUTPUT_BYTES
   --idempotency-key IDEMPOTENCY_KEY
   --expected-state-sequence EXPECTED_STATE_SEQUENCE
 ```
@@ -1497,7 +1524,8 @@ usage: workctl task done [-h] --task-id TASK_ID
                          [--expected-state-sequence EXPECTED_STATE_SEQUENCE]
                          [--note NOTE] [--kind KIND] [--summary SUMMARY]
                          [--idempotency-key IDEMPOTENCY_KEY]
-                         (--evidence-stdin | --evidence-from-file EVIDENCE_FROM_FILE | --from-file EVIDENCE_FROM_FILE)
+                         [--evidence-stdin | --evidence-from-file EVIDENCE_FROM_FILE | --from-file EVIDENCE_FROM_FILE | --evidence-ref EVIDENCE_REF]
+                         [--evidence-sha256 EVIDENCE_SHA256]
                          [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
                          [--expected-intake-sha256 EXPECTED_INTAKE_SHA256]
 
@@ -1513,6 +1541,8 @@ options:
   --evidence-stdin
   --evidence-from-file EVIDENCE_FROM_FILE
   --from-file EVIDENCE_FROM_FILE
+  --evidence-ref EVIDENCE_REF
+  --evidence-sha256 EVIDENCE_SHA256
   --turn-receipt-sha256 TURN_RECEIPT_SHA256
   --expected-intake-sha256 EXPECTED_INTAKE_SHA256
 ```
