@@ -47,6 +47,7 @@ def current_public_controller_path() -> Path:
         return public_entrypoint.resolve()
     return Path(__file__).resolve()
 
+
 from workctl_modules import WORKFLOW_HELP as MODULE_WORKFLOW_HELP
 from workctl_modules import WORKFLOW_HELP_ALIASES as MODULE_WORKFLOW_HELP_ALIASES
 from workctl_modules import SchedulerStateError as ModuleSchedulerStateError
@@ -134,6 +135,24 @@ from workctl_modules.worktree import encode_worktree_ledger as module_encode_wor
 from workctl_modules.worktree import load_worktree_ledger as module_load_worktree_ledger
 from workctl_modules.worktree import open_worktree_ledger as module_open_worktree_ledger
 from workctl_modules.worktree import worktree_ledger_path as module_worktree_ledger_path
+from workctl_modules.kernel import cli as module_kernel_cli
+from workctl_modules.kernel import closeout as module_kernel_closeout
+from workctl_modules.kernel import legacy_refresh as module_kernel_legacy_refresh
+from workctl_modules.kernel import v5_runtime as module_kernel_v5_runtime
+
+_DYNAMIC_CONTROLLER_BINDINGS = (
+    REFRESH_NEXT_MODEL_ACTION,
+    REFRESH_NOT_MIGRATED,
+    build_v5_contract,
+    build_v5_state,
+    canonical_event_bytes,
+    legacy_plan_summary,
+    migration_projection,
+    module_completion_claims,
+    module_incomplete_entries,
+    module_unresolved_exclusions,
+    redacted_copy,
+)
 
 PLAN_ID_RE = re.compile(r"^PLAN-\d{8}-\d{3}$")
 MIGRATION_ID_RE = re.compile(r"^MIG-\d{8}-\d{3}$")
@@ -3517,9 +3536,7 @@ def inspect_authority(
         active_doc.frontmatter.get("schema_version") == 5 and not has_authority_metadata
     )
     lineage_errors = (
-        []
-        if uses_minimal_v5_authority
-        else authority_metadata_errors(root, active_doc)
+        [] if uses_minimal_v5_authority else authority_metadata_errors(root, active_doc)
     )
     external_confirmed = [
         candidate
@@ -4033,92 +4050,46 @@ def dump_scheduler_state(state: Mapping[str, Any]) -> str:
     return MODULE_DUMP_SCHEDULER_STATE(state)
 
 
+def _v5_runtime_call(function: Any, *args: Any, **kwargs: Any) -> Any:
+    """Run an extracted schema-v5 runtime helper with controller bindings."""
+    return module_kernel_v5_runtime.call(globals(), function, *args, **kwargs)
+
+
 def v5_runtime_dir(root: Path, plan_id: str) -> Path:
     """Return the durable runtime bundle directory for one schema-v5 Plan."""
-    path = governance_root(root) / "runtime" / "plans" / plan_id
-    reject_symlink_components(root, path)
-    return path
+    return cast(Path, _v5_runtime_call(module_kernel_v5_runtime.v5_runtime_dir, root, plan_id))
 
 
 def v5_state_path(root: Path, plan_id: str) -> Path:
-    return v5_runtime_dir(root, plan_id) / "state.json"
+    return cast(Path, _v5_runtime_call(module_kernel_v5_runtime.v5_state_path, root, plan_id))
 
 
 def v5_event_path(root: Path, plan_id: str) -> Path:
-    return v5_runtime_dir(root, plan_id) / "events.jsonl"
+    return cast(Path, _v5_runtime_call(module_kernel_v5_runtime.v5_event_path, root, plan_id))
 
 
 def v5_state_defaults(frontmatter: Mapping[str, Any]) -> dict[str, Any]:
     """Build a valid empty runtime state for a newly created v5 contract."""
-    if build_v5_state is None:
-        raise WorkctlError("SCHEMA_V5_RUNTIME_MODULE_UNAVAILABLE")
-    return build_v5_state(frontmatter, updated_at=str(frontmatter.get("updated_at", utc_now())))
+    return cast(
+        dict[str, Any],
+        _v5_runtime_call(module_kernel_v5_runtime.v5_state_defaults, frontmatter),
+    )
 
 
 def v5_redact_evidence_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Remove credential-bearing fields before strict evidence canonicalization."""
-    sensitive = ("api_key", "apikey", "authorization", "password", "secret", "token")
-
-    def clean(value: Any) -> Any:
-        if isinstance(value, dict):
-            return {
-                key: clean(item)
-                for key, item in value.items()
-                if not any(part in key.lower() for part in sensitive)
-            }
-        if isinstance(value, list):
-            return [clean(item) for item in value]
-        if isinstance(value, str) and "Bearer " in value:
-            return value.split("Bearer ", 1)[0] + "Bearer [REDACTED]"
-        return value
-
-    return cast(dict[str, Any], clean(dict(payload)))
+    return cast(
+        dict[str, Any],
+        _v5_runtime_call(module_kernel_v5_runtime.v5_redact_evidence_payload, payload),
+    )
 
 
 def load_v5_state(root: Path, frontmatter: Mapping[str, Any]) -> dict[str, Any]:
     """Load and validate the independent v5 state snapshot."""
-    plan_id = str(frontmatter.get("plan_id"))
-    path = v5_state_path(root, plan_id)
-    if path.is_symlink() or not path.is_file():
-        raise WorkctlError("SCHEMA_V5_STATE_MISSING")
-    try:
-        payload: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise WorkctlError("SCHEMA_V5_STATE_INVALID") from exc
-    if not isinstance(payload, dict):
-        raise WorkctlError("SCHEMA_V5_STATE_INVALID")
-    tasks = payload.get("tasks")
-    priorities = payload.get("priorities")
-    if (
-        payload.get("schema_version") != 1
-        or payload.get("kind") != "work-governance-plan-state"
-        or payload.get("plan_id") != plan_id
-        or type(payload.get("state_sequence")) is not int
-        or payload["state_sequence"] < 0
-        or type(payload.get("event_sequence")) is not int
-        or payload["event_sequence"] < 0
-        or not isinstance(tasks, dict)
-        or not isinstance(priorities, dict)
-        or any(type(value) is not int for value in priorities.values())
-    ):
-        raise WorkctlError("SCHEMA_V5_STATE_INVALID")
-    for task_id, task in tasks.items():
-        if (
-            not isinstance(task_id, str)
-            or not isinstance(task, dict)
-            or task.get("status") not in WORK_ITEM_STATES
-        ):
-            raise WorkctlError("SCHEMA_V5_STATE_INVALID")
-    event_path = v5_event_path(root, plan_id)
-    if event_path.is_symlink() or not event_path.is_file():
-        raise WorkctlError("SCHEMA_V5_EVENT_MISSING")
-    event_lines = event_path.read_text(encoding="utf-8").splitlines()
-    expected_events = payload["event_sequence"]
-    if isinstance(payload.get("pending_event"), dict):
-        expected_events -= 1
-    if len(event_lines) != expected_events:
-        raise WorkctlError("SCHEMA_V5_EVENT_SEQUENCE_MISMATCH")
-    return cast(dict[str, Any], payload)
+    return cast(
+        dict[str, Any],
+        _v5_runtime_call(module_kernel_v5_runtime.load_v5_state, root, frontmatter),
+    )
 
 
 def v5_runtime_frontmatter(
@@ -4127,19 +4098,15 @@ def v5_runtime_frontmatter(
     state: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Overlay runtime task state for scheduling without mutating the contract."""
-    runtime = copy.deepcopy(dict(frontmatter))
-    if state is None:
-        state = load_v5_state(root, frontmatter)
-    state_tasks = state.get("tasks", {})
-    for task in runtime.get("tasks", []) if isinstance(runtime.get("tasks"), list) else []:
-        if not isinstance(task, dict) or not isinstance(task.get("id"), str):
-            continue
-        current = state_tasks.get(task["id"]) if isinstance(state_tasks, dict) else None
-        if isinstance(current, dict):
-            for key, value in current.items():
-                if key != "status" or isinstance(value, str):
-                    task[key] = copy.deepcopy(value)
-    return runtime
+    return cast(
+        dict[str, Any],
+        _v5_runtime_call(
+            module_kernel_v5_runtime.v5_runtime_frontmatter,
+            root,
+            frontmatter,
+            state,
+        ),
+    )
 
 
 def v5_terminal_runtime_view(
@@ -4148,16 +4115,15 @@ def v5_terminal_runtime_view(
     state: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the schema-v5 runtime authority view used for terminal closeout."""
-    view = v5_runtime_frontmatter(root, frontmatter, state)
-    view["route"] = {
-        "route_status": "terminal",
-        "slice_status": "complete",
-        "next_phase": "none",
-        "validation_standard": "schema-v5 runtime state is terminal-ready",
-        "confirmation_gate": "none",
-    }
-    view["handoff"] = {"route_status": "terminal", "next_step": "none"}
-    return view
+    return cast(
+        dict[str, Any],
+        _v5_runtime_call(
+            module_kernel_v5_runtime.v5_terminal_runtime_view,
+            root,
+            frontmatter,
+            state,
+        ),
+    )
 
 
 def require_v5_expected_state_sequence(
@@ -4165,12 +4131,7 @@ def require_v5_expected_state_sequence(
     expected: int | None,
 ) -> None:
     """Fail unless a v5 runtime write is guarded by the current state sequence."""
-    if expected is None:
-        raise WorkctlError("EXPECTED_STATE_SEQUENCE_REQUIRED")
-    if state["state_sequence"] != expected:
-        raise WorkctlError(
-            f"STATE_SEQUENCE_MISMATCH: expected {expected}, found {state['state_sequence']}"
-        )
+    _v5_runtime_call(module_kernel_v5_runtime.require_v5_expected_state_sequence, state, expected)
 
 
 def v5_runtime_closeout_readiness(
@@ -4181,10 +4142,17 @@ def v5_runtime_closeout_readiness(
     state: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compute schema-v5 closeout readiness from runtime state, not contract task text."""
-    if state is None:
-        state = load_v5_state(root, frontmatter)
-    runtime = v5_terminal_runtime_view(root, frontmatter, state)
-    return closeout_readiness(cast(dict[str, Any], runtime), report, validation_errors)
+    return cast(
+        dict[str, Any],
+        _v5_runtime_call(
+            module_kernel_v5_runtime.v5_runtime_closeout_readiness,
+            root,
+            frontmatter,
+            report,
+            validation_errors,
+            state,
+        ),
+    )
 
 
 def completion_claim_readiness(
@@ -4192,69 +4160,45 @@ def completion_claim_readiness(
     readiness: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Separate readiness-to-complete from already-complete route claims."""
-    if frontmatter.get("schema_version") != 5 or frontmatter.get("status") == "complete":
-        return copy.deepcopy(dict(readiness))
-    raw_blockers = readiness.get("blockers", [])
-    blockers = list(raw_blockers) if isinstance(raw_blockers, list) else []
-    blockers.append("plan completion event not recorded")
-    return {"ready": False, "blockers": blockers}
+    return cast(
+        dict[str, Any],
+        _v5_runtime_call(
+            module_kernel_v5_runtime.completion_claim_readiness,
+            frontmatter,
+            readiness,
+        ),
+    )
 
 
 def release_v5_active_index(root: Path, plan_id: str) -> None:
     """Remove the active pointer after a v5 Plan becomes terminal history."""
-    path = index_path(root)
-    if not path.exists():
-        return
-    if path.is_symlink():
-        raise WorkctlError("INDEX_PATH_SYMLINK")
-    index = load_yaml_file(path)
-    if index.get("active_plan_id") != plan_id:
-        raise WorkctlError("INDEX_ACTIVE_PLAN_DRIFT")
-    path.unlink()
-    fsync_directory(path.parent)
+    _v5_runtime_call(module_kernel_v5_runtime.release_v5_active_index, root, plan_id)
 
 
 def v5_read_events(root: Path, plan_id: str) -> list[dict[str, Any]]:
     """Read the append-only v5 event ledger with canonical JSON validation."""
-    path = v5_event_path(root, plan_id)
-    if path.is_symlink() or not path.is_file():
-        raise WorkctlError("SCHEMA_V5_EVENT_MISSING")
-    events: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        try:
-            item: object = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise WorkctlError("SCHEMA_V5_EVENT_INVALID") from exc
-        if not isinstance(item, dict) or item.get("plan_id") != plan_id:
-            raise WorkctlError("SCHEMA_V5_EVENT_INVALID")
-        events.append(cast(dict[str, Any], item))
-    return events
+    return cast(
+        list[dict[str, Any]],
+        _v5_runtime_call(module_kernel_v5_runtime.v5_read_events, root, plan_id),
+    )
 
 
 def canonical_event_payload_bytes(event: Mapping[str, Any]) -> bytes:
     """Return canonical bytes for one runtime event."""
-    if canonical_event_bytes is None:
-        raise WorkctlError("STORAGE_MODULE_UNAVAILABLE: canonical_event_bytes")
-    return canonical_event_bytes(event)
+    return cast(
+        bytes,
+        _v5_runtime_call(module_kernel_v5_runtime.canonical_event_payload_bytes, event),
+    )
 
 
 def redacted_runtime_copy(value: Any) -> Any:
     """Return the storage-module redacted projection used in runtime payloads."""
-    if redacted_copy is None:
-        raise WorkctlError("STORAGE_MODULE_UNAVAILABLE: redacted_copy")
-    return redacted_copy(value)
+    return _v5_runtime_call(module_kernel_v5_runtime.redacted_runtime_copy, value)
 
 
 def v5_append_event(root: Path, plan_id: str, event: Mapping[str, Any]) -> None:
     """Append one canonical event and fsync the event ledger."""
-    path = v5_event_path(root, plan_id)
-    ensure_directory_durable(path.parent)
-    encoded = canonical_event_payload_bytes(event)
-    with path.open("ab") as handle:
-        handle.write(encoded)
-        handle.flush()
-        os.fsync(handle.fileno())
-    fsync_directory(path.parent)
+    _v5_runtime_call(module_kernel_v5_runtime.v5_append_event, root, plan_id, event)
 
 
 def v5_persist_state_transition(
@@ -4267,58 +4211,20 @@ def v5_persist_state_transition(
     payload: Mapping[str, Any],
 ) -> None:
     """Persist state before event, then complete the event with recoverable intent."""
-    plan_id = str(frontmatter["plan_id"])
-    next_event_sequence = int(state["event_sequence"]) + 1
-    next_state_sequence = int(state["state_sequence"]) + 1
-    event_payload = {
-        "schema_version": 1,
-        "kind": "work-governance-plan-event",
-        "plan_id": plan_id,
-        "event_sequence": next_event_sequence,
-        "state_sequence": next_state_sequence,
-        "event": event,
-        "subject": subject,
-        "payload": redacted_runtime_copy(dict(payload)),
-        "recorded_at": utc_now(),
-    }
-    state["state_sequence"] = next_state_sequence
-    state["event_sequence"] = next_event_sequence
-    state["updated_at"] = utc_now()
-    state["pending_event"] = event_payload
-    write_atomic(v5_state_path(root, plan_id), json.dumps(state, indent=2, sort_keys=True) + "\n")
-    if os.environ.get("WORKCTL_TEST_V5_INTERRUPT_AFTER_STATE") == "1":
-        raise WorkctlError("SCHEMA_V5_TEST_INTERRUPTED_AFTER_STATE")
-    v5_append_event(root, plan_id, event_payload)
-    state.pop("pending_event", None)
-    write_atomic(v5_state_path(root, plan_id), json.dumps(state, indent=2, sort_keys=True) + "\n")
+    _v5_runtime_call(
+        module_kernel_v5_runtime.v5_persist_state_transition,
+        root,
+        frontmatter,
+        state,
+        event=event,
+        subject=subject,
+        payload=payload,
+    )
 
 
 def v5_recover_pending_event(root: Path, frontmatter: Mapping[str, Any]) -> None:
     """Finish a state-first transition left by a process interruption."""
-    plan_id = str(frontmatter["plan_id"])
-    state = load_v5_state(root, frontmatter)
-    pending = state.get("pending_event")
-    if not isinstance(pending, dict):
-        return
-    payload = pending.get("payload")
-    contract_sha256 = payload.get("contract_sha256") if isinstance(payload, dict) else None
-    if isinstance(contract_sha256, str):
-        plan_path = active_plan_path(root)
-        if plan_path.is_symlink() or not plan_path.is_file():
-            raise WorkctlError("SCHEMA_V5_PENDING_CONTRACT_INVALID")
-        if sha256_file(plan_path) != contract_sha256:
-            state["event_sequence"] = int(state["event_sequence"]) - 1
-            state.pop("pending_event", None)
-            write_atomic(
-                v5_state_path(root, plan_id),
-                json.dumps(state, indent=2, sort_keys=True) + "\n",
-            )
-            return
-    events = v5_read_events(root, plan_id)
-    if not events or events[-1] != pending:
-        v5_append_event(root, plan_id, pending)
-    state.pop("pending_event", None)
-    write_atomic(v5_state_path(root, plan_id), json.dumps(state, indent=2, sort_keys=True) + "\n")
+    _v5_runtime_call(module_kernel_v5_runtime.v5_recover_pending_event, root, frontmatter)
 
 
 def v5_persist_contract_transition(
@@ -4330,38 +4236,14 @@ def v5_persist_contract_transition(
     payload: Mapping[str, Any],
 ) -> None:
     """Atomically replace a v5 contract with a recoverable ledger event intent."""
-    plan_id = str(doc.frontmatter["plan_id"])
-    state = load_v5_state(root, doc.frontmatter)
-    target_bytes = dump_plan(doc).encode("utf-8")
-    contract_sha256 = sha256_bytes(target_bytes)
-    next_event_sequence = int(state["event_sequence"]) + 1
-    event_payload = {
-        "schema_version": 1,
-        "kind": "work-governance-plan-event",
-        "plan_id": plan_id,
-        "event_sequence": next_event_sequence,
-        "state_sequence": int(state["state_sequence"]),
-        "event": event,
-        "subject": subject,
-        "payload": {
-            **cast(dict[str, Any], redacted_runtime_copy(dict(payload))),
-            "contract_revision": doc.frontmatter["contract_revision"],
-            "contract_sha256": contract_sha256,
-        },
-        "recorded_at": utc_now(),
-    }
-    state["event_sequence"] = next_event_sequence
-    state["updated_at"] = utc_now()
-    state["pending_event"] = event_payload
-    write_atomic(v5_state_path(root, plan_id), json.dumps(state, indent=2, sort_keys=True) + "\n")
-    if os.environ.get("WORKCTL_TEST_V5_CONTRACT_INTERRUPT") == "before-plan":
-        raise WorkctlError("SCHEMA_V5_TEST_INTERRUPTED_BEFORE_CONTRACT")
-    write_atomic_bytes(doc.path, target_bytes)
-    if os.environ.get("WORKCTL_TEST_V5_CONTRACT_INTERRUPT") == "after-plan":
-        raise WorkctlError("SCHEMA_V5_TEST_INTERRUPTED_AFTER_CONTRACT")
-    v5_append_event(root, plan_id, event_payload)
-    state.pop("pending_event", None)
-    write_atomic(v5_state_path(root, plan_id), json.dumps(state, indent=2, sort_keys=True) + "\n")
+    _v5_runtime_call(
+        module_kernel_v5_runtime.v5_persist_contract_transition,
+        root,
+        doc,
+        event=event,
+        subject=subject,
+        payload=payload,
+    )
 
 
 def scheduler_task_projections(frontmatter: Mapping[str, Any]) -> list[Any]:
@@ -4491,9 +4373,7 @@ def legacy_refresh_projection(
                 }
             payload: dict[str, object] = {"archive_status": "readable"}
             if callable(legacy_plan_summary):
-                payload["legacy_summary"] = legacy_plan_summary(
-                    load_plan(archive_file).frontmatter
-                )
+                payload["legacy_summary"] = legacy_plan_summary(load_plan(archive_file).frontmatter)
             return payload
         except WorkctlError as exc:
             return {"archive_status": "unreadable", "archive_error": str(exc)}
@@ -12804,9 +12684,7 @@ def action_lease_scope_from_args(args: argparse.Namespace) -> dict[str, object]:
 def action_lease_basis_sha256(scope: Mapping[str, object]) -> str:
     """Hash a canonical route authority lease scope."""
     return sha256_bytes(
-        json.dumps(scope, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
-            "utf-8"
-        )
+        json.dumps(scope, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     )
 
 
@@ -12982,9 +12860,8 @@ def load_action_authority_lease(root: Path, lease_id: str) -> dict[str, object]:
         parse_authorization_time(lease.get("frozen_at"))
         if lease.get("revoked_at") is not None or lease.get("revoke_ref") is not None:
             raise WorkctlError("ACTION_LEASE_INVALID")
-    elif (
-        parse_authorization_time(lease.get("revoked_at")) < issued_at
-        or not valid_reference(lease.get("revoke_ref"))
+    elif parse_authorization_time(lease.get("revoked_at")) < issued_at or not valid_reference(
+        lease.get("revoke_ref")
     ):
         raise WorkctlError("ACTION_LEASE_INVALID")
     return lease
@@ -13764,13 +13641,12 @@ def cmd_task_reprioritize(args: argparse.Namespace) -> None:
 
 def cmd_workflow_help(args: argparse.Namespace) -> None:
     """Print the stable public workflow command surface."""
-    workflows = MODULE_WORKFLOW_HELP
-    workflow_aliases = MODULE_WORKFLOW_HELP_ALIASES
-    workflow = args.workflow or "plan"
-    workflow = workflow_aliases.get(workflow, workflow)
-    if workflow not in workflows:
-        raise WorkctlError(f"UNKNOWN_WORKFLOW: {workflow}")
-    print(json.dumps(workflows[workflow], indent=2, sort_keys=True))
+    module_kernel_cli.workflow_help(
+        args,
+        workflows=MODULE_WORKFLOW_HELP,
+        workflow_aliases=MODULE_WORKFLOW_HELP_ALIASES,
+        error_cls=WorkctlError,
+    )
 
 
 def cmd_goal_show(_args: argparse.Namespace) -> None:
@@ -14159,9 +14035,7 @@ def reviewer_failure_fingerprint(
         "failure_class": failure_class,
         "signals": list(signals),
     }
-    return sha256_bytes(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    )
+    return sha256_bytes(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
 
 def reviewer_failure_summary(text: str, explicit_summary: str | None, failure_class: str) -> str:
@@ -14584,128 +14458,51 @@ def cmd_review_request(_args: argparse.Namespace) -> None:
     )
 
 
-def cmd_migrate_inspect(_args: argparse.Namespace) -> None:
+def _legacy_refresh_call(function: Any, *args: Any, **kwargs: Any) -> Any:
+    """Run an extracted current-schema refresh helper with controller bindings."""
+    return module_kernel_legacy_refresh.call(globals(), function, *args, **kwargs)
+
+
+def cmd_migrate_inspect(args: argparse.Namespace) -> None:
     """Report the current-schema refresh boundary without writing any state."""
-    root = project_root()
-    report = inspect_authority(root)
-    payload: dict[str, Any] = {
-        "authority_state": report.state,
-        "plan_id": None,
-        "from_schema_version": None,
-        "to_schema_version": CURRENT_PLAN_SCHEMA_VERSION,
-        "write": False,
-    }
-    if report.state in {"GOVERNED_ACTIVE", "PLAN_SCHEMA_REFRESH_REQUIRED"}:
-        doc = load_plan(active_plan_path(root))
-        payload["plan_id"] = doc.frontmatter.get("plan_id")
-        payload["from_schema_version"] = doc.frontmatter.get("schema_version")
-        if migration_projection is None:
-            raise WorkctlError("MIGRATION_MODULE_UNAVAILABLE: migration_projection")
-        payload.update(migration_projection(doc.frontmatter))
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    _legacy_refresh_call(module_kernel_legacy_refresh.cmd_migrate_inspect, args)
 
 
 def v5_migration_base(root: Path) -> Path:
     """Return the ignored parent for current-schema refresh transactions."""
-    path = governance_root(root) / "runtime" / "migrations-v5"
-    reject_symlink_components(root, path)
-    return path
+    return cast(Path, _legacy_refresh_call(module_kernel_legacy_refresh.v5_migration_base, root))
 
 
 def next_v5_migration_id(root: Path) -> str:
-    date_part = datetime.now(UTC).strftime("%Y%m%d")
-    base = v5_migration_base(root)
-    existing = (
-        {
-            path.name
-            for path in base.iterdir()
-            if base.is_dir() and path.is_dir() and MIGRATION_ID_RE.fullmatch(path.name)
-        }
-        if base.exists()
-        else set()
-    )
-    for number in range(1, 1000):
-        candidate = f"MIG-{date_part}-{number:03d}"
-        if candidate not in existing:
-            return candidate
-    raise WorkctlError("SCHEMA_V5_MIGRATION_ID_EXHAUSTED")
+    return cast(str, _legacy_refresh_call(module_kernel_legacy_refresh.next_v5_migration_id, root))
 
 
 def v5_migration_paths(root: Path, migration_id: str) -> dict[str, Path]:
-    if MIGRATION_ID_RE.fullmatch(migration_id) is None:
-        raise WorkctlError("SCHEMA_V5_MIGRATION_ID_INVALID")
-    transaction = v5_migration_base(root) / migration_id
-    return {
-        "transaction": transaction,
-        "journal": transaction / "journal.json",
-        "staging": transaction / "staging" / "plan.md",
-        "backup": transaction / "backup" / "plan.md",
-        "state_staging": transaction / "staging" / "state.json",
-        "events_staging": transaction / "staging" / "events.jsonl",
-    }
+    return cast(
+        dict[str, Path],
+        _legacy_refresh_call(module_kernel_legacy_refresh.v5_migration_paths, root, migration_id),
+    )
 
 
 def v5_legacy_archive_path(root: Path, migration_id: str, source_name: str) -> Path:
     """Return the versioned archive target for one legacy active Plan."""
-    if MIGRATION_ID_RE.fullmatch(migration_id) is None:
-        raise WorkctlError("SCHEMA_V5_MIGRATION_ID_INVALID")
-    if Path(source_name).name != source_name:
-        raise WorkctlError("SCHEMA_V5_MIGRATION_SOURCE_NAME_INVALID")
-    path = checked_project_path(root, plan_relative_path("archive", migration_id, source_name))
-    reject_symlink_components(root, path)
-    return path
+    return cast(
+        Path,
+        _legacy_refresh_call(
+            module_kernel_legacy_refresh.v5_legacy_archive_path,
+            root,
+            migration_id,
+            source_name,
+        ),
+    )
 
 
 def current_schema_refresh_body(contract: Mapping[str, Any]) -> str:
     """Build a fresh active Plan body that points to the archived legacy source."""
-    title = str(contract.get("title") or contract.get("plan_id") or "Current Plan")
-    goal = contract.get("goal")
-    success_conditions = contract.get("success_conditions", [])
-    tasks = contract.get("tasks", [])
-    archive = contract.get("legacy_archive")
-    archive_path = archive.get("path") if isinstance(archive, dict) else None
-    lines = [
-        f"# {title}",
-        "",
-        "## Goal",
-        str(goal) if isinstance(goal, str) and goal else "See frontmatter goal.",
-        "",
-        "## Success Conditions",
-    ]
-    if isinstance(success_conditions, list) and success_conditions:
-        lines.extend(
-            f"- {item}" for item in success_conditions if isinstance(item, str) and item
-        )
-    else:
-        lines.append("- See frontmatter success_conditions.")
-    lines.extend(["", "## Tasks"])
-    if isinstance(tasks, list) and tasks:
-        for task in tasks:
-            if not isinstance(task, dict):
-                continue
-            task_id = task.get("id")
-            description = task.get("description")
-            if isinstance(task_id, str) and isinstance(description, str):
-                lines.append(f"- {task_id}: {description}")
-    else:
-        lines.append("- See frontmatter tasks.")
-    lines.extend(
-        [
-            "",
-            "## Legacy Archive",
-            (
-                f"Legacy Plan bytes are archived at `{archive_path}`."
-                if isinstance(archive_path, str) and archive_path
-                else "Legacy Plan bytes are archived in the schema refresh journal."
-            ),
-            (
-                "Legacy runtime state was not migrated; review `plan status` "
-                "legacy_refresh before selecting the next task."
-            ),
-            "",
-        ]
+    return cast(
+        str,
+        _legacy_refresh_call(module_kernel_legacy_refresh.current_schema_refresh_body, contract),
     )
-    return "\n".join(lines)
 
 
 def prepare_v5_migration(
@@ -14715,98 +14512,15 @@ def prepare_v5_migration(
     migration_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], bytes]:
     """Prepare current-schema contract, state, event, and journal bytes."""
-    from_schema_version = source.frontmatter.get("schema_version")
-    if from_schema_version == CURRENT_PLAN_SCHEMA_VERSION:
-        raise WorkctlError("CURRENT_PLAN_SCHEMA_REFRESH_NOT_REQUIRED")
-    if not isinstance(from_schema_version, int) or from_schema_version < 1:
-        raise WorkctlError("SCHEMA_V5_MIGRATION_SOURCE_UNSUPPORTED")
-    if build_v5_contract is None or build_v5_state is None:
-        raise WorkctlError("SCHEMA_V5_MIGRATION_MODULE_UNAVAILABLE")
-    timestamp = utc_now()
-    source_bytes = source.path.read_bytes()
-    source_sha256 = sha256_bytes(source_bytes)
-    archive_path = v5_legacy_archive_path(root, migration_id, source.path.name)
-    archive_relative = relative_project_path(root, archive_path)
-    summary = (
-        legacy_plan_summary(source.frontmatter)
-        if callable(legacy_plan_summary)
-        else {
-            "authority": "NON_AUTHORITY",
-            "schema_version": from_schema_version,
-            "not_migrated": list(REFRESH_NOT_MIGRATED),
-        }
-    )
-    contract = build_v5_contract(source.frontmatter)
-    contract["legacy_archive"] = {
-        "path": archive_relative,
-        "sha256": source_sha256,
-        "from_schema_version": from_schema_version,
-        "mode": "archive_legacy_and_rebuild_current_plan",
-        "runtime_state": "fresh",
-        "state_reset": True,
-        "legacy_state_migrated": False,
-        "not_migrated": list(REFRESH_NOT_MIGRATED),
-        "next_model_action": REFRESH_NEXT_MODEL_ACTION,
-    }
-    contract = cast(dict[str, Any], redacted_runtime_copy(contract))
-    state = build_v5_state(
-        source.frontmatter,
-        updated_at=timestamp,
-    )
-    state = cast(dict[str, Any], redacted_runtime_copy(state))
-    plan_doc = PlanDocument(source.path, contract, current_schema_refresh_body(contract))
-    target_bytes = dump_plan(plan_doc).encode("utf-8")
-    target_sha256 = sha256_bytes(target_bytes)
-    plan_id = str(source.frontmatter["plan_id"])
-    event = {
-        "schema_version": 1,
-        "kind": "work-governance-plan-event",
-        "plan_id": plan_id,
-        "event_sequence": 1,
-        "state_sequence": 0,
-        "event": "contract.rebuilt_from_legacy_archive",
-        "subject": f"plan:{plan_id}",
-        "payload": {
-            "from_schema_version": from_schema_version,
-            "to_schema_version": CURRENT_PLAN_SCHEMA_VERSION,
-            "migration_mode": "archive_legacy_and_rebuild_current_plan",
-            "source_sha256": source_sha256,
-            "archive_path": archive_relative,
-            "archive_sha256": source_sha256,
-            "state_mapping": "not_performed",
-            "legacy_summary": summary,
-            "legacy_state_migrated": False,
-            "not_migrated": list(REFRESH_NOT_MIGRATED),
-            "next_model_action": REFRESH_NEXT_MODEL_ACTION,
-        },
-        "recorded_at": timestamp,
-    }
-    event = cast(dict[str, Any], redacted_runtime_copy(event))
-    state["event_sequence"] = 1
-    event_bytes = canonical_event_payload_bytes(event)
-    journal = {
-        "schema_version": 1,
-        "kind": "current-plan-schema-refresh",
-        "migration_id": migration_id,
-        "status": "prepared",
-        "plan_id": plan_id,
-        "from_schema_version": from_schema_version,
-        "to_schema_version": CURRENT_PLAN_SCHEMA_VERSION,
-        "migration_mode": "archive_legacy_and_rebuild_current_plan",
-        "source_path": relative_project_path(root, source.path),
-        "source_sha256": source_sha256,
-        "archive_path": archive_relative,
-        "archive_sha256": source_sha256,
-        "target_sha256": target_sha256,
-        "state_sha256": sha256_bytes(
-            json.dumps(state, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    return cast(
+        tuple[dict[str, Any], dict[str, Any], dict[str, Any], bytes],
+        _legacy_refresh_call(
+            module_kernel_legacy_refresh.prepare_v5_migration,
+            root,
+            source,
+            migration_id=migration_id,
         ),
-        "events_sha256": sha256_bytes(event_bytes),
-        "contract_revision": contract.get("contract_revision"),
-        "created_at": timestamp,
-        "updated_at": timestamp,
-    }
-    return journal, state, event, target_bytes
+    )
 
 
 def write_v5_migration_staging(
@@ -14818,327 +14532,62 @@ def write_v5_migration_staging(
     event_bytes: bytes,
 ) -> None:
     """Write the complete backup and staging set before the Plan replacement."""
-    write_atomic_bytes(paths["backup"], source_bytes)
-    write_atomic_bytes(paths["staging"], target_bytes)
-    write_atomic(
-        paths["state_staging"],
-        json.dumps(state, indent=2, sort_keys=True) + "\n",
+    _legacy_refresh_call(
+        module_kernel_legacy_refresh.write_v5_migration_staging,
+        root,
+        paths,
+        source_bytes,
+        target_bytes,
+        state,
+        event_bytes,
     )
-    write_atomic_bytes(paths["events_staging"], event_bytes)
 
 
 def finish_v5_migration(root: Path, journal_path: Path) -> None:
     """Complete one prepared current-schema refresh after an interruption."""
-    journal = load_yaml_file(journal_path)
-    migration_id = journal.get("migration_id")
-    if not isinstance(migration_id, str):
-        raise WorkctlError("SCHEMA_V5_MIGRATION_JOURNAL_INVALID")
-    paths = v5_migration_paths(root, migration_id)
-    if journal_path.resolve() != paths["journal"].resolve():
-        raise WorkctlError("SCHEMA_V5_MIGRATION_JOURNAL_INVALID")
-    required = {
-        "schema_version",
-        "kind",
-        "migration_id",
-        "status",
-        "plan_id",
-        "from_schema_version",
-        "to_schema_version",
-        "migration_mode",
-        "source_path",
-        "source_sha256",
-        "archive_path",
-        "archive_sha256",
-        "target_sha256",
-        "state_sha256",
-        "events_sha256",
-        "contract_revision",
-        "created_at",
-        "updated_at",
-    }
-    if (
-        set(journal) != required
-        or journal.get("schema_version") != 1
-        or journal.get("kind") != "current-plan-schema-refresh"
-        or journal.get("to_schema_version") != CURRENT_PLAN_SCHEMA_VERSION
-        or journal.get("migration_mode") != "archive_legacy_and_rebuild_current_plan"
-        or journal.get("status") not in {"prepared", "plan-replaced", "committed"}
-    ):
-        raise WorkctlError("SCHEMA_V5_MIGRATION_JOURNAL_INVALID")
-    source = checked_project_path(root, str(journal["source_path"]))
-    archive = checked_project_path(root, str(journal["archive_path"]))
-    reject_symlink_components(root, archive)
-    plan_id = str(journal["plan_id"])
-    runtime = v5_runtime_dir(root, plan_id)
-    state_target = runtime / "state.json"
-    event_target = runtime / "events.jsonl"
-    if (
-        not paths["backup"].is_file()
-        or sha256_file(paths["backup"]) != journal["source_sha256"]
-        or not paths["staging"].is_file()
-        or sha256_file(paths["staging"]) != journal["target_sha256"]
-        or not paths["state_staging"].is_file()
-        or sha256_file(paths["state_staging"]) != journal["state_sha256"]
-        or not paths["events_staging"].is_file()
-        or sha256_file(paths["events_staging"]) != journal["events_sha256"]
-    ):
-        raise WorkctlError("SCHEMA_V5_MIGRATION_STAGING_INVALID")
-    if journal["archive_sha256"] != journal["source_sha256"]:
-        raise WorkctlError("SCHEMA_V5_MIGRATION_JOURNAL_INVALID")
-    if archive.exists() and (
-        not archive.is_file() or sha256_file(archive) != journal["archive_sha256"]
-    ):
-        raise WorkctlError("SCHEMA_V5_MIGRATION_ARCHIVE_DRIFT")
-    if journal["status"] == "committed":
-        if not source.is_file() or sha256_file(source) != journal["target_sha256"]:
-            raise WorkctlError("SCHEMA_V5_MIGRATION_COMMITTED_DRIFT")
-        if not archive.is_file() or sha256_file(archive) != journal["archive_sha256"]:
-            raise WorkctlError("SCHEMA_V5_MIGRATION_COMMITTED_DRIFT")
-        return
-    if not source.is_file():
-        raise WorkctlError("SCHEMA_V5_MIGRATION_SOURCE_MISSING")
-    current_sha256 = sha256_file(source)
-    if current_sha256 == journal["source_sha256"]:
-        write_atomic_bytes(archive, paths["backup"].read_bytes())
-        write_atomic_bytes(state_target, paths["state_staging"].read_bytes())
-        write_atomic_bytes(event_target, paths["events_staging"].read_bytes())
-        write_atomic_bytes(source, paths["staging"].read_bytes())
-    elif current_sha256 != journal["target_sha256"]:
-        raise WorkctlError("SCHEMA_V5_MIGRATION_SOURCE_DRIFT")
-    else:
-        if not archive.is_file():
-            write_atomic_bytes(archive, paths["backup"].read_bytes())
-        write_atomic_bytes(state_target, paths["state_staging"].read_bytes())
-        write_atomic_bytes(event_target, paths["events_staging"].read_bytes())
-    journal["status"] = "plan-replaced"
-    journal["updated_at"] = utc_now()
-    write_atomic(journal_path, json.dumps(journal, indent=2, sort_keys=True) + "\n")
-    if os.environ.get("WORKCTL_TEST_V5_MIGRATION_INTERRUPT") == "1":
-        raise WorkctlError("SCHEMA_V5_TEST_INTERRUPTED_AFTER_REPLACE")
-    errors = validate_plan(root, require_governed=False)
-    if errors:
-        raise WorkctlError("SCHEMA_V5_MIGRATION_APPLIED_BUT_INVALID: " + "; ".join(errors))
-    journal["status"] = "committed"
-    journal["updated_at"] = utc_now()
-    write_atomic(journal_path, json.dumps(journal, indent=2, sort_keys=True) + "\n")
+    _legacy_refresh_call(module_kernel_legacy_refresh.finish_v5_migration, root, journal_path)
 
 
 def cmd_migrate_apply(args: argparse.Namespace) -> None:
     """Archive an outdated active Plan and rebuild the current-schema contract."""
-    root = project_root()
-    if args.dry_run:
-        require_current_schema_refresh_authority(root)
-        source = load_plan(active_plan_path(root))
-        if source.frontmatter.get("schema_version") == CURRENT_PLAN_SCHEMA_VERSION:
-            print(
-                json.dumps(
-                    {
-                        "status": "already_current",
-                        "plan_id": source.frontmatter.get("plan_id"),
-                        "schema_version": CURRENT_PLAN_SCHEMA_VERSION,
-                    },
-                    sort_keys=True,
-                )
-            )
-            return
-        contract = source.frontmatter.get("contract")
-        current_revision = (
-            contract.get("revision")
-            if isinstance(contract, dict)
-            else source.frontmatter.get("revision")
-        )
-        if (
-            args.expected_contract_revision is not None
-            and current_revision != args.expected_contract_revision
-        ):
-            raise WorkctlError(
-                "CONTRACT_REVISION_MISMATCH: "
-                f"expected {args.expected_contract_revision}, found {current_revision}"
-            )
-        preview_migration_id = next_v5_migration_id(root)
-        journal, state, _event, target_bytes = prepare_v5_migration(
-            root,
-            source,
-            migration_id=preview_migration_id,
-        )
-        target_sha256 = sha256_bytes(target_bytes)
-        if isinstance(args.confirmation, str) and not args.confirmation.startswith("C-"):
-            raise WorkctlError("INVALID_CONFIRMATION_ID")
-        payload = migration_projection(source.frontmatter) if callable(migration_projection) else {}
-        payload.update(
-            {
-                "status": "dry_run",
-                "plan_id": source.frontmatter.get("plan_id"),
-                "source_sha256": sha256_file(source.path),
-                "archive_path": journal.get("archive_path"),
-                "archive_sha256": journal.get("archive_sha256"),
-                "target_sha256": target_sha256,
-                "state_sequence": state.get("state_sequence"),
-                "contract_revision": journal.get("contract_revision"),
-                "confirmation_ref": None,
-                "confirmation_deprecated": bool(args.confirmation),
-                "confirmations_required": [],
-                "writes": [],
-            }
-        )
-        print(json.dumps(payload, indent=2, sort_keys=True))
-        return
-    with lock(root):
-        require_current_schema_refresh_authority(root)
-        source = load_plan(active_plan_path(root))
-        if source.frontmatter.get("schema_version") == CURRENT_PLAN_SCHEMA_VERSION:
-            print(
-                json.dumps(
-                    {
-                        "status": "already_current",
-                        "plan_id": source.frontmatter.get("plan_id"),
-                        "schema_version": CURRENT_PLAN_SCHEMA_VERSION,
-                    },
-                    sort_keys=True,
-                )
-            )
-            return
-        if isinstance(args.confirmation, str) and not args.confirmation.startswith("C-"):
-            raise WorkctlError("INVALID_CONFIRMATION_ID")
-        expected = args.expected_contract_revision
-        contract = source.frontmatter.get("contract")
-        current_revision = (
-            contract.get("revision")
-            if isinstance(contract, dict)
-            else source.frontmatter.get("revision")
-        )
-        if expected is None:
-            raise WorkctlError("EXPECTED_CONTRACT_REVISION_REQUIRED")
-        if current_revision != expected:
-            raise WorkctlError(
-                f"CONTRACT_REVISION_MISMATCH: expected {expected}, found {current_revision}"
-            )
-        migration_id = next_v5_migration_id(root)
-        journal, state, event, target_bytes = prepare_v5_migration(
-            root,
-            source,
-            migration_id=migration_id,
-        )
-        paths = v5_migration_paths(root, migration_id)
-        source_bytes = source.path.read_bytes()
-        event_bytes = canonical_event_payload_bytes(event)
-        write_v5_migration_staging(root, paths, source_bytes, target_bytes, state, event_bytes)
-        write_atomic(paths["journal"], json.dumps(journal, indent=2, sort_keys=True) + "\n")
-        finish_v5_migration(root, paths["journal"])
-    payload = {
-        "status": "CURRENT_PLAN_SCHEMA_REFRESH_COMMITTED",
-        "migration_id": migration_id,
-        "plan_id": source.frontmatter["plan_id"],
-        "archive_path": journal.get("archive_path"),
-        "archive_sha256": journal.get("archive_sha256"),
-        "state_reset": True,
-        "legacy_state_migrated": False,
-        "not_migrated": list(REFRESH_NOT_MIGRATED),
-        "next_model_action": REFRESH_NEXT_MODEL_ACTION,
-        "legacy_summary": legacy_plan_summary(source.frontmatter)
-        if callable(legacy_plan_summary)
-        else None,
-    }
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    _legacy_refresh_call(module_kernel_legacy_refresh.cmd_migrate_apply, args)
 
 
 def migration_rollback_entry(root: Path, journal_path: Path) -> dict[str, Any]:
     """Build a read-only rollback/recovery entry from one schema refresh journal."""
-    journal = load_yaml_file(journal_path)
-    migration_id = journal.get("migration_id")
-    if not isinstance(migration_id, str):
-        raise WorkctlError("SCHEMA_V5_MIGRATION_JOURNAL_INVALID")
-    paths = v5_migration_paths(root, migration_id)
-    backup_sha256 = sha256_file(paths["backup"]) if paths["backup"].is_file() else None
-    staging_sha256 = sha256_file(paths["staging"]) if paths["staging"].is_file() else None
-    archive_path = (
-        checked_project_path(root, str(journal["archive_path"]))
-        if isinstance(journal.get("archive_path"), str)
-        else None
+    return cast(
+        dict[str, Any],
+        _legacy_refresh_call(
+            module_kernel_legacy_refresh.migration_rollback_entry,
+            root,
+            journal_path,
+        ),
     )
-    archive_sha256 = (
-        sha256_file(archive_path)
-        if isinstance(archive_path, Path) and archive_path.is_file()
-        else None
-    )
-    return {
-        "migration_id": migration_id,
-        "status": journal.get("status"),
-        "plan_id": journal.get("plan_id"),
-        "from_schema_version": journal.get("from_schema_version"),
-        "to_schema_version": journal.get("to_schema_version"),
-        "migration_mode": journal.get("migration_mode"),
-        "source_path": journal.get("source_path"),
-        "source_sha256": journal.get("source_sha256"),
-        "target_sha256": journal.get("target_sha256"),
-        "archive_path": journal.get("archive_path"),
-        "archive_sha256": archive_sha256,
-        "expected_archive_sha256": journal.get("archive_sha256"),
-        "backup_path": (
-            relative_project_path(root, paths["backup"]) if paths["backup"].exists() else None
-        ),
-        "backup_sha256": backup_sha256,
-        "staging_path": (
-            relative_project_path(root, paths["staging"]) if paths["staging"].exists() else None
-        ),
-        "staging_sha256": staging_sha256,
-        "recovery_command": f"migrate recover --migration-id {migration_id}",
-        "rollback_boundary": (
-            "No automatic rollback command is exposed. The legacy Plan is preserved "
-            "in archive_path for audit and manually confirmed recovery planning."
-        ),
-    }
 
 
 def migration_rollback_report_entry(root: Path, journal_path: Path) -> dict[str, Any]:
     """Build a doctor-safe schema refresh journal report entry."""
-    try:
-        return migration_rollback_entry(root, journal_path)
-    except WorkctlError as exc:
-        return {
-            "journal_path": relative_project_path(root, journal_path),
-            "status": "invalid",
-            "error": str(exc),
-            "recovery_command": None,
-            "rollback_boundary": (
-                "Invalid schema refresh journal was preserved for investigation; "
-                "doctor does not delete schema refresh bundles."
-            ),
-        }
+    return cast(
+        dict[str, Any],
+        _legacy_refresh_call(
+            module_kernel_legacy_refresh.migration_rollback_report_entry,
+            root,
+            journal_path,
+        ),
+    )
 
 
 def cmd_migrate_rollback_info(args: argparse.Namespace) -> None:
     """Show schema refresh archive, backup, and recovery information."""
-    root = project_root()
-    base = v5_migration_base(root)
-    if args.migration_id:
-        journals = [v5_migration_paths(root, args.migration_id)["journal"]]
-    elif base.is_dir():
-        journals = sorted(base.glob("MIG-*/journal.json"))
-    else:
-        journals = []
-    entries = [migration_rollback_entry(root, journal) for journal in journals if journal.is_file()]
-    if args.migration_id and not entries:
-        raise WorkctlError(f"SCHEMA_V5_MIGRATION_NOT_FOUND: {args.migration_id}")
-    print(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "kind": "current-plan-schema-refresh-rollback-info",
-                "write": False,
-                "entries": entries,
-            },
-            indent=2,
-            sort_keys=True,
-        )
-    )
+    _legacy_refresh_call(module_kernel_legacy_refresh.cmd_migrate_rollback_info, args)
 
 
 def runtime_transactions_root(root: Path) -> Path:
     """Return the generic ignored transaction directory used by doctor."""
-    path = governance_root(root) / "runtime" / "transactions"
-    reject_symlink_components(root, path)
-    return path
+    return cast(
+        Path,
+        _legacy_refresh_call(module_kernel_legacy_refresh.runtime_transactions_root, root),
+    )
 
 
 def stale_runtime_transaction_entries(
@@ -15147,138 +14596,36 @@ def stale_runtime_transaction_entries(
     older_than_hours: int,
 ) -> list[dict[str, Any]]:
     """Return generic runtime transaction directories old enough for operator review."""
-    transaction_root = runtime_transactions_root(root)
-    if not transaction_root.exists():
-        return []
-    if transaction_root.is_symlink() or not transaction_root.is_dir():
-        raise WorkctlError("RUNTIME_TRANSACTIONS_INVALID")
-    threshold = time.time() - older_than_hours * 3600
-    entries: list[dict[str, Any]] = []
-    for path in sorted(transaction_root.iterdir()):
-        if path.is_symlink() or not path.is_dir():
-            entries.append(
-                {
-                    "path": relative_project_path(root, path),
-                    "state": "invalid",
-                    "reason": "transaction entry is not a plain directory",
-                    "cleanable": False,
-                }
-            )
-            continue
-        modified_at = path.stat().st_mtime
-        journal_paths = [path / "journal.json", path / "journal.yaml", path / "journal.yml"]
-        has_journal = any(candidate.is_file() for candidate in journal_paths)
-        stale = modified_at < threshold
-        entries.append(
-            {
-                "path": relative_project_path(root, path),
-                "state": "stale" if stale else "recent",
-                "reason": "missing journal" if not has_journal else "journal present",
-                "cleanable": bool(stale and not has_journal),
-                "age_seconds": int(max(0.0, time.time() - modified_at)),
-            }
-        )
-    return entries
+    return cast(
+        list[dict[str, Any]],
+        _legacy_refresh_call(
+            module_kernel_legacy_refresh.stale_runtime_transaction_entries,
+            root,
+            older_than_hours=older_than_hours,
+        ),
+    )
 
 
 def clean_stale_runtime_transactions(root: Path, entries: Sequence[Mapping[str, Any]]) -> list[str]:
     """Remove only stale generic transaction directories that have no journal."""
-    cleaned: list[str] = []
-    transaction_root = runtime_transactions_root(root).resolve()
-    for entry in entries:
-        if entry.get("cleanable") is not True:
-            continue
-        relative = entry.get("path")
-        if not isinstance(relative, str):
-            continue
-        path = checked_project_path(root, relative)
-        if path.is_symlink() or not path.is_dir() or path.parent.resolve() != transaction_root:
-            raise WorkctlError("RUNTIME_TRANSACTION_CLEANUP_UNSAFE")
-        if any((path / name).is_file() for name in ("journal.json", "journal.yaml", "journal.yml")):
-            raise WorkctlError("RUNTIME_TRANSACTION_CLEANUP_JOURNAL_PRESENT")
-        shutil.rmtree(path)
-        cleaned.append(relative)
-    return cleaned
+    return cast(
+        list[str],
+        _legacy_refresh_call(
+            module_kernel_legacy_refresh.clean_stale_runtime_transactions,
+            root,
+            entries,
+        ),
+    )
 
 
 def cmd_doctor(args: argparse.Namespace) -> None:
     """Inspect or safely clean local runtime transaction health."""
-    root = project_root()
-    if args.older_than_hours < 1:
-        raise WorkctlError("DOCTOR_OLDER_THAN_HOURS_INVALID")
-    stale_entries = stale_runtime_transaction_entries(
-        root,
-        older_than_hours=args.older_than_hours,
-    )
-    cleaned: list[str] = []
-    if args.clean_stale_transactions:
-        with lock(root):
-            stale_entries = stale_runtime_transaction_entries(
-                root,
-                older_than_hours=args.older_than_hours,
-            )
-            cleaned = clean_stale_runtime_transactions(root, stale_entries)
-            stale_entries = stale_runtime_transaction_entries(
-                root,
-                older_than_hours=args.older_than_hours,
-            )
-    report = inspect_authority(root)
-    migration_base = v5_migration_base(root)
-    migration_journals = (
-        [
-            migration_rollback_report_entry(root, path)
-            for path in sorted(migration_base.glob("MIG-*/journal.json"))
-        ]
-        if migration_base.is_dir()
-        else []
-    )
-    print(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "kind": "work-governance-doctor-report",
-                "write": bool(args.clean_stale_transactions),
-                "layout_state": inspect_layout(root).state,
-                "authority_state": report.state,
-                "blocking_reasons": report.blockers,
-                "schema_v5_migrations": migration_journals,
-                "runtime_transactions": stale_entries,
-                "cleaned": cleaned,
-                "next_action": (
-                    "Run migrate recover for incomplete current-schema refresh journals "
-                    "before ordinary work."
-                    if any(entry.get("status") != "committed" for entry in migration_journals)
-                    else "No current-schema refresh recovery action is required."
-                ),
-            },
-            indent=2,
-            sort_keys=True,
-        )
-    )
+    _legacy_refresh_call(module_kernel_legacy_refresh.cmd_doctor, args)
 
 
 def cmd_migrate_recover(args: argparse.Namespace) -> None:
     """Recover one named or the only incomplete current-schema refresh."""
-    root = project_root()
-    base = v5_migration_base(root)
-    candidates = []
-    for path in sorted(base.glob("MIG-*/journal.json")) if base.is_dir() else []:
-        try:
-            if load_yaml_file(path).get("status") != "committed":
-                candidates.append(path)
-        except WorkctlError:
-            candidates.append(path)
-    if args.migration_id:
-        candidates = [v5_migration_paths(root, args.migration_id)["journal"]]
-    if len(candidates) != 1:
-        raise WorkctlError(
-            "SCHEMA_V5_MIGRATION_RECOVERY_AMBIGUOUS"
-            if candidates
-            else "SCHEMA_V5_MIGRATION_RECOVERY_NOT_REQUIRED"
-        )
-    with lock(root):
-        finish_v5_migration(root, candidates[0])
-    print(f"CURRENT_PLAN_SCHEMA_REFRESH_RECOVERED {candidates[0].parent.name}")
+    _legacy_refresh_call(module_kernel_legacy_refresh.cmd_migrate_recover, args)
 
 
 def cmd_plan_validate(args: argparse.Namespace) -> None:
@@ -18191,14 +17538,25 @@ def cmd_plan_schema_validate(args: argparse.Namespace) -> None:
     print(f"PLAN_SCHEMA_VALID {path}")
 
 
+def _closeout_call(function: Any, *args: Any, **kwargs: Any) -> Any:
+    """Run an extracted closeout helper with controller bindings."""
+    return module_kernel_closeout.call(globals(), function, *args, **kwargs)
+
+
 def incomplete_entries(frontmatter: dict[str, Any], field: str) -> list[str]:
     """Return IDs for work entries that are not verified or skipped."""
-    return module_incomplete_entries(frontmatter, field, VERIFIED_TASK_STATES)
+    return cast(
+        list[str],
+        _closeout_call(module_kernel_closeout.incomplete_entries, frontmatter, field),
+    )
 
 
 def unresolved_exclusions(frontmatter: dict[str, Any]) -> list[str]:
     """Return schema-v3 exclusions that still require route disposition."""
-    return module_unresolved_exclusions(frontmatter, BLOCKING_EXCLUSION_DISPOSITIONS)
+    return cast(
+        list[str],
+        _closeout_call(module_kernel_closeout.unresolved_exclusions, frontmatter),
+    )
 
 
 def completion_claims(
@@ -18206,29 +17564,9 @@ def completion_claims(
     readiness: dict[str, Any],
 ) -> dict[str, Any]:
     """Describe which completion claims current evidence permits."""
-    if module_completion_claims is None:
-        raise WorkctlError("STATUS_MODULE_UNAVAILABLE: completion_claims")
-
-    def incomplete_ids(document: Mapping[str, object], field: str) -> Sequence[str]:
-        return incomplete_entries(cast(dict[str, Any], document), field)
-
-    def confirmation_lookup(
-        document: Mapping[str, object],
-    ) -> Mapping[str, Mapping[str, object]]:
-        return cast(
-            Mapping[str, Mapping[str, object]],
-            confirmations(cast(dict[str, Any], document)),
-        )
-
     return cast(
         dict[str, Any],
-        module_completion_claims(
-            frontmatter,
-            readiness,
-            incomplete_entry_ids=incomplete_ids,
-            confirmations_by_id=confirmation_lookup,
-            verified_task_states=VERIFIED_TASK_STATES,
-        ),
+        _closeout_call(module_kernel_closeout.completion_claims, frontmatter, readiness),
     )
 
 
@@ -18238,261 +17576,25 @@ def closeout_readiness(
     validation_errors: list[str] | None = None,
 ) -> dict[str, Any]:
     """Compute complete-route readiness without mutating the Plan."""
-    blockers: list[str] = []
-    blockers.extend(f"plan validation: {error}" for error in (validation_errors or []))
-    if report.state != "GOVERNED_ACTIVE":
-        blockers.append(f"authority state is {report.state}")
-    for field in ("obligations", "tasks", "validations"):
-        for entry_id in incomplete_entries(frontmatter, field):
-            blockers.append(f"{field} not complete: {entry_id}")
-    raw_unknowns = frontmatter.get("unknowns", [])
-    if not isinstance(raw_unknowns, list):
-        blockers.append("unknowns is invalid")
-    else:
-        for unknown in raw_unknowns:
-            if isinstance(unknown, dict) and unknown.get("status") == "open":
-                blockers.append(f"unknown remains open: {unknown.get('id', 'unknown')}")
-    artifacts = frontmatter.get("artifacts", [])
-    if not isinstance(artifacts, list):
-        blockers.append("artifacts is invalid")
-    else:
-        for artifact in artifacts:
-            if not isinstance(artifact, dict) or artifact.get("status") != "final":
-                artifact_id = (
-                    artifact.get("id", "unknown") if isinstance(artifact, dict) else "invalid"
-                )
-                blockers.append(f"artifact not final: {artifact_id}")
-    if frontmatter.get("schema_version") in {3, 4}:
-        delivery = frontmatter.get("delivery", {})
-        if not isinstance(delivery, dict) or delivery.get("status") != "complete":
-            blockers.append("delivery is not complete")
-        activation = frontmatter.get("activation", {})
-        if isinstance(activation, dict) and activation.get("status") in BLOCKING_ACTIVATION_STATES:
-            blockers.append(f"activation is {activation.get('status')}")
-        for description in unresolved_exclusions(frontmatter):
-            blockers.append(f"scope exclusion is unresolved: {description}")
-    if frontmatter.get("schema_version") == 4:
-        if STRICT_INITIAL_INTAKE_REQUIRED:
-            current_intake_state = intake_state(frontmatter)
-            if current_intake_state != "CURRENT_BASIS":
-                blockers.append(f"intake is {current_intake_state}")
-        for unknown_id in legacy_unknown_ids(frontmatter):
-            blockers.append(f"legacy unknown contract: {unknown_id}")
-        intervention_state = intervention_contract_state(frontmatter)
-        if intervention_state != "STRICT_READY":
-            blockers.append(f"intervention contract is {intervention_state}")
-    for mode in independent_review_blockers(project_root(), frontmatter, "route"):
-        blockers.append(f"independent review blocks route: {mode}")
-    raw_confirmations = frontmatter.get("confirmations", {})
-    if not isinstance(raw_confirmations, dict):
-        blockers.append("confirmations is invalid")
-    else:
-        for item in raw_confirmations.get("required", []):
-            if not isinstance(item, dict) or not confirmation_resolved_for_closeout(
-                frontmatter, item
-            ):
-                confirmation_id = item.get("id", "unknown") if isinstance(item, dict) else "invalid"
-                blockers.append(f"confirmation unresolved: {confirmation_id}")
-    route = frontmatter.get("route", {})
-    if not isinstance(route, dict):
-        blockers.append("route is invalid")
-    else:
-        if route.get("route_status") != "terminal":
-            blockers.append("route_status is not terminal")
-        if route.get("next_phase") not in {"", "none"}:
-            blockers.append("next_phase remains")
-        if route.get("confirmation_gate") not in {"", "none"}:
-            blockers.append("confirmation_gate remains")
-    handoff = frontmatter.get("handoff", {})
-    if not isinstance(handoff, dict):
-        blockers.append("handoff is invalid")
-    else:
-        if handoff.get("route_status") != "terminal":
-            blockers.append("handoff route_status is not terminal")
-        if handoff.get("next_step") not in {"", "none"}:
-            blockers.append("handoff next_step remains")
-    return {"ready": not blockers, "blockers": blockers}
+    return cast(
+        dict[str, Any],
+        _closeout_call(
+            module_kernel_closeout.closeout_readiness,
+            frontmatter,
+            report,
+            validation_errors,
+        ),
+    )
 
 
 def cmd_plan_closeout_check(args: argparse.Namespace) -> None:
     """Print closeout readiness and fail when obligations remain."""
-    root = project_root()
-    report = inspect_authority(root)
-    doc = load_plan(active_plan_path(root))
-    validation_errors = validate_plan(root)
-    if doc.frontmatter.get("schema_version") == 5:
-        v5_recover_pending_event(root, doc.frontmatter)
-        readiness = v5_runtime_closeout_readiness(
-            root,
-            doc.frontmatter,
-            report,
-            validation_errors,
-        )
-    else:
-        readiness = closeout_readiness(doc.frontmatter, report, validation_errors)
-    if doc.frontmatter.get("schema_version") == 4:
-        if not args.evidence_manifest:
-            readiness["ready"] = False
-            readiness["blockers"].append("closeout evidence manifest required")
-        else:
-            try:
-                verify_evidence_manifest(
-                    root,
-                    args.evidence_manifest,
-                    plan_id=str(doc.frontmatter["plan_id"]),
-                    subject="closeout",
-                )
-            except WorkctlError as exc:
-                readiness["ready"] = False
-                readiness["blockers"].append(str(exc))
-    print(json.dumps(readiness, indent=2, sort_keys=True))
-    if not readiness["ready"]:
-        raise SystemExit(1)
+    _closeout_call(module_kernel_closeout.cmd_plan_closeout_check, args)
 
 
 def cmd_plan_complete(args: argparse.Namespace) -> None:
     """Mark a Plan complete, optionally finalizing a ready route atomically."""
-    root = project_root()
-    with lock(root):
-        report = require_governed_authority(root)
-        doc = load_plan(active_plan_path(root))
-        if doc.frontmatter.get("schema_version") == 5:
-            v5_recover_pending_event(root, doc.frontmatter)
-            state = load_v5_state(root, doc.frontmatter)
-            require_v5_expected_state_sequence(state, args.expected_state_sequence)
-            if args.evidence_manifest:
-                verify_evidence_manifest(
-                    root,
-                    args.evidence_manifest,
-                    plan_id=str(doc.frontmatter["plan_id"]),
-                    subject="closeout",
-                )
-            require_independent_target(root, doc.frontmatter, "route")
-            validation_errors = validate_plan(root)
-            readiness = v5_runtime_closeout_readiness(
-                root,
-                doc.frontmatter,
-                report,
-                validation_errors,
-                state,
-            )
-            if not readiness["ready"]:
-                raise WorkctlError(
-                    "CLOSEOUT_BLOCKED: "
-                    + "; ".join(str(item) for item in readiness["blockers"])
-                )
-            doc.frontmatter["status"] = "complete"
-            doc.frontmatter["updated_at"] = utc_now()
-            doc.frontmatter["completion"] = {
-                "state_sequence": state["state_sequence"],
-                "completed_at": doc.frontmatter["updated_at"],
-            }
-            require_valid_candidate(doc)
-            v5_persist_contract_transition(
-                root,
-                doc,
-                event="plan.completed",
-                subject=f"plan:{doc.frontmatter['plan_id']}",
-                payload={
-                    "state_sequence": state["state_sequence"],
-                    "status": "complete",
-                    "evidence_manifest": args.evidence_manifest,
-                },
-            )
-            release_v5_active_index(root, str(doc.frontmatter["plan_id"]))
-            print(f"PLAN_COMPLETED state_sequence={state['state_sequence']} active_released=true")
-            return
-        require_expected_revision(doc.frontmatter, args.expected_revision)
-        require_current_intake(
-            root,
-            doc.frontmatter,
-            turn_receipt_sha256=args.turn_receipt_sha256,
-            expected_intake_sha256=args.expected_intake_sha256,
-            targets=["route"],
-        )
-        evidence_ref: str | None = None
-        evidence_sha256: str | None = None
-        if doc.frontmatter.get("schema_version") == 4:
-            if not args.evidence_manifest:
-                raise WorkctlError("EVIDENCE_MANIFEST_REQUIRED")
-            evidence_ref, evidence_sha256 = verify_evidence_manifest(
-                root,
-                args.evidence_manifest,
-                plan_id=str(doc.frontmatter["plan_id"]),
-                subject="closeout",
-            )
-        require_independent_target(root, doc.frontmatter, "route")
-        if args.confirmation and not args.finalize_route:
-            raise WorkctlError("FINALIZE_ROUTE_REQUIRED_FOR_CONFIRMATION")
-        finalized_atomically = False
-        atomic_intake_history: tuple[list[dict[str, Any]], dict[str, object]] | None = None
-        if args.finalize_route:
-            require_slice_revision_confirmation(
-                doc.frontmatter,
-                args.confirmation,
-                {"accepted", "declined"},
-            )
-            route = doc.frontmatter.get("route")
-            handoff = doc.frontmatter.get("handoff")
-            if not isinstance(route, dict) or not isinstance(handoff, dict):
-                raise WorkctlError("INVALID_TERMINAL_ROUTE")
-            route["route_status"] = "terminal"
-            route["slice_status"] = "complete"
-            route["next_phase"] = "none"
-            route["confirmation_gate"] = "none"
-            handoff["route_status"] = "terminal"
-            handoff["next_step"] = "none"
-            if STRICT_INITIAL_INTAKE_REQUIRED:
-                atomic_intake_history = refresh_intake_for_atomic_controller_transition(
-                    doc.frontmatter
-                )
-            doc.frontmatter["status"] = "complete"
-            if evidence_ref is not None and evidence_sha256 is not None:
-                doc.frontmatter["completion_evidence"] = {
-                    "ref": evidence_ref,
-                    "sha256": evidence_sha256,
-                    "completed_at": utc_now(),
-                }
-            bump_revision(
-                doc.frontmatter,
-                confirmation_id=args.confirmation,
-                evidence_manifest=evidence_ref,
-                rationale="Atomically finalize the route and complete the Plan.",
-            )
-            finalized_atomically = True
-            validation_errors = validate_frontmatter(
-                doc.frontmatter,
-                reject_blocking_artifacts=True,
-            )
-        else:
-            validation_errors = validate_plan(root)
-        readiness = closeout_readiness(doc.frontmatter, report, validation_errors)
-        if not readiness["ready"]:
-            raise WorkctlError(
-                f"CLOSEOUT_BLOCKED: {'; '.join(str(item) for item in readiness['blockers'])}"
-            )
-        if not finalized_atomically:
-            doc.frontmatter["status"] = "complete"
-            if evidence_ref is not None and evidence_sha256 is not None:
-                doc.frontmatter["completion_evidence"] = {
-                    "ref": evidence_ref,
-                    "sha256": evidence_sha256,
-                    "completed_at": utc_now(),
-                }
-            bump_revision(
-                doc.frontmatter,
-                evidence_manifest=evidence_ref,
-                rationale="Complete the Plan after evidence-bound closeout.",
-            )
-        if atomic_intake_history is not None:
-            prior_records, refreshed_record = atomic_intake_history
-            plan_id = str(doc.frontmatter["plan_id"])
-            for prior in prior_records:
-                persist_intake_history_record(root, plan_id, prior)
-            persist_intake_history_record(root, plan_id, refreshed_record)
-        require_valid_candidate(doc)
-        write_atomic(doc.path, dump_plan(doc))
-        print(f"PLAN_COMPLETED revision={doc.frontmatter['revision']}")
+    _closeout_call(module_kernel_closeout.cmd_plan_complete, args)
 
 
 def confirmation_module_call(name: str) -> Any:
@@ -20755,9 +19857,9 @@ def validate_rollover_journal(
             expected_unsigned_frontmatter,
             prepared_doc.body,
         )
-        unsigned_contract_bytes_match = sha256_bytes(
-            dump_plan(expected_unsigned_doc).encode()
-        ) == target_contract_sha256
+        unsigned_contract_bytes_match = (
+            sha256_bytes(dump_plan(expected_unsigned_doc).encode()) == target_contract_sha256
+        )
         legacy_unsigned_semantics_match = (
             confirmation_payload_version == 1
             and unsigned_frontmatter == expected_unsigned_frontmatter
@@ -21010,837 +20112,11 @@ def cmd_plan_reconcile_recover(args: argparse.Namespace) -> None:
 
 def add_current_intake_args(parser: argparse.ArgumentParser) -> None:
     """Add the shared trusted-turn advancement arguments."""
-    parser.add_argument("--turn-receipt-sha256")
-    parser.add_argument("--expected-intake-sha256")
+    module_kernel_cli.add_current_intake_args(parser)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="workctl")
-    parser.add_argument(
-        "--receipt-sha256",
-        help="SHA256 of the exact current SessionStart READY receipt.",
-    )
-    sub = parser.add_subparsers(dest="domain", required=True)
-
-    help_command = sub.add_parser("help")
-    help_command.add_argument(
-        "workflow",
-        nargs="?",
-        choices=[
-            "plan",
-            "task",
-            "evidence",
-            "action",
-            "migrate",
-            "migration",
-            "goal",
-            "gate",
-            "truth",
-            "review",
-            "risk",
-            "worktree",
-            "doctor",
-        ],
-    )
-    help_command.set_defaults(func=cmd_workflow_help)
-
-    doctor = sub.add_parser("doctor")
-    doctor.add_argument("--older-than-hours", type=int, default=24)
-    doctor.add_argument("--clean-stale-transactions", action="store_true")
-    doctor.set_defaults(func=cmd_doctor)
-
-    goal_command = sub.add_parser("goal")
-    goal_sub = goal_command.add_subparsers(dest="goal_action", required=True)
-    goal_init = goal_sub.add_parser("init")
-    goal_init.add_argument("--plan-id")
-    goal_init.add_argument("--title")
-    goal_init_source = goal_init.add_mutually_exclusive_group(required=True)
-    goal_init_source.add_argument("--stdin", action="store_true")
-    goal_init_source.add_argument("--from-file")
-    goal_init.add_argument("--mode", choices=["autonomous", "strict"], default="autonomous")
-    goal_init.set_defaults(func=cmd_goal_init)
-    goal_show = goal_sub.add_parser("show")
-    goal_show.set_defaults(func=cmd_goal_show)
-    goal_revise = goal_sub.add_parser("revise")
-    goal_revise.add_argument("--manifest", required=True)
-    goal_revise.set_defaults(func=cmd_plan_contract_revise)
-    goal_close = goal_sub.add_parser("close")
-    goal_close.add_argument("--expected-revision", type=int)
-    goal_close.add_argument("--expected-state-sequence", type=int)
-    goal_close.add_argument("--evidence-manifest")
-    goal_close.add_argument("--finalize-route", action="store_true")
-    goal_close.add_argument("--confirmation")
-    add_current_intake_args(goal_close)
-    goal_close.set_defaults(func=cmd_plan_complete)
-
-    gate_command = sub.add_parser("gate")
-    gate_sub = gate_command.add_subparsers(dest="gate_action", required=True)
-    gate_list = gate_sub.add_parser("list")
-    gate_list.set_defaults(func=cmd_gate_list)
-    gate_check = gate_sub.add_parser("check")
-    gate_check.add_argument("--gate-id", required=True)
-    gate_check.set_defaults(func=cmd_gate_check)
-    gate_open = gate_sub.add_parser("open")
-    gate_open.add_argument("--confirmation-id", required=True)
-    gate_open.add_argument("--description", required=True)
-    gate_open.add_argument("--status", default="pending")
-    gate_open.add_argument("--ref")
-    gate_open.add_argument("--intervention-kind", choices=sorted(INTERVENTION_KINDS), required=True)
-    gate_open.add_argument("--blocks", action="append", required=True)
-    gate_open.add_argument("--basis-ref", required=True)
-    gate_open.add_argument("--basis-sha256")
-    gate_open.add_argument("--action-kind", choices=sorted(HIGH_IMPACT_ACTION_KINDS))
-    gate_open.add_argument("--expected-revision", type=int, required=True)
-    gate_open.set_defaults(func=cmd_plan_confirmation_add)
-    for gate_action, decision in (("satisfy", "accepted"), ("waive", "declined")):
-        gate_decide = gate_sub.add_parser(gate_action)
-        gate_decide.add_argument("--confirmation-id", required=True)
-        gate_decide.add_argument("--ref", required=True)
-        gate_decide.add_argument("--evidence-sha256")
-        gate_decide.add_argument("--expected-revision", type=int, required=True)
-        add_current_intake_args(gate_decide)
-        gate_decide.set_defaults(
-            func=cmd_gate_satisfy if decision == "accepted" else cmd_gate_waive
-        )
-
-    truth_command = sub.add_parser("truth")
-    truth_sub = truth_command.add_subparsers(dest="truth_action", required=True)
-    truth_list = truth_sub.add_parser("list")
-    truth_list.set_defaults(func=cmd_truth_list)
-    truth_conflicts = truth_sub.add_parser("conflicts")
-    truth_conflicts.set_defaults(func=cmd_truth_conflicts)
-    for truth_action in ("add", "resolve"):
-        truth_edit = truth_sub.add_parser(truth_action)
-        truth_edit.add_argument("--manifest", required=True)
-        truth_edit.set_defaults(func=cmd_plan_contract_revise)
-
-    review_command = sub.add_parser("review")
-    review_sub = review_command.add_subparsers(dest="review_action", required=True)
-    review_request = review_sub.add_parser("request")
-    review_request.set_defaults(func=cmd_review_request)
-    review_status = review_sub.add_parser("status")
-    review_status.set_defaults(func=cmd_review_status)
-    review_acquisition = review_sub.add_parser("acquisition")
-    review_acquisition_sub = review_acquisition.add_subparsers(
-        dest="review_acquisition_action",
-        required=True,
-    )
-
-    def add_review_acquisition_scope_args(parser: argparse.ArgumentParser) -> None:
-        parser.add_argument("--target-ref", required=True)
-        parser.add_argument("--mechanism", required=True)
-        parser.add_argument("--review-input-sha256", required=True)
-
-    review_acquisition_check = review_acquisition_sub.add_parser("check")
-    add_review_acquisition_scope_args(review_acquisition_check)
-    review_acquisition_check.set_defaults(func=cmd_review_acquisition_check)
-    review_acquisition_status = review_acquisition_sub.add_parser("status")
-    review_acquisition_status.add_argument("--target-ref")
-    review_acquisition_status.add_argument("--mechanism")
-    review_acquisition_status.set_defaults(func=cmd_review_acquisition_status)
-    review_acquisition_record = review_acquisition_sub.add_parser("record-failure")
-    add_review_acquisition_scope_args(review_acquisition_record)
-    review_acquisition_record.add_argument("--attempt-ref", required=True)
-    review_acquisition_record.add_argument("--exit-code", type=int, required=True)
-    review_acquisition_record.add_argument(
-        "--failure-class",
-        choices=["auto", *sorted(REVIEWER_FAILURE_CLASSES)],
-        default="auto",
-    )
-    review_acquisition_record.add_argument("--summary")
-    review_acquisition_record.add_argument("--failure-stdin", action="store_true")
-    review_acquisition_record.add_argument("--failure-from-file")
-    review_acquisition_record.add_argument("--cooldown-seconds", type=int, default=900)
-    review_acquisition_record.add_argument("--idempotency-key")
-    review_acquisition_record.add_argument("--dry-run", action="store_true")
-    review_acquisition_record.set_defaults(func=cmd_review_acquisition_record_failure)
-    review_attach = review_sub.add_parser("attach")
-    review_attach.add_argument("--manifest", required=True)
-    review_attach.add_argument("--expected-revision", type=int, required=True)
-    add_current_intake_args(review_attach)
-    review_attach.set_defaults(func=cmd_plan_independent_review_record)
-
-    evidence_command = sub.add_parser("evidence")
-    evidence_sub = evidence_command.add_subparsers(dest="evidence_action", required=True)
-    evidence_capture = evidence_sub.add_parser("capture")
-    evidence_capture.add_argument("--task")
-    evidence_capture.add_argument("--kind", required=True)
-    evidence_capture.add_argument("--summary", required=True)
-    evidence_capture.add_argument("--from-file")
-    evidence_capture.add_argument(
-        "--stdin",
-        action="store_true",
-        help="Read evidence bytes from standard input; stdin is also the default source.",
-    )
-    evidence_capture.add_argument(
-        "--redaction-policy",
-        default="default-secret-patterns-v1",
-    )
-    evidence_capture.add_argument("--idempotency-key")
-    evidence_capture.add_argument("--expected-state-sequence", type=int)
-    evidence_capture.set_defaults(func=cmd_evidence_capture)
-    evidence_record = evidence_sub.add_parser("record")
-    evidence_source = evidence_record.add_mutually_exclusive_group(required=True)
-    evidence_source.add_argument("--manifest")
-    evidence_source.add_argument("--stdin", action="store_true")
-    evidence_record.set_defaults(func=cmd_plan_evidence_record)
-
-    risk = sub.add_parser("risk")
-    risk_sub = risk.add_subparsers(dest="risk_action", required=True)
-    risk_inspect = risk_sub.add_parser("inspect")
-    risk_inspect.add_argument(
-        "--action-kind",
-        choices=sorted(MODEL_RISK_ACTION_KINDS),
-        required=True,
-    )
-    risk_inspect.add_argument("--target-ref", required=True)
-    risk_source = risk_inspect.add_mutually_exclusive_group()
-    risk_source.add_argument("--action-stdin", action="store_true")
-    risk_source.add_argument("--action-from-file")
-    risk_inspect.set_defaults(func=cmd_risk_inspect)
-
-    action_command = sub.add_parser("action")
-    action_sub = action_command.add_subparsers(
-        dest="action_authorization_action",
-        required=True,
-    )
-    action_authorize = action_sub.add_parser("authorize")
-    action_authorize.add_argument(
-        "--action-kind",
-        choices=sorted(HIGH_IMPACT_ACTION_KINDS),
-        required=True,
-    )
-    action_authorize.add_argument("--target-ref", required=True)
-    action_authorize.add_argument("--action-sha256", required=True)
-    action_authorize.add_argument("--confirmation-id", required=True)
-    action_authorize.add_argument("--ref", required=True)
-    action_authorize.add_argument("--turn-receipt-sha256", required=True)
-    action_authorize.add_argument("--ttl-seconds", type=int, default=300)
-    action_authorize.set_defaults(func=cmd_action_authorize)
-    action_consume = action_sub.add_parser("consume")
-    action_consume.add_argument("--authorization-id", required=True)
-    action_consume.add_argument(
-        "--action-kind",
-        choices=sorted(HIGH_IMPACT_ACTION_KINDS),
-        required=True,
-    )
-    action_consume.add_argument("--target-ref", required=True)
-    action_consume.add_argument("--action-sha256", required=True)
-    action_consume.add_argument("--turn-receipt-sha256")
-    action_consume.add_argument("--consumer-ref", required=True)
-    action_consume.set_defaults(func=cmd_action_consume)
-    action_status = action_sub.add_parser("status")
-    action_status.add_argument("--authorization-id", required=True)
-    action_status.set_defaults(func=cmd_action_status)
-    action_lease = action_sub.add_parser("lease")
-    action_lease_sub = action_lease.add_subparsers(dest="action_lease_action", required=True)
-
-    def add_action_lease_scope_args(parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
-            "--action-kind",
-            choices=sorted(HIGH_IMPACT_ACTION_KINDS),
-            required=True,
-        )
-        parser.add_argument("--target-ref", action="append", default=[])
-        parser.add_argument("--target-prefix", action="append", default=[])
-        parser.add_argument(
-            "--action-digest-policy",
-            choices=sorted(ACTION_DIGEST_POLICIES),
-            default="exact-list",
-        )
-        parser.add_argument("--allowed-action-sha256", action="append", default=[])
-        parser.add_argument("--blocks", action="append", default=[])
-        parser.add_argument("--lease-ttl-seconds", type=int, default=3600)
-        parser.add_argument("--authorization-ttl-seconds", type=int, default=300)
-        parser.add_argument("--max-authorizations", type=int, default=10)
-        parser.add_argument(
-            "--freeze-on-review-blocker",
-            action=argparse.BooleanOptionalAction,
-            default=True,
-        )
-        parser.add_argument("--pilot-evidence-ref")
-
-    action_lease_prepare = action_lease_sub.add_parser("prepare")
-    add_action_lease_scope_args(action_lease_prepare)
-    action_lease_prepare.set_defaults(func=cmd_action_lease_prepare)
-    action_lease_issue = action_lease_sub.add_parser("issue")
-    add_action_lease_scope_args(action_lease_issue)
-    action_lease_issue.add_argument("--confirmation-id", required=True)
-    action_lease_issue.add_argument("--basis-sha256", required=True)
-    action_lease_issue.add_argument("--ref", required=True)
-    action_lease_issue.add_argument("--turn-receipt-sha256", required=True)
-    action_lease_issue.set_defaults(func=cmd_action_lease_issue)
-    action_lease_authorize = action_lease_sub.add_parser("authorize")
-    action_lease_authorize.add_argument("--lease-id", required=True)
-    action_lease_authorize.add_argument(
-        "--action-kind",
-        choices=sorted(HIGH_IMPACT_ACTION_KINDS),
-        required=True,
-    )
-    action_lease_authorize.add_argument("--target-ref", required=True)
-    action_lease_authorize.add_argument("--action-sha256", required=True)
-    action_lease_authorize.add_argument("--idempotency-key")
-    action_lease_authorize.add_argument("--ttl-seconds", type=int)
-    action_lease_authorize.set_defaults(func=cmd_action_lease_authorize)
-    action_lease_status = action_lease_sub.add_parser("status")
-    action_lease_status.add_argument("--lease-id", required=True)
-    action_lease_status.set_defaults(func=cmd_action_lease_status)
-    action_lease_revoke = action_lease_sub.add_parser("revoke")
-    action_lease_revoke.add_argument("--lease-id", required=True)
-    action_lease_revoke.add_argument("--ref", required=True)
-    action_lease_revoke.set_defaults(func=cmd_action_lease_revoke)
-
-    migrate = sub.add_parser(
-        "migrate",
-        description=(
-            "Archive outdated active Plans and rebuild the plugin-declared current "
-            "schema without adapting legacy runtime state."
-        ),
-    )
-    migrate_sub = migrate.add_subparsers(dest="migration_action", required=True)
-    migrate_inspect = migrate_sub.add_parser(
-        "inspect",
-        description=(
-            "Read-only refresh boundary plus NON_AUTHORITY legacy_summary for an "
-            "outdated active Plan."
-        ),
-    )
-    migrate_inspect.set_defaults(func=cmd_migrate_inspect)
-    migrate_apply = migrate_sub.add_parser(
-        "apply",
-        description=(
-            "Preview or perform current-schema refresh. Output includes state_reset, "
-            "legacy_state_migrated=false, not_migrated, and legacy_summary."
-        ),
-    )
-    migrate_apply.add_argument(
-        "--confirmation",
-        help="Deprecated compatibility argument; current-schema refresh does not require it.",
-    )
-    migrate_apply.add_argument(
-        "--expected-contract-revision",
-        type=int,
-        help="Required for durable refresh; guards the archived legacy source revision.",
-    )
-    migrate_apply.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview the archive and rebuild boundary without writing project state.",
-    )
-    migrate_apply.set_defaults(func=cmd_migrate_apply)
-    migrate_recover = migrate_sub.add_parser("recover")
-    migrate_recover.add_argument("--migration-id")
-    migrate_recover.set_defaults(func=cmd_migrate_recover)
-    migrate_rollback = migrate_sub.add_parser("rollback-info")
-    migrate_rollback.add_argument("--migration-id")
-    migrate_rollback.set_defaults(func=cmd_migrate_rollback_info)
-
-    intake = sub.add_parser("intake")
-    intake_sub = intake.add_subparsers(dest="intake_action", required=True)
-    intake_status = intake_sub.add_parser("status")
-    intake_status.set_defaults(func=cmd_intake_status)
-    intake_receipt = intake_sub.add_parser("receipt")
-    intake_receipt.add_argument("--turn-receipt-sha256", required=True)
-    intake_receipt.add_argument(
-        "--classification",
-        choices=["no_plan", "plan_controlled"],
-        required=True,
-    )
-    intake_receipt.add_argument(
-        "--decision",
-        choices=["proceed", "explore", "ask"],
-        required=True,
-    )
-    intake_receipt.add_argument("--rationale", required=True)
-    intake_receipt.add_argument("--targets", action="append", required=True)
-    intake_receipt.add_argument("--current-unknown-id")
-    intake_receipt.add_argument("--candidate-plan")
-    intake_receipt.set_defaults(func=cmd_intake_receipt)
-
-    layout = sub.add_parser("layout")
-    layout_sub = layout.add_subparsers(dest="action", required=True)
-    layout_status = layout_sub.add_parser("status")
-    layout_status.set_defaults(func=cmd_layout_status)
-    layout_validate = layout_sub.add_parser("validate")
-    layout_validate.set_defaults(func=cmd_layout_validate)
-    layout_adopt = layout_sub.add_parser("adopt")
-    layout_adopt.add_argument("--expected-manifest-sha256", required=True)
-    layout_adopt.add_argument("--expected-active-plan-id", required=True)
-    layout_adopt.add_argument("--ref", required=True)
-    layout_adopt.set_defaults(func=cmd_layout_adopt)
-    layout_migrate = layout_sub.add_parser("migrate")
-    layout_migrate.set_defaults(func=cmd_layout_migrate)
-    layout_recover = layout_sub.add_parser("recover")
-    layout_recover.set_defaults(func=cmd_layout_recover)
-
-    plan = sub.add_parser("plan")
-    plan_sub = plan.add_subparsers(dest="action", required=True)
-    init = plan_sub.add_parser("init")
-    init.add_argument("--plan-id", required=True)
-    init.add_argument("--title", required=True)
-    init.add_argument("--mode", choices=["autonomous", "strict"], default="autonomous")
-    init.set_defaults(func=cmd_plan_init)
-    create = plan_sub.add_parser("create")
-    create.add_argument("--plan-id", required=True)
-    create.add_argument("--title", required=True)
-    create.add_argument("--mode", choices=["autonomous", "strict"], default="autonomous")
-    create.set_defaults(func=cmd_plan_init)
-    status = plan_sub.add_parser("status")
-    status.add_argument("--expected-intake-sha256")
-    status.add_argument(
-        "--full",
-        action="store_true",
-        help="Include the complete authority, history, and closeout report.",
-    )
-    status.set_defaults(func=cmd_plan_status)
-    show = plan_sub.add_parser("show")
-    show.add_argument("--expected-intake-sha256")
-    show.add_argument("--full", action="store_true")
-    show.set_defaults(func=cmd_plan_status)
-    history = plan_sub.add_parser("history")
-    history_sub = history.add_subparsers(dest="history_action", required=True)
-    history_list = history_sub.add_parser("list")
-    history_list.set_defaults(func=cmd_plan_history)
-    history_show = history_sub.add_parser("show")
-    history_show.add_argument("--plan-id")
-    history_show.add_argument("--path")
-    history_show.set_defaults(func=cmd_plan_history)
-    for queue_action in ("ready", "next", "blocked"):
-        queue = plan_sub.add_parser(queue_action)
-        queue.set_defaults(func=cmd_plan_queue, queue_action=queue_action)
-    reorder = plan_sub.add_parser("reorder")
-    reorder.add_argument("--task-id", required=True)
-    reorder.add_argument("--priority", type=int, required=True)
-    reorder.add_argument("--expected-state-sequence", type=int, required=True)
-    reorder.set_defaults(func=cmd_task_reprioritize)
-    plan_intake = plan_sub.add_parser("intake")
-    plan_intake_sub = plan_intake.add_subparsers(
-        dest="plan_intake_action",
-        required=True,
-    )
-    plan_intake_record = plan_intake_sub.add_parser("record")
-    plan_intake_record.add_argument("--manifest", required=True)
-    plan_intake_record.add_argument("--expected-revision", type=int, required=True)
-    plan_intake_record.set_defaults(func=cmd_plan_intake_record)
-    admit = plan_sub.add_parser("admit")
-    admit_sub = admit.add_subparsers(dest="admit_action", required=True)
-    admit_apply = admit_sub.add_parser("apply")
-    admit_apply.add_argument("--manifest", required=True)
-    admit_apply.set_defaults(func=cmd_plan_admit_apply)
-    admit_recover = admit_sub.add_parser("recover")
-    admit_recover.add_argument("--transaction-id")
-    admit_recover.set_defaults(func=cmd_plan_admit_recover)
-    authority = plan_sub.add_parser("authority")
-    authority_sub = authority.add_subparsers(dest="authority_action", required=True)
-    authority_inspect = authority_sub.add_parser("inspect")
-    authority_inspect.add_argument(
-        "--candidate",
-        action="append",
-        default=[],
-        help="Agent semantic input as PATH=CLASSIFICATION.",
-    )
-    authority_inspect.set_defaults(func=cmd_plan_authority_inspect)
-    authority_check = authority_sub.add_parser("check")
-    authority_check.add_argument(
-        "--candidate",
-        action="append",
-        default=[],
-        help="Agent semantic input as PATH=CLASSIFICATION.",
-    )
-    authority_check.set_defaults(func=cmd_plan_authority_check)
-    schema_validate = plan_sub.add_parser("schema-validate")
-    schema_validate.add_argument("--plan")
-    schema_validate.set_defaults(func=cmd_plan_schema_validate)
-    validate = plan_sub.add_parser("validate")
-    validate.add_argument("--evidence-manifest")
-    validate.set_defaults(func=cmd_plan_validate)
-    adapt = plan_sub.add_parser("adapt")
-    adapt_source = adapt.add_mutually_exclusive_group(required=True)
-    adapt_source.add_argument("--manifest")
-    adapt_source.add_argument("--intent-stdin", action="store_true")
-    adapt_source.add_argument("--intent-from-file")
-    adapt.add_argument("--summary")
-    adapt.add_argument("--idempotency-key")
-    adapt.add_argument(
-        "--expected-revision",
-        type=int,
-        help="Required for schema-v4 high-level intent adaptation.",
-    )
-    add_current_intake_args(adapt)
-    adapt.set_defaults(func=cmd_plan_adapt)
-    contract = plan_sub.add_parser("contract")
-    contract_sub = contract.add_subparsers(dest="contract_action", required=True)
-    contract_revise = contract_sub.add_parser("revise")
-    contract_revise.add_argument("--manifest", required=True)
-    contract_revise.set_defaults(func=cmd_plan_contract_revise)
-    contract_upgrade = contract_sub.add_parser(
-        "upgrade",
-        description=(
-            "Historical schema-v3-to-v4 recovery/audit surface. New work uses "
-            "`migrate apply` current-schema refresh."
-        ),
-    )
-    contract_upgrade_sub = contract_upgrade.add_subparsers(
-        dest="contract_upgrade_action",
-        required=True,
-    )
-    contract_upgrade_status = contract_upgrade_sub.add_parser(
-        "status",
-        description=(
-            "Historical schema-v3-to-v4 upgrade status. Current active Plans "
-            "older than the plugin-declared schema use `migrate inspect`."
-        ),
-    )
-    contract_upgrade_status.set_defaults(func=cmd_plan_contract_upgrade_status)
-    contract_upgrade_apply = contract_upgrade_sub.add_parser(
-        "apply",
-        description=(
-            "Historical schema-v3-to-v4 upgrade transaction. New work must "
-            "archive and rebuild through `migrate apply` instead."
-        ),
-    )
-    contract_upgrade_apply.add_argument("--manifest", required=True)
-    contract_upgrade_apply.set_defaults(func=cmd_plan_contract_upgrade_apply)
-    contract_upgrade_recover = contract_upgrade_sub.add_parser(
-        "recover",
-        description=(
-            "Recover only an already staged historical schema-v3-to-v4 upgrade "
-            "journal."
-        ),
-    )
-    contract_upgrade_recover.add_argument("--transaction-id")
-    contract_upgrade_recover.set_defaults(func=cmd_plan_contract_upgrade_recover)
-    structural_rebase = plan_sub.add_parser("structural-rebase")
-    structural_rebase_sub = structural_rebase.add_subparsers(
-        dest="structural_rebase_action",
-        required=True,
-    )
-    structural_rebase_apply = structural_rebase_sub.add_parser("apply")
-    structural_rebase_apply.add_argument("--manifest", required=True)
-    structural_rebase_apply.add_argument("--dry-run", action="store_true")
-    structural_rebase_apply.set_defaults(func=cmd_plan_structural_rebase_apply)
-    structural_rebase_recover = structural_rebase_sub.add_parser("recover")
-    structural_rebase_recover.add_argument("--transaction-id", required=True)
-    structural_rebase_recover.set_defaults(func=cmd_plan_structural_rebase_recover)
-    unknown = plan_sub.add_parser("unknown")
-    unknown_sub = unknown.add_subparsers(dest="unknown_action", required=True)
-    unknown_add = unknown_sub.add_parser("add")
-    unknown_add.add_argument("--unknown-id", required=True)
-    unknown_add.add_argument("--question", required=True)
-    unknown_add.add_argument("--owner", choices=sorted(UNKNOWN_OWNERS), required=True)
-    unknown_add.add_argument("--impact", choices=sorted(UNKNOWN_IMPACTS), required=True)
-    unknown_add.add_argument("--blocks", action="append", default=[])
-    unknown_add.add_argument("--expected-evidence", required=True)
-    unknown_add.add_argument("--expected-revision", type=int, required=True)
-    unknown_add.set_defaults(func=cmd_plan_unknown_add)
-    unknown_classify = unknown_sub.add_parser("classify")
-    unknown_classify.add_argument("--manifest", required=True)
-    unknown_classify.add_argument("--expected-revision", type=int, required=True)
-    unknown_classify.set_defaults(func=cmd_plan_unknown_classify)
-    unknown_resolve = unknown_sub.add_parser("resolve")
-    unknown_resolve.add_argument("--unknown-id", required=True)
-    unknown_resolve.add_argument("--resolution", required=True)
-    unknown_resolve.add_argument("--evidence-manifest", required=True)
-    unknown_resolve.add_argument("--expected-revision", type=int, required=True)
-    unknown_resolve.set_defaults(func=cmd_plan_unknown_resolve)
-    evidence = plan_sub.add_parser("evidence")
-    evidence_sub = evidence.add_subparsers(dest="evidence_action", required=True)
-    evidence_record = evidence_sub.add_parser("record")
-    evidence_source = evidence_record.add_mutually_exclusive_group(required=True)
-    evidence_source.add_argument("--manifest")
-    evidence_source.add_argument(
-        "--stdin",
-        action="store_true",
-        help="Read the bounded evidence object from standard input.",
-    )
-    evidence_record.set_defaults(func=cmd_plan_evidence_record)
-    reconcile = plan_sub.add_parser("reconcile")
-    reconcile_sub = reconcile.add_subparsers(dest="reconcile_action", required=True)
-    reconcile_apply = reconcile_sub.add_parser("apply")
-    reconcile_apply.add_argument("--manifest", required=True)
-    reconcile_apply.add_argument("--dry-run", action="store_true")
-    reconcile_apply.set_defaults(func=cmd_plan_reconcile_apply)
-    reconcile_recover = reconcile_sub.add_parser("recover")
-    reconcile_recover.add_argument("--migration-id")
-    reconcile_recover.set_defaults(func=cmd_plan_reconcile_recover)
-    reconcile_upgrade = plan_sub.add_parser(
-        "reconcile-upgrade",
-        description=(
-            "Historical composed schema-v3 reconciliation plus schema-v4 upgrade "
-            "surface. New work uses `migrate apply` current-schema refresh."
-        ),
-    )
-    reconcile_upgrade_sub = reconcile_upgrade.add_subparsers(
-        dest="reconcile_upgrade_action",
-        required=True,
-    )
-    reconcile_upgrade_apply = reconcile_upgrade_sub.add_parser(
-        "apply",
-        description=(
-            "Historical composed schema-v3/v4 transaction. Current active legacy "
-            "Plans are archived and rebuilt through `migrate apply`."
-        ),
-    )
-    reconcile_upgrade_apply.add_argument("--manifest", required=True)
-    reconcile_upgrade_apply.set_defaults(func=cmd_plan_reconcile_upgrade_apply)
-    reconcile_upgrade_recover = reconcile_upgrade_sub.add_parser(
-        "recover",
-        description=(
-            "Recover only an already staged historical reconcile-upgrade "
-            "workflow."
-        ),
-    )
-    reconcile_upgrade_recover.add_argument("--workflow-id")
-    reconcile_upgrade_recover.set_defaults(func=cmd_plan_reconcile_upgrade_recover)
-    rollover = plan_sub.add_parser("rollover")
-    rollover_sub = rollover.add_subparsers(dest="rollover_action", required=True)
-    rollover_apply = rollover_sub.add_parser("apply")
-    rollover_apply.add_argument("--manifest", required=True)
-    rollover_apply.add_argument("--dry-run", action="store_true")
-    rollover_apply.set_defaults(func=cmd_plan_rollover_apply)
-    rollover_recover = rollover_sub.add_parser("recover")
-    rollover_recover.add_argument("--rollover-id", required=True)
-    rollover_recover.set_defaults(func=cmd_plan_rollover_recover)
-    retire = plan_sub.add_parser("retire")
-    retire_sub = retire.add_subparsers(dest="retire_action", required=True)
-    retire_apply = retire_sub.add_parser("apply")
-    retire_apply.add_argument("--manifest", required=True)
-    retire_apply.add_argument("--dry-run", action="store_true")
-    retire_apply.set_defaults(func=cmd_plan_retire_apply)
-    retire_recover = retire_sub.add_parser("recover")
-    retire_recover.add_argument("--retirement-id", required=True)
-    retire_recover.set_defaults(func=cmd_plan_retire_recover)
-    closeout_check = plan_sub.add_parser("closeout-check")
-    closeout_check.add_argument("--evidence-manifest")
-    closeout_check.set_defaults(func=cmd_plan_closeout_check)
-    complete = plan_sub.add_parser("complete")
-    complete.add_argument("--expected-revision", type=int)
-    complete.add_argument("--expected-state-sequence", type=int)
-    complete.add_argument("--evidence-manifest")
-    complete.add_argument("--finalize-route", action="store_true")
-    complete.add_argument("--confirmation")
-    add_current_intake_args(complete)
-    complete.set_defaults(func=cmd_plan_complete)
-    revise = plan_sub.add_parser("revise")
-    revise.add_argument("--expected-revision", type=int, required=True)
-    revise.add_argument("--confirmation")
-    revise.add_argument("--status")
-    revise.add_argument("--mode", choices=["autonomous", "strict"])
-    revise.add_argument("--include", action="append", default=[])
-    revise.add_argument("--remove-exclude", action="append", default=[])
-    revise.add_argument("--patch-file")
-    revise.add_argument("--body-file")
-    revise.set_defaults(func=cmd_plan_revise)
-    edit = plan_sub.add_parser("edit")
-    edit.add_argument("--expected-revision", type=int, required=True)
-    edit.add_argument("--confirmation")
-    edit.add_argument("--status")
-    edit.add_argument("--mode", choices=["autonomous", "strict"])
-    edit.add_argument("--include", action="append", default=[])
-    edit.add_argument("--remove-exclude", action="append", default=[])
-    edit.add_argument("--patch-file")
-    edit.add_argument("--body-file")
-    edit.set_defaults(func=cmd_plan_revise)
-    confirm = plan_sub.add_parser("confirm")
-    confirm.add_argument("--confirmation-id", required=True)
-    confirm.add_argument("--decision", choices=["accepted", "declined"], default="accepted")
-    confirm.add_argument("--ref", required=True)
-    confirm.add_argument("--evidence-sha256")
-    confirm.add_argument("--expected-revision", type=int, required=True)
-    add_current_intake_args(confirm)
-    confirm.set_defaults(func=cmd_plan_confirm)
-    confirmation = plan_sub.add_parser("confirmation")
-    confirmation_sub = confirmation.add_subparsers(
-        dest="confirmation_action",
-        required=True,
-    )
-    confirmation_add = confirmation_sub.add_parser("add")
-    confirmation_add.add_argument("--confirmation-id", required=True)
-    confirmation_add.add_argument("--description", required=True)
-    confirmation_add.add_argument(
-        "--status",
-        default="pending",
-    )
-    confirmation_add.add_argument("--ref")
-    confirmation_add.add_argument(
-        "--intervention-kind",
-        choices=sorted(INTERVENTION_KINDS),
-        required=True,
-    )
-    confirmation_add.add_argument("--blocks", action="append", required=True)
-    confirmation_add.add_argument("--basis-ref", required=True)
-    confirmation_add.add_argument("--basis-sha256")
-    confirmation_add.add_argument(
-        "--action-kind",
-        choices=sorted(HIGH_IMPACT_ACTION_KINDS),
-    )
-    confirmation_add.add_argument("--expected-revision", type=int, required=True)
-    confirmation_add.set_defaults(func=cmd_plan_confirmation_add)
-    confirmation_classify = confirmation_sub.add_parser("classify")
-    confirmation_classify.add_argument("--manifest", required=True)
-    confirmation_classify.add_argument("--expected-revision", type=int, required=True)
-    confirmation_classify.set_defaults(func=cmd_plan_confirmation_classify)
-    independent_review = plan_sub.add_parser("independent-review")
-    independent_review_sub = independent_review.add_subparsers(
-        dest="independent_review_action",
-        required=True,
-    )
-    independent_review_record = independent_review_sub.add_parser("record")
-    independent_review_record.add_argument("--manifest", required=True)
-    independent_review_record.add_argument("--expected-revision", type=int, required=True)
-    add_current_intake_args(independent_review_record)
-    independent_review_record.set_defaults(func=cmd_plan_independent_review_record)
-    verify_entry = plan_sub.add_parser("verify-entry")
-    verify_entry.add_argument("--field", choices=["obligations", "validations"], required=True)
-    verify_entry.add_argument("--entry-id", required=True)
-    verify_entry.add_argument("--confirmation", required=True)
-    verify_entry.add_argument("--evidence-manifest")
-    verify_entry.add_argument("--evidence-ref")
-    verify_entry.add_argument("--evidence-sha256")
-    verify_entry.add_argument("--expected-revision", type=int, required=True)
-    add_current_intake_args(verify_entry)
-    verify_entry.set_defaults(func=cmd_plan_verify_entry)
-    artifact_state = plan_sub.add_parser("artifact-state")
-    artifact_state.add_argument("--artifact-id", required=True)
-    artifact_state.add_argument(
-        "--state",
-        choices=["suspect", "quarantined", "rollback-pending"],
-        required=True,
-    )
-    artifact_state.add_argument("--confirmation")
-    artifact_state.add_argument("--evidence-manifest")
-    artifact_state.add_argument("--evidence-ref")
-    artifact_state.add_argument("--evidence-sha256")
-    artifact_state.add_argument("--expected-revision", type=int, required=True)
-    artifact_state.set_defaults(func=cmd_plan_artifact_state)
-    finalize_artifact = plan_sub.add_parser("finalize-artifact")
-    finalize_artifact.add_argument("--artifact-id", required=True)
-    finalize_artifact.add_argument("--task-id", required=True)
-    finalize_artifact.add_argument("--confirmation", required=True)
-    finalize_artifact.add_argument("--evidence-manifest")
-    finalize_artifact.add_argument("--evidence-ref")
-    finalize_artifact.add_argument("--evidence-sha256")
-    finalize_artifact.add_argument("--expected-revision", type=int, required=True)
-    add_current_intake_args(finalize_artifact)
-    finalize_artifact.set_defaults(func=cmd_plan_finalize_artifact)
-    delivery_complete = plan_sub.add_parser("delivery-complete")
-    delivery_complete.add_argument("--confirmation", required=True)
-    delivery_complete.add_argument("--evidence-manifest")
-    delivery_complete.add_argument("--evidence-ref")
-    delivery_complete.add_argument("--evidence-sha256")
-    delivery_complete.add_argument("--expected-revision", type=int, required=True)
-    add_current_intake_args(delivery_complete)
-    delivery_complete.set_defaults(func=cmd_plan_delivery_complete)
-    activation_repair = plan_sub.add_parser("activation-repair")
-    activation_repair.add_argument("--task-id", required=True)
-    activation_repair.add_argument("--target-ref", required=True)
-    activation_repair.add_argument("--confirmation", required=True)
-    activation_repair.add_argument("--expected-revision", type=int, required=True)
-    add_current_intake_args(activation_repair)
-    activation_repair.set_defaults(func=cmd_plan_activation_repair)
-    activation_promote = plan_sub.add_parser("activation-promote")
-    activation_promote.add_argument(
-        "--state",
-        choices=["in_progress", "active"],
-        required=True,
-    )
-    activation_promote.add_argument("--target-ref")
-    activation_promote.add_argument("--confirmation", required=True)
-    activation_promote.add_argument("--evidence-manifest")
-    activation_promote.add_argument("--evidence-ref")
-    activation_promote.add_argument("--evidence-sha256")
-    activation_promote.add_argument("--expected-revision", type=int, required=True)
-    add_current_intake_args(activation_promote)
-    activation_promote.set_defaults(func=cmd_plan_activation_promote)
-
-    task = sub.add_parser("task")
-    task_sub = task.add_subparsers(dest="action", required=True)
-    for action, status_value in {
-        "start": "in_progress",
-        "block": "blocked",
-        "unblock": "in_progress",
-        "verify": "verified",
-        "skip": "skipped",
-    }.items():
-        item = task_sub.add_parser(action)
-        item.add_argument("--task-id", required=True)
-        item.add_argument("--expected-revision", type=int)
-        item.add_argument("--expected-state-sequence", type=int)
-        item.add_argument("--note")
-        if action == "verify":
-            task_evidence = item.add_mutually_exclusive_group()
-            task_evidence.add_argument("--evidence-manifest")
-            task_evidence.add_argument(
-                "--evidence-stdin",
-                action="store_true",
-                help="Record bounded evidence from standard input atomically with verification.",
-            )
-        if action != "block":
-            add_current_intake_args(item)
-        else:
-            item.set_defaults(
-                turn_receipt_sha256=None,
-                expected_intake_sha256=None,
-            )
-        item.set_defaults(func=lambda args, value=status_value: set_task_status(args, value))
-    done = task_sub.add_parser("done")
-    done.add_argument("--task-id", required=True)
-    done.add_argument("--expected-revision", type=int)
-    done.add_argument("--expected-state-sequence", type=int)
-    done.add_argument("--note")
-    done.add_argument("--kind", default="task-done")
-    done.add_argument("--summary")
-    done.add_argument("--idempotency-key")
-    done_source = done.add_mutually_exclusive_group(required=True)
-    done_source.add_argument("--evidence-stdin", action="store_true")
-    done_source.add_argument("--evidence-from-file", dest="evidence_from_file")
-    done_source.add_argument("--from-file", dest="evidence_from_file")
-    add_current_intake_args(done)
-    done.set_defaults(func=cmd_task_done)
-    reprioritize = task_sub.add_parser("reprioritize")
-    reprioritize.add_argument("--task-id", required=True)
-    reprioritize.add_argument("--priority", type=int, required=True)
-    reprioritize.add_argument("--expected-state-sequence", type=int, required=True)
-    reprioritize.set_defaults(func=cmd_task_reprioritize)
-
-    worktree = sub.add_parser("worktree")
-    worktree_sub = worktree.add_subparsers(dest="worktree_action", required=True)
-    worktree_begin = worktree_sub.add_parser("begin")
-    worktree_begin.add_argument("--worktree-id", required=True)
-    worktree_begin.add_argument("--path", required=True)
-    worktree_begin.add_argument("--branch", required=True)
-    worktree_begin.add_argument("--summary", required=True)
-    worktree_begin.set_defaults(func=cmd_worktree_begin)
-    worktree_record = worktree_sub.add_parser("record")
-    worktree_record.add_argument("--worktree-id", required=True)
-    worktree_record.add_argument("--event", required=True)
-    worktree_record.add_argument("--summary", required=True)
-    worktree_record.add_argument("--evidence-ref")
-    worktree_record.add_argument("--evidence-sha256")
-    worktree_record.set_defaults(func=cmd_worktree_record)
-    worktree_close = worktree_sub.add_parser("close")
-    worktree_close.add_argument("--worktree-id", required=True)
-    worktree_close.add_argument("--summary", required=True)
-    worktree_close.add_argument("--evidence-ref")
-    worktree_close.add_argument("--evidence-sha256")
-    worktree_close.set_defaults(func=cmd_worktree_close)
-    worktree_merge = worktree_sub.add_parser("merge")
-    worktree_merge_sub = worktree_merge.add_subparsers(
-        dest="worktree_merge_action",
-        required=True,
-    )
-    worktree_merge_inspect = worktree_merge_sub.add_parser("inspect")
-    worktree_merge_inspect.add_argument("--worktree-id", required=True)
-    worktree_merge_inspect.set_defaults(func=cmd_worktree_merge_inspect)
-
-    log = sub.add_parser("log")
-    log_sub = log.add_subparsers(dest="action", required=True)
-    append = log_sub.add_parser("append")
-    append.add_argument("--kind", required=True)
-    append.add_argument("--message", required=True)
-    append.add_argument("--expected-revision", type=int, required=True)
-    append.set_defaults(func=cmd_log_append)
-    return parser
+    return module_kernel_cli.build_parser(globals())
 
 
 def command_mutates_state(args: argparse.Namespace) -> bool:
