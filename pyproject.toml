@@ -19,6 +19,7 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = ["plugins/work-governance/scripts/vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
@@ -27,8 +28,6 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 python_version = "3.12"
 strict = true
 files = [
-  "plugins/work-governance/hooks/session_start.py",
-  "plugins/work-governance/hooks/user_prompt_submit.py",
   "plugins/work-governance/scripts/workctl.py",
   "tests",
 ]

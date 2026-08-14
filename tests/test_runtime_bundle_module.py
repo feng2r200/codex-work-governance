@@ -46,21 +46,43 @@ def test_runtime_bundle_manifest_payload_preserves_optional_module_files() -> No
 
 
 def test_validated_runtime_bundle_module_files_returns_typed_entries(tmp_path: Path) -> None:
-    """Module-file validation checks shape, location, and content digest."""
+    """Runtime-file validation checks shape, location, and content digest."""
     bundle = tmp_path / "bundle"
     module_path = bundle / "workctl_modules" / "kernel" / "controller.py"
+    vendor_path = bundle / "vendor" / "yaml" / "__init__.py"
+    license_path = bundle / "vendor" / "pyyaml-6.0.3.dist-info" / "licenses" / "LICENSE"
     module_path.parent.mkdir(parents=True)
+    vendor_path.parent.mkdir(parents=True)
+    license_path.parent.mkdir(parents=True)
     module_path.write_text("VALUE = 1\n", encoding="utf-8")
-    digest = filesystem_module.sha256_file(module_path)
+    vendor_path.write_text("__version__ = '6.0.3'\n", encoding="utf-8")
+    license_path.write_text("license\n", encoding="utf-8")
+    module_digest = filesystem_module.sha256_file(module_path)
+    vendor_digest = filesystem_module.sha256_file(vendor_path)
+    license_digest = filesystem_module.sha256_file(license_path)
     manifest = {
-        "module_files": [{"path": "workctl_modules/kernel/controller.py", "sha256": digest}]
+        "module_files": [
+            {"path": "workctl_modules/kernel/controller.py", "sha256": module_digest},
+            {"path": "vendor/yaml/__init__.py", "sha256": vendor_digest},
+            {
+                "path": "vendor/pyyaml-6.0.3.dist-info/licenses/LICENSE",
+                "sha256": license_digest,
+            },
+        ]
     }
 
     assert runtime_bundle_module.validated_runtime_bundle_module_files(
         bundle,
         manifest,
         sha256_pattern=SHA256_RE,
-    ) == [{"path": "workctl_modules/kernel/controller.py", "sha256": digest}]
+    ) == [
+        {"path": "workctl_modules/kernel/controller.py", "sha256": module_digest},
+        {"path": "vendor/yaml/__init__.py", "sha256": vendor_digest},
+        {
+            "path": "vendor/pyyaml-6.0.3.dist-info/licenses/LICENSE",
+            "sha256": license_digest,
+        },
+    ]
 
 
 def test_validated_runtime_bundle_module_files_rejects_invalid_entries(
@@ -76,6 +98,22 @@ def test_validated_runtime_bundle_module_files_rejects_invalid_entries(
         runtime_bundle_module.validated_runtime_bundle_module_files(
             bundle,
             {"module_files": "bad"},
+            sha256_pattern=SHA256_RE,
+        )
+    vendor_so = bundle / "vendor" / "yaml" / "_yaml.cpython-312-darwin.so"
+    vendor_so.parent.mkdir(parents=True, exist_ok=True)
+    vendor_so.write_text("binary\n", encoding="utf-8")
+    with pytest.raises(RuntimeBundleError, match="BOOTSTRAP_RUNTIME_BUNDLE_INVALID"):
+        runtime_bundle_module.validated_runtime_bundle_module_files(
+            bundle,
+            {
+                "module_files": [
+                    {
+                        "path": "vendor/yaml/_yaml.cpython-312-darwin.so",
+                        "sha256": filesystem_module.sha256_file(vendor_so),
+                    }
+                ]
+            },
             sha256_pattern=SHA256_RE,
         )
     with pytest.raises(RuntimeBundleError, match="BOOTSTRAP_RUNTIME_BUNDLE_INVALID"):

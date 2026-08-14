@@ -210,6 +210,13 @@ high-frequency workflow surface is available through
 command and option reference is [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md);
 regenerate it after changing `build_parser()`:
 
+Runtime Python dependencies are solved by the Plugin package, not by the target
+project. The installed Plugin carries `scripts/vendor/yaml` from
+`pyyaml==6.0.3`, and `workctl.py` prepends `scripts/vendor` to `sys.path`
+before loading the controller. Missing or externally resolved PyYAML is treated
+as `WORKCTL_PACKAGED_DEPENDENCY_MISSING`; `workctl` does not install packages,
+read PEP 723 metadata, or create `.work-governance/cache/uv` at runtime.
+
 ```sh
 .venv/bin/python plugins/work-governance/scripts/generate_cli_reference.py
 .venv/bin/python plugins/work-governance/scripts/generate_cli_reference.py --check
