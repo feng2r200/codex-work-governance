@@ -59,6 +59,7 @@ from workctl_modules import dump_scheduler_state as MODULE_DUMP_SCHEDULER_STATE
 from workctl_modules import evidence as module_evidence
 from workctl_modules import load_scheduler_state as MODULE_LOAD_SCHEDULER_STATE
 from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
+from workctl_modules import plan_sources as module_plan_sources
 from workctl_modules import ready_task_targets as MODULE_READY_TASK_TARGETS
 from workctl_modules import scheduler_state_path as MODULE_SCHEDULER_STATE_PATH
 from workctl_modules import yaml_compat as yaml
@@ -2722,81 +2723,21 @@ def require_layout_ready(root: Path) -> None:
 
 def optional_plan_metadata(path: Path) -> tuple[str | None, int | None, str | None]:
     """Read identifying Plan metadata without turning discovery into validation."""
-    try:
-        doc = load_plan(path)
-    except (OSError, WorkctlError, yaml.YAMLError):
-        return None, None, None
-    plan_id = doc.frontmatter.get("plan_id")
-    revision = doc.frontmatter.get("revision")
-    status = doc.frontmatter.get("status")
-    return (
-        plan_id if isinstance(plan_id, str) else None,
-        revision if type(revision) is int else None,
-        status if isinstance(status, str) else None,
-    )
+    return module_plan_sources.optional_plan_metadata(path)
 
 
 def candidate_signals(path: Path, *, active: bool, rules_confirmed: bool) -> list[str]:
     """Collect open-text signals used only for candidate classification."""
-    text = path.read_text(encoding="utf-8", errors="replace")
-    lowered = text.lower()
-    signals: list[str] = []
-    if active:
-        signals.append("index-active")
-    if rules_confirmed:
-        signals.append("project-rule-explicit")
-    if POINTER_MARKER in text:
-        signals.append("migration-pointer")
-    if re.search(
-        r"\b(authoritative|single active|only active|current execution plan)\b"
-        r"|执行权威|唯一(?:活跃|执行).*计划|当前执行计划",
-        lowered,
-    ):
-        signals.append("self-claims-authority")
-    control_patterns = {
-        "controls-goal": r"\b(target|goal|objective)\b|目标",
-        "controls-phases": r"\b(phase|milestone)\b|阶段",
-        "controls-queue": r"\b(queue|task|next step)\b|队列|任务|下一步",
-        "controls-gates": r"\b(confirmation|gate|stop condition)\b|确认门|停止条件",
-    }
-    for signal, pattern in control_patterns.items():
-        if re.search(pattern, lowered):
-            signals.append(signal)
-    if re.search(
-        r"\b(archive|evidence|log|technical design|phase design)\b|归档|证据|日志|技术方案", lowered
-    ):
-        signals.append("non-authority-document")
-    return signals
+    return module_plan_sources.candidate_signals(
+        path,
+        active=active,
+        rules_confirmed=rules_confirmed,
+    )
 
 
 def project_rule_references(root: Path) -> dict[str, list[str]]:
     """Find Plan paths explicitly designated by project governance files."""
-    references: dict[str, list[str]] = {}
-    path_pattern = re.compile(
-        r"(?<![A-Za-z0-9._/-])"
-        r"(?:\.work-governance/_Plan/[A-Za-z0-9._/-]+\.md"
-        r"|docs/[A-Za-z0-9._/-]*[Pp]lan\.md|[Pp]lan\.md)"
-        r"(?![A-Za-z0-9._/-])"
-    )
-    authority_pattern = re.compile(
-        r"\b(authoritative|current|must\s+(?:read|update)|single\s+active)\b"
-        r"|执行权威|当前.*计划|必须(?:读取|更新)|唯一.*计划",
-        re.IGNORECASE,
-    )
-    for rules_name in ("AGENTS.md", "CLAUDE.md"):
-        rules_path = root / rules_name
-        if not rules_path.is_file():
-            continue
-        for line_number, line in enumerate(
-            rules_path.read_text(encoding="utf-8", errors="replace").splitlines(),
-            start=1,
-        ):
-            if authority_pattern.search(line) is None:
-                continue
-            for match in path_pattern.finditer(line):
-                raw_path = match.group(0)
-                references.setdefault(raw_path, []).append(f"{rules_name}:{line_number}")
-    return references
+    return module_plan_sources.project_rule_references(root)
 
 
 def classify_candidate(
@@ -2808,21 +2749,31 @@ def classify_candidate(
 ) -> tuple[str, list[str]]:
     """Classify a candidate without treating filenames as authority proof."""
     signals = candidate_signals(path, active=active, rules_confirmed=rules_confirmed)
-    if explicit_classification is not None:
-        signals.append("agent-classification")
-        return explicit_classification, signals
-    if active or rules_confirmed:
-        return "CONFIRMED_AUTHORITY", signals
-    if "migration-pointer" in signals:
-        return "NON_AUTHORITY", signals
-    _, _, status = optional_plan_metadata(path)
-    if status in {"complete", "retired"}:
-        signals.append("completed-plan" if status == "complete" else "retired-plan")
-        return "NON_AUTHORITY", signals
-    control_signal_count = sum(signal.startswith("controls-") for signal in signals)
-    if "self-claims-authority" in signals and control_signal_count >= 2:
-        return "LIKELY_AUTHORITY", signals
-    return "NON_AUTHORITY", signals
+    classification, _reason = module_plan_sources.classify_candidate(
+        path,
+        signals,
+        active=active,
+        rules_confirmed=rules_confirmed,
+        explicit_classification=explicit_classification,
+    )
+    return classification, signals
+
+
+def authority_candidate_from_plan_source(
+    source: module_plan_sources.PlanSource,
+) -> AuthorityCandidate:
+    """Project one shared Plan source into the authority CLI contract."""
+    return AuthorityCandidate(
+        path=source.path,
+        classification=source.classification,
+        origin=source.origin,
+        signals=list(source.signals),
+        sha256=source.sha256,
+        plan_id=source.plan_id,
+        revision=source.revision,
+        status=source.status,
+        reason=source.reason,
+    )
 
 
 def discover_authority_candidates(
@@ -2830,98 +2781,14 @@ def discover_authority_candidates(
     explicit_candidates: dict[str, str] | None = None,
 ) -> list[AuthorityCandidate]:
     """Discover active, rule-designated, conventional, and lineage Plan candidates."""
-    explicit_by_identity: dict[tuple[int, int], str] = {}
-    explicit_paths: list[Path] = []
-    for raw_path, classification in (explicit_candidates or {}).items():
-        path = checked_project_path(root, raw_path)
-        reject_legacy_plan_authority_path(root, raw_path, path)
-        if not path.is_file():
-            raise WorkctlError(f"MISSING_CANDIDATE: {raw_path}")
-        stat = path.stat()
-        identity = (stat.st_dev, stat.st_ino)
-        existing = explicit_by_identity.get(identity)
-        if existing is not None and existing != classification:
-            raise WorkctlError(
-                f"CONFLICTING_CANDIDATE_CLASSIFICATION: {relative_project_path(root, path)}"
-            )
-        explicit_by_identity[identity] = classification
-        explicit_paths.append(path)
-    rules = project_rule_references(root)
-    active_path: Path | None = None
-    if index_path(root).is_file():
-        try:
-            active_path = active_plan_path(root).resolve()
-        except WorkctlError:
-            active_path = None
-
-    candidate_origins: dict[Path, set[str]] = {}
-
-    def add_candidate(path: Path, origins: list[str] | set[str] | tuple[str, ...]) -> None:
-        """Add one physical file once even on case-insensitive filesystems."""
-        if not path.is_file():
-            return
-        raw_path = relative_project_path(root, path)
-        if is_legacy_plan_authority_path(root, raw_path, path):
-            return
-        for existing_path in candidate_origins:
-            if os.path.samefile(existing_path, path):
-                candidate_origins[existing_path].update(origins)
-                return
-        candidate_origins[path] = set(origins)
-
-    for raw_path, rule_origins in rules.items():
-        path = checked_project_path(root, raw_path)
-        add_candidate(path, rule_origins)
-    for raw_path in ("Plan.md", "plan.md", "docs/Plan.md", "docs/plan.md"):
-        path = checked_project_path(root, raw_path)
-        add_candidate(path, ("conventional-path",))
-    if plan_dir(root).is_dir():
-        for path in sorted(plan_dir(root).glob("*.md")):
-            if path.is_file():
-                add_candidate(path.resolve(), ("governance-plan-file",))
-    for path in explicit_paths:
-        add_candidate(path, ("agent-input",))
-    if active_path is not None and active_path.is_file():
-        add_candidate(active_path, ("index",))
-
-    candidates: list[AuthorityCandidate] = []
-    for path, origins in sorted(candidate_origins.items(), key=lambda item: item[0].as_posix()):
-        raw_path = relative_project_path(root, path)
-        active = active_path is not None and path.resolve() == active_path
-        rules_confirmed = any(
-            origin.startswith("AGENTS.md:") or origin.startswith("CLAUDE.md:") for origin in origins
+    try:
+        sources = module_plan_sources.discover_plan_sources(
+            root,
+            explicit_candidates=list((explicit_candidates or {}).items()),
         )
-        classification, signals = classify_candidate(
-            path,
-            active=active,
-            rules_confirmed=rules_confirmed,
-            explicit_classification=explicit_by_identity.get(
-                (path.stat().st_dev, path.stat().st_ino)
-            ),
-        )
-        plan_id, revision, status = optional_plan_metadata(path)
-        reason: str | None = None
-        if classification == "NON_AUTHORITY":
-            if "conventional-path" in origins:
-                reason = "historical_conventional_plan_ignored"
-            elif status == "complete":
-                reason = "completed_plan_ignored"
-            elif status == "retired":
-                reason = "retired_plan_ignored"
-        candidates.append(
-            AuthorityCandidate(
-                path=raw_path,
-                classification=classification,
-                origin=",".join(sorted(origins)),
-                signals=signals,
-                sha256=sha256_file(path),
-                plan_id=plan_id,
-                revision=revision,
-                status=status,
-                reason=reason,
-            )
-        )
-    return candidates
+    except module_plan_sources.PlanSourceError as exc:
+        raise WorkctlError(str(exc)) from exc
+    return [authority_candidate_from_plan_source(source) for source in sources]
 
 
 def incomplete_migration_journals(root: Path) -> list[Path]:
@@ -12187,6 +12054,56 @@ def tolerant_plan_history_summary(root: Path, path: Path) -> dict[str, Any]:
         raise WorkctlError(str(exc)) from exc
 
 
+def discover_history_plan_sources(root: Path) -> list[module_plan_sources.PlanSource]:
+    """Return Plan sources that should be visible through loose history commands."""
+    try:
+        sources = module_plan_sources.discover_plan_sources(root)
+    except module_plan_sources.PlanSourceError as exc:
+        raise WorkctlError(str(exc)) from exc
+    return [source for source in sources if source.history_visible]
+
+
+def annotate_history_summary(
+    summary: dict[str, Any],
+    source: module_plan_sources.PlanSource,
+) -> dict[str, Any]:
+    """Attach shared source classification fields to loose history output."""
+    summary["classification"] = source.classification
+    summary["origin"] = source.origin
+    summary["signals"] = list(source.signals)
+    if source.reason is not None:
+        summary["reason"] = source.reason
+    return summary
+
+
+def plan_history_summary_from_source(
+    root: Path,
+    source: module_plan_sources.PlanSource,
+) -> dict[str, Any]:
+    """Build one loose history summary from the shared Plan source index."""
+    path = checked_project_path(root, source.path)
+    summary = tolerant_plan_history_summary(root, path)
+    return apply_v5_history_runtime_summary(root, annotate_history_summary(summary, source))
+
+
+def history_source_by_path(
+    root: Path,
+    sources: Sequence[module_plan_sources.PlanSource],
+    raw_path: str,
+) -> module_plan_sources.PlanSource | None:
+    """Find a history-visible source by physical path for direct show commands."""
+    target = checked_project_path(root, raw_path)
+    for source in sources:
+        source_path = checked_project_path(root, source.path)
+        try:
+            if os.path.samefile(source_path, target):
+                return source
+        except OSError:
+            if source_path.resolve() == target.resolve():
+                return source
+    return None
+
+
 def load_v5_history_state(root: Path, plan_id: str) -> dict[str, Any] | None:
     """Load v5 runtime state for history projection without requiring active authority."""
     state_path = runtime_dir(root) / "plans" / plan_id / "state.json"
@@ -12264,22 +12181,19 @@ def v5_history_tasks(root: Path, doc: PlanDocument) -> list[dict[str, Any]]:
 def cmd_plan_history(args: argparse.Namespace) -> None:
     """Read historical Plans without applying active schema validation."""
     root = project_root()
-    base = plan_dir(root)
-    summaries = (
-        [
-            apply_v5_history_runtime_summary(root, tolerant_plan_history_summary(root, path))
-            for path in sorted(base.glob("PLAN-*.md"))
-        ]
-        if base.is_dir()
-        else []
-    )
+    sources = discover_history_plan_sources(root)
+    summaries = [plan_history_summary_from_source(root, source) for source in sources]
     if args.history_action == "list":
         print(json.dumps({"plans": summaries}, indent=2, sort_keys=True))
         return
     target: dict[str, Any] | None = None
     if args.path:
-        path = checked_project_path(root, args.path)
-        target = tolerant_plan_history_summary(root, path)
+        source = history_source_by_path(root, sources, str(args.path))
+        if source is not None:
+            target = plan_history_summary_from_source(root, source)
+        else:
+            path = checked_project_path(root, args.path)
+            target = tolerant_plan_history_summary(root, path)
     elif args.plan_id:
         if module_find_plan_history_target is None:
             raise WorkctlError("PLAN_HISTORY_MODULE_UNAVAILABLE")
