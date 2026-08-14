@@ -182,7 +182,7 @@ def v5_closeout_evidence(
     state: dict[str, Any],
     evidence_manifest: str | None,
 ) -> tuple[str, str]:
-    """Return or create the canonical v5 closeout evidence record."""
+    """Return or create the runtime-backed v5 closeout evidence record."""
     plan_id = str(frontmatter["plan_id"])
     if evidence_manifest:
         return verify_evidence_manifest(
@@ -205,20 +205,34 @@ def v5_closeout_evidence(
             items.append({"ref": evidence_ref, "sha256": evidence_sha256})
     if not items:
         raise WorkctlError("CLOSEOUT_EVIDENCE_ITEMS_REQUIRED")
-    return record_evidence_payload(
+    content = {
+        "schema_version": 1,
+        "kind": "work-governance-closeout-evidence",
+        "plan_id": plan_id,
+        "subject": "closeout",
+        "created_at": utc_now(),
+        "producer_ref": "runtime:workctl/plan-complete",
+        "state_sequence": state["state_sequence"],
+        "items": items,
+    }
+    direct_record = persist_direct_evidence_bytes(
         root,
         plan_id=plan_id,
-        payload={
-            "schema_version": 1,
-            "kind": "work-governance-evidence",
-            "plan_id": plan_id,
-            "subject": "closeout",
-            "created_at": utc_now(),
-            "producer_ref": "runtime:workctl/plan-complete",
-            "items": items,
+        task_id=None,
+        kind="closeout",
+        summary=f"Close out {plan_id}.",
+        raw_content=json.dumps(content, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        + b"\n",
+        source_type="generated",
+        source_ref="runtime:workctl/plan-complete",
+        idempotency_key=f"{plan_id}:closeout:{state['state_sequence']}",
+        extra_metadata={
+            "closeout_item_count": len(items),
+            "closeout_items": items,
+            "state_sequence": state["state_sequence"],
         },
-        expected_subject="closeout",
     )
+    return str(direct_record["evidence_ref"]), str(direct_record["evidence_sha256"])
 
 
 def cmd_plan_complete(args: argparse.Namespace) -> None:

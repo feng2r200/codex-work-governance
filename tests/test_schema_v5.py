@@ -138,9 +138,58 @@ def test_goal_init_stdin_creates_minimal_v5_plan(tmp_path: Path) -> None:
     assert state["event_sequence"] == 1
     assert len(events) == 1
     assert json.loads(events[0])["event"] == "plan.initialized"
+    assert json.loads(events[0])["payload"]["authority_candidates"] == []
     status = json.loads(run_workctl(tmp_path, "plan", "status", env=STRICT_CONTROLLER_ENV).stdout)
     assert status["plan_id"] == "PLAN-20260806-102"
     assert status["ready"] == ["task:T-001"]
+
+
+def test_goal_init_reports_conventional_history_candidates_without_adopting_them(
+    tmp_path: Path,
+) -> None:
+    """A historical docs/Plan.md is surfaced as context without becoming authority."""
+    run_workctl(tmp_path, "layout", "migrate")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    historical = docs / "Plan.md"
+    historical.write_text(
+        "# Historical Plan\n\n"
+        "Goal: prove a slightly different workflow.\n\n"
+        "Tasks:\n"
+        "- Explore the historical plan before current admission.\n",
+        encoding="utf-8",
+    )
+
+    admitted = json.loads(
+        run_workctl(
+            tmp_path,
+            "goal",
+            "init",
+            "--stdin",
+            input_text=json.dumps(minimal_goal_contract("PLAN-20260806-110")),
+            env=STRICT_CONTROLLER_ENV,
+        ).stdout
+    )
+    events_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "plans"
+        / "PLAN-20260806-110"
+        / "events.jsonl"
+    )
+    event = json.loads(events_path.read_text(encoding="utf-8").splitlines()[0])
+    docs_candidate = next(
+        item for item in admitted["authority_candidates"] if item["path"] == "docs/Plan.md"
+    )
+
+    assert admitted["status"] == "GOAL_INITIALIZED"
+    assert docs_candidate["classification"] == "NON_AUTHORITY"
+    assert docs_candidate["origin"] == "conventional-path"
+    assert docs_candidate["reason"] == "historical_conventional_plan_ignored"
+    assert event["payload"]["authority_candidates"] == admitted["authority_candidates"]
+    status = json.loads(run_workctl(tmp_path, "plan", "status", env=STRICT_CONTROLLER_ENV).stdout)
+    assert status["plan_id"] == "PLAN-20260806-110"
 
 
 def test_task_done_captures_raw_evidence_and_verifies_v5_task(tmp_path: Path) -> None:
@@ -174,10 +223,13 @@ def test_task_done_captures_raw_evidence_and_verifies_v5_task(tmp_path: Path) ->
 
     assert payload["status"] == "TASK_DONE"
     assert payload["state_sequence"] == 1
+    assert payload["evidence_ref"] == payload["direct_evidence_ref"]
+    assert payload["evidence_sha256"] == payload["direct_evidence_sha256"]
     assert state["tasks"]["T-001"]["status"] == "verified"
     assert state["tasks"]["T-001"]["evidence_ref"] == payload["evidence_ref"]
     assert (tmp_path / payload["direct_evidence_ref"].removeprefix("evidence:")).is_file()
     assert (tmp_path / payload["evidence_ref"].removeprefix("evidence:")).is_file()
+    assert not (tmp_path / ".work-governance" / "_Plan" / ".evidence").exists()
 
 
 def test_evidence_command_transcript_can_complete_v5_task(tmp_path: Path) -> None:
@@ -243,8 +295,10 @@ def test_evidence_command_transcript_can_complete_v5_task(tmp_path: Path) -> Non
     assert captured["state_sequence"] == 1
     assert completed["status"] == "TASK_DONE"
     assert completed["state_sequence"] == 2
+    assert completed["evidence_ref"] == captured["evidence_ref"]
     assert completed["direct_evidence_ref"] == captured["evidence_ref"]
     assert state["tasks"]["T-001"]["status"] == "verified"
+    assert state["tasks"]["T-001"]["evidence_ref"] == captured["evidence_ref"]
     assert state["tasks"]["T-001"]["evidence_refs"] == [captured["evidence_ref"]]
     assert record["source_type"] == "command"
     assert record["command_exit_code"] == 0
@@ -253,6 +307,7 @@ def test_evidence_command_transcript_can_complete_v5_task(tmp_path: Path) -> Non
     assert "output-secret" not in json.dumps(record, sort_keys=True)
     assert "output-secret" not in blob
     assert "command ok" in blob
+    assert not (tmp_path / ".work-governance" / "_Plan" / ".evidence").exists()
 
 
 def test_v5_closeout_and_complete_use_runtime_state(tmp_path: Path) -> None:
@@ -320,8 +375,17 @@ def test_v5_closeout_and_complete_use_runtime_state(tmp_path: Path) -> None:
     assert frontmatter["status"] == "complete"
     assert frontmatter["completion"]["state_sequence"] == 1
     assert frontmatter["completion"]["evidence_ref"].startswith(
-        "evidence:.work-governance/_Plan/.evidence/PLAN-20260806-106/"
+        "evidence:.work-governance/evidence/records/"
     )
+    closeout_record = json.loads(
+        (
+            tmp_path / frontmatter["completion"]["evidence_ref"].removeprefix("evidence:")
+        ).read_text(encoding="utf-8")
+    )
+    assert closeout_record["evidence_kind"] == "closeout"
+    assert closeout_record["source_type"] == "generated"
+    assert closeout_record["task_ref"] is None
+    assert closeout_record["closeout_item_count"] == 1
     assert "revision" not in frontmatter
     assert state["state_sequence"] == 1
     assert state["event_sequence"] == 3
@@ -329,6 +393,7 @@ def test_v5_closeout_and_complete_use_runtime_state(tmp_path: Path) -> None:
     assert completed_event["event"] == "plan.completed"
     assert completed_event["payload"]["evidence_ref"] == frontmatter["completion"]["evidence_ref"]
     assert not (tmp_path / ".work-governance" / "_Plan" / "index.yaml").exists()
+    assert not (tmp_path / ".work-governance" / "_Plan" / ".evidence").exists()
     assert run_workctl(tmp_path, "plan", "validate", env=STRICT_CONTROLLER_ENV).stdout.strip() == (
         "PLAN_VALID"
     )

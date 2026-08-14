@@ -117,12 +117,15 @@ def test_default_path_v5_adapt_and_task_done_skip_v4_intake_manifest_churn(
 
     assert adapted["status"] == "PLAN_ADAPT_INTENT_RECORDED"
     assert adapted["state_sequence"] == 1
+    assert adapted["evidence_ref"] == adapted["direct_evidence_ref"]
     assert done["status"] == "TASK_DONE"
     assert done["state_sequence"] == 2
+    assert done["evidence_ref"] == done["direct_evidence_ref"]
     assert frontmatter["contract_revision"] == 1
     assert plan_path.read_bytes() == contract_before
     assert state["state_sequence"] == 2
     assert state["tasks"]["T-001"]["status"] == "verified"
+    assert not (tmp_path / ".work-governance" / "_Plan" / ".evidence").exists()
     assert [event["event"] for event in events] == [
         "plan.initialized",
         "plan.adapted",

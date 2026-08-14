@@ -60,9 +60,9 @@ def test_summary_fields_and_order_are_stable() -> None:
     assert_fields_in_order(skill)
     assert_fields_in_order(execution)
     assert_fields_in_order(closeout)
-    assert "<T-ID 或 NO_PLAN>" in skill
-    assert "<T-ID 或 NO_PLAN>" in execution
-    assert "<T-ID 或 NO_PLAN>" in closeout
+    assert "<T-ID、ADMISSION、GOVERNANCE 或 NO_PLAN>" in skill
+    assert "<T-ID、ADMISSION、GOVERNANCE 或 NO_PLAN>" in execution
+    assert "<T-ID、ADMISSION、GOVERNANCE 或 NO_PLAN>" in closeout
 
 
 def test_trigger_and_task_mapping_cover_plan_and_no_plan_work() -> None:
@@ -73,6 +73,8 @@ def test_trigger_and_task_mapping_cover_plan_and_no_plan_work() -> None:
     assert "After every independently verifiable execution slice" in skill
     assert "before describing or starting the next\n  step" in skill
     assert "For Plan-controlled work, `当前子任务` is the corresponding `T-ID`." in execution
+    assert "`ADMISSION`" in execution
+    assert "`GOVERNANCE`" in execution
     assert "the whole request is one slice" in execution
     assert "`NO_PLAN`" in execution
 
