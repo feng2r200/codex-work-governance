@@ -34,7 +34,7 @@ For every completed slice, present the reply contract below before any
 next-step statement:
 
 ```text
-当前子任务：<T-ID 或 NO_PLAN>
+当前子任务：<T-ID、ADMISSION、GOVERNANCE 或 NO_PLAN>
 完成与作用：完成了什么，以及它如何服务父任务/项目目标
 验证：验证方式、当前结果和未覆盖项
 决定与依据：实质决定、来源与取舍；没有则写“无新增决策”

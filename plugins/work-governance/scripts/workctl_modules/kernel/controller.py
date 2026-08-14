@@ -11423,7 +11423,12 @@ def build_goal_init_document(
     )
 
 
-def write_initial_v5_runtime(root: Path, doc: PlanDocument) -> None:
+def write_initial_v5_runtime(
+    root: Path,
+    doc: PlanDocument,
+    *,
+    authority_candidates: Sequence[Mapping[str, Any]] = (),
+) -> None:
     """Create the initial runtime state and event ledger for a minimal v5 Plan."""
     plan_id = str(doc.frontmatter["plan_id"])
     state = v5_state_defaults(doc.frontmatter)
@@ -11440,6 +11445,7 @@ def write_initial_v5_runtime(root: Path, doc: PlanDocument) -> None:
         "payload": {
             "contract_revision": doc.frontmatter["contract_revision"],
             "title": doc.frontmatter["title"],
+            "authority_candidates": list(authority_candidates),
         },
         "recorded_at": doc.frontmatter["created_at"],
     }
@@ -11463,6 +11469,7 @@ def cmd_goal_init(args: argparse.Namespace) -> None:
         report = inspect_authority(root)
         if report.state != "UNMANAGED_EMPTY":
             raise WorkctlError(f"GOAL_INIT_AUTHORITY_BLOCKED: {report.state}")
+        authority_candidates = [candidate_to_dict(item) for item in report.candidates]
         doc = build_goal_init_document(
             root,
             contract,
@@ -11473,7 +11480,7 @@ def cmd_goal_init(args: argparse.Namespace) -> None:
             raise WorkctlError("GOAL_PLAN_ALREADY_EXISTS")
         require_valid_candidate(doc)
         write_atomic(doc.path, dump_plan(doc))
-        write_initial_v5_runtime(root, doc)
+        write_initial_v5_runtime(root, doc, authority_candidates=authority_candidates)
         write_atomic(index_path(root), yaml.safe_dump(activated_index(root, doc), sort_keys=False))
         errors = validate_plan(root)
         if errors:
@@ -11488,6 +11495,7 @@ def cmd_goal_init(args: argparse.Namespace) -> None:
                     "state_sequence": 0,
                     "event_sequence": 1,
                     "plan_path": relative_project_path(root, doc.path),
+                    "authority_candidates": authority_candidates,
                 },
                 indent=2,
                 sort_keys=True,
@@ -12007,18 +12015,9 @@ def cmd_task_done(args: argparse.Namespace) -> None:
                 source_ref=source_ref,
                 idempotency_key=args.idempotency_key,
             )
-        evidence_ref, evidence_sha256 = canonical_workflow_evidence(
-            root,
-            plan_id=plan_id,
-            subject=f"task:{args.task_id}",
-            producer_ref=(
-                "runtime:workctl/task-done-direct-evidence"
-                if uses_direct_evidence_ref
-                else "runtime:workctl/task-done"
-            ),
-            direct_record=direct_record,
-        )
         if doc.frontmatter.get("schema_version") == 5:
+            evidence_ref = str(direct_record["evidence_ref"])
+            evidence_sha256 = str(direct_record["evidence_sha256"])
             sequence = verify_task_done_v5(
                 root,
                 doc,
@@ -12036,6 +12035,17 @@ def cmd_task_done(args: argparse.Namespace) -> None:
                 "state_sequence": sequence,
             }
         else:
+            evidence_ref, evidence_sha256 = canonical_workflow_evidence(
+                root,
+                plan_id=plan_id,
+                subject=f"task:{args.task_id}",
+                producer_ref=(
+                    "runtime:workctl/task-done-direct-evidence"
+                    if uses_direct_evidence_ref
+                    else "runtime:workctl/task-done"
+                ),
+                direct_record=direct_record,
+            )
             revision = verify_task_done_v4(
                 root,
                 doc,
@@ -12097,14 +12107,8 @@ def cmd_plan_adapt_intent(args: argparse.Namespace) -> None:
             idempotency_key=args.idempotency_key,
         )
         if doc.frontmatter.get("schema_version") == 5:
-            evidence_subject = f"adaptation:intent-{direct_record['id']}"
-            evidence_ref, evidence_sha256 = canonical_workflow_evidence(
-                root,
-                plan_id=plan_id,
-                subject=evidence_subject,
-                producer_ref="runtime:workctl/plan-adapt",
-                direct_record=direct_record,
-            )
+            evidence_ref = str(direct_record["evidence_ref"])
+            evidence_sha256 = str(direct_record["evidence_sha256"])
             v5_recover_pending_event(root, doc.frontmatter)
             state = load_v5_state(root, doc.frontmatter)
             v5_persist_state_transition(
