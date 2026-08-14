@@ -71,9 +71,9 @@ Plan is a revisable route map, not a requirement that useful work conform to
 an obsolete ordering. Ask only when the aligned material change is itself
 ambiguous or crosses a real confirmation boundary.
 
-The trusted `UserPromptSubmit` context binds mutable schema-v4 intake and
-high-impact authorization to one current-turn receipt. Schema-v5 ordinary runtime
-work does not consume that receipt. Except for a simple low-risk No-Plan answer,
+Hook-provided current-turn receipts are legacy compatibility inputs. Schema-v5
+ordinary runtime work does not consume them. Except for a simple low-risk
+No-Plan answer,
 explicitly choose:
 
 - `proceed` when no open blocker covers the next exact target;
@@ -131,5 +131,6 @@ Decide the entry route:
   must be tracked.
 
 Validation standard: intake is sufficient only when the next action, evidence
-source, confirmation gates, and target references are clear. A current-turn receipt
-is additionally required only for mutable schema-v4 intake or high-impact authority.
+source, confirmation gates, and target references are clear. A current-turn
+receipt is additionally required only for explicit legacy schema-v4 compatibility
+paths that still declare that guard.

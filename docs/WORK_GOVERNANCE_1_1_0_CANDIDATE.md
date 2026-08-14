@@ -68,18 +68,16 @@ content-addressed metadata record to
 `evidence_ref`. Schema-v5 task binding updates runtime state and the event
 ledger only; the Plan contract bytes remain stable.
 
-In these examples, `<workctl>` means either the exact receipt-bound controller
-command emitted by SessionStart or the absolute path to this source candidate's
-`plugins/work-governance/scripts/workctl` wrapper. Do not derive a relative
-`plugins/.../workctl` path from an arbitrary project cwd.
+In these examples, `<workctl>` means the registered direct executable from the
+installed Plugin, or this source candidate's
+`plugins/work-governance/scripts/workctl` wrapper during local validation. Do
+not derive a relative `plugins/.../workctl` path from an arbitrary project cwd.
 
-The wrapper keeps the controller cache under the target project's
-`.work-governance/cache/uv`: it tries that cache offline first and performs one
-normal prewarm only for a script-dependency cache miss. The current controller
-uses a stdlib-backed YAML compatibility layer, so cold-start help, diagnostics,
-layout recovery, and hook bootstrap do not depend on fetching PyYAML. Set
-`WORK_GOVERNANCE_STRICT_OFFLINE=1` for environments that must never resolve
-dependencies during direct CLI use.
+The wrapper selects Python >= 3.12 and invokes `workctl.py` directly. It does
+not call `uv run`, does not prewarm script dependencies, and does not maintain a
+project-local `.work-governance/cache/uv` directory. The current controller uses
+a stdlib-backed YAML compatibility layer, so cold-start help, diagnostics, and
+layout recovery do not depend on fetching PyYAML.
 
 The legacy canonical Plan evidence path remains supported for compatibility:
 
@@ -196,10 +194,10 @@ Use explicit current-schema refresh commands:
 ```
 
 `migrate inspect`, `migrate apply --dry-run`, `migrate rollback-info`, and the
-default `doctor` report do not write project state and do not require a
-SessionStart READY receipt. Durable `migrate apply`, `migrate recover`,
-`evidence capture`, and `doctor --clean-stale-transactions` are receipt-bound
-mutations. Apply treats outdated active Plans as read-only legacy input: it
+default `doctor` report do not write project state and do not require Hook
+receipts. Durable `migrate apply`, `migrate recover`, `evidence capture`, and
+`doctor --clean-stale-transactions` are guarded mutations. Apply treats outdated
+active Plans as read-only legacy input: it
 writes backup, staging, a versioned archive of the legacy Plan, fresh runtime
 state, event ledger, and journal data before replacing the active Plan with the
 current schema contract. Durable apply requires the expected contract revision
@@ -222,10 +220,10 @@ must be recovered or investigated.
 Before presenting the candidate for activation, run:
 
 ```sh
-uv run ruff check .
-uv run mypy
-uv run pytest
-uv run python plugins/work-governance/scripts/generate_cli_reference.py --check
+.venv/bin/ruff check .
+.venv/bin/mypy
+.venv/bin/python -m pytest
+.venv/bin/python plugins/work-governance/scripts/generate_cli_reference.py --check
 ```
 
 Activation requires a separate fresh-session validation after the user accepts

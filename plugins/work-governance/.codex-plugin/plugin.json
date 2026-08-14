@@ -1,6 +1,6 @@
 {
   "name": "work-governance",
-  "version": "1.1.0+codex.20260814072856",
+  "version": "1.1.0+codex.20260814130455",
   "description": "Govern goal-driven Codex work with trusted intake, durable Plan contracts, runtime state, evidence, and recovery.",
   "author": {
     "name": "Work Governance Contributors"
@@ -19,7 +19,7 @@
   "interface": {
     "displayName": "Work Governance",
     "shortDescription": "Govern goal-driven work, evidence, plans, and Git boundaries.",
-    "longDescription": "Work Governance provides a fail-closed, goal-first lifecycle with trusted per-turn intake, durable Plan contracts and runtime state, explicit migration and recovery, deterministic evidence control, and focused skills for Git changes, project truth sources, and independent validation.",
+    "longDescription": "Work Governance provides a fail-closed, goal-first lifecycle with direct local workctl execution, durable Plan contracts and runtime state, explicit migration and recovery, deterministic evidence control, and focused skills for Git changes, project truth sources, and independent validation.",
     "developerName": "Work Governance Contributors",
     "category": "Productivity",
     "websiteURL": "https://github.com/feng2r200/codex-work-governance",

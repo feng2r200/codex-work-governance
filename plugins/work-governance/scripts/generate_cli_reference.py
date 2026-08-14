@@ -1,10 +1,4 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.12"
-# dependencies = [
-#   "pyyaml==6.0.3",
-# ]
-# ///
+#!/usr/bin/env python3
 """Generate the documented CLI surface from the controller's argparse tree."""
 
 from __future__ import annotations
@@ -104,18 +98,17 @@ def render_reference(parser: argparse.ArgumentParser) -> str:
         "",
         "## Invocation contract",
         "",
-        "Use the exact receipt-bound controller emitted by SessionStart. The "
-        "SessionStart receipt is bootstrap/runtime identity, not Plan authority; "
-        "the controller's authority and contract states decide writable Plan work. "
-        "The placeholder below is intentional:",
+        "Use the registered direct `workctl` executable. It runs without `uv run` "
+        "and without Codex lifecycle hooks; the controller's authority and "
+        "contract states decide writable Plan work.",
         "",
         "```sh",
-        "<receipt-bound-workctl> <domain> <command> [options]",
+        "workctl <domain> <command> [options]",
         "```",
         "",
-        "Mutable schema-v4 Plan commands and high-impact authorization require "
-        "the current turn receipt. Ordinary schema-v5 runtime commands use the "
-        "expected state guard without turn intake. "
+        "Legacy schema-v4 compatibility commands may require an explicitly "
+        "supplied current turn receipt. Ordinary schema-v5 runtime commands use "
+        "the expected state guard without turn intake. "
         "Outdated active Plans report `PLAN_SCHEMA_REFRESH_REQUIRED` and allow "
         "only read-only inspection plus explicit current-schema refresh. "
         "`plan status`, `plan show`, queue views, `help`, `migrate inspect`, "

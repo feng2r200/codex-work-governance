@@ -1,8 +1,4 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.12"
-# dependencies = []
-# ///
+#!/usr/bin/env python3
 """Deterministic controller for Work Governance Plan files."""
 
 # workctl_modules imports depend on the public scripts directory being present
@@ -781,11 +777,6 @@ def worktrees_dir(root: Path) -> Path:
 def cache_dir(root: Path) -> Path:
     """Return the Plugin-owned project cache directory."""
     return module_paths.cache_dir(root, GOVERNANCE_DIR_NAME)
-
-
-def uv_cache_dir(root: Path) -> Path:
-    """Return the isolated UV cache used by bootstrap and the controller."""
-    return module_paths.uv_cache_dir(root, GOVERNANCE_DIR_NAME)
 
 
 def proposals_dir(root: Path) -> Path:
@@ -2660,7 +2651,6 @@ def layout_control_path_errors(root: Path) -> list[str]:
         logs_dir(root),
         worktrees_dir(root),
         cache_dir(root),
-        uv_cache_dir(root),
         proposals_dir(root),
         evidence_dir(root),
         runtime_dir(root),
@@ -5968,12 +5958,16 @@ def cmd_layout_validate(_args: argparse.Namespace) -> None:
 
 
 def cmd_intake_status(args: argparse.Namespace) -> None:
-    """Validate the exact session receipt before classifying Plan intake."""
+    """Classify Plan intake readiness for direct or legacy receipt-bound use."""
     root = project_root()
-    receipt = validate_current_ready_receipt(
-        root,
-        args.receipt_sha256,
-        require_current_controller=True,
+    receipt = (
+        validate_current_ready_receipt(
+            root,
+            args.receipt_sha256,
+            require_current_controller=True,
+        )
+        if isinstance(args.receipt_sha256, str)
+        else None
     )
     layout = inspect_layout(root)
     authority_state = "NOT_INSPECTED"
@@ -6004,10 +5998,10 @@ def cmd_intake_status(args: argparse.Namespace) -> None:
                 "authority_state": authority_state,
                 "contract_state": plan_contract_state,
                 "plan_id": plan_id,
-                "receipt_schema_version": receipt["schema_version"],
-                "session_id": receipt["session_id"],
-                "controller_ref": receipt["controller_ref"],
-                "controller_sha256": receipt["controller_sha256"],
+                "receipt_schema_version": receipt["schema_version"] if receipt else None,
+                "session_id": receipt["session_id"] if receipt else None,
+                "controller_ref": receipt["controller_ref"] if receipt else None,
+                "controller_sha256": receipt["controller_sha256"] if receipt else None,
             },
             indent=2,
             sort_keys=True,
@@ -20541,7 +20535,7 @@ def main(argv: list[str] | None = None) -> int:
         root = project_root()
         if args.domain not in {"layout", "help"}:
             require_layout_ready(root)
-        if command_mutates_state(args):
+        if command_mutates_state(args) and isinstance(args.receipt_sha256, str):
             validate_current_ready_receipt(
                 root,
                 args.receipt_sha256,

@@ -22,7 +22,7 @@ def test_path_helpers_derive_from_configured_governance_root(tmp_path: Path) -> 
     assert paths_module.governance_root(tmp_path, ".wg") == tmp_path / ".wg"
     assert paths_module.plan_dir(tmp_path, ".wg", "_Plan") == tmp_path / ".wg" / "_Plan"
     assert paths_module.legacy_plan_dir(tmp_path, "_Plan") == tmp_path / "_Plan"
-    assert paths_module.uv_cache_dir(tmp_path, ".wg") == tmp_path / ".wg" / "cache" / "uv"
+    assert paths_module.cache_dir(tmp_path, ".wg") == tmp_path / ".wg" / "cache"
     assert paths_module.bootstrap_claim_path(tmp_path, ".wg", "claim.json") == (
         tmp_path / ".wg" / "runtime" / "claim.json"
     )

@@ -1152,7 +1152,7 @@ def test_reviewer_acquisition_failure_cache_is_runtime_only(tmp_path: Path) -> N
     assert dry_run["write"] is False
     assert not (tmp_path / ".work-governance" / "runtime" / "reviewer-acquisition").exists()
 
-    blocked_without_receipt = run_without_receipt(
+    recorded_without_receipt = run_without_receipt(
         tmp_path,
         "review",
         "acquisition",
@@ -1162,34 +1162,20 @@ def test_reviewer_acquisition_failure_cache_is_runtime_only(tmp_path: Path) -> N
         "runtime:reviewer/codex-exec/attempt-1",
         "--exit-code",
         "1",
+        "--cooldown-seconds",
+        "3600",
+        "--idempotency-key",
+        "first",
         "--summary",
         "Proxy connection failed: HTTP CONNECT failed with status 403",
+        input_text=(
+            "Authorization: Bearer sk-sensitive\n"
+            "Proxy connection failed: HTTP CONNECT failed with status 403\n"
+            "backend-api/codex/responses\n"
+        ),
     )
-    assert blocked_without_receipt.returncode == 2
-    assert "BOOTSTRAP_RECEIPT_REQUIRED" in blocked_without_receipt.stderr
-
-    recorded = json.loads(
-        run_workctl(
-            tmp_path,
-            "review",
-            "acquisition",
-            "record-failure",
-            *scope_args,
-            "--attempt-ref",
-            "runtime:reviewer/codex-exec/attempt-1",
-            "--exit-code",
-            "1",
-            "--cooldown-seconds",
-            "3600",
-            "--idempotency-key",
-            "first",
-            input_text=(
-                "Authorization: Bearer sk-sensitive\n"
-                "Proxy connection failed: HTTP CONNECT failed with status 403\n"
-                "backend-api/codex/responses\n"
-            ),
-        ).stdout
-    )
+    assert recorded_without_receipt.returncode == 0
+    recorded = json.loads(recorded_without_receipt.stdout)
     assert recorded["attempt_allowed"] is False
     assert recorded["state"] == "VALIDATOR_UNAVAILABLE_CACHED"
     assert recorded["failure_class"] == "network_proxy_blocked"
@@ -1394,8 +1380,8 @@ def test_public_help_matches_candidate_boundaries(tmp_path: Path) -> None:
     assert "--status {pending,accepted}" not in gate_help.stdout
 
 
-def test_top_level_write_aliases_require_ready_receipt(tmp_path: Path) -> None:
-    """Public write aliases must not bypass the SessionStart READY receipt gate."""
+def test_top_level_write_aliases_without_receipt_reach_contract_gates(tmp_path: Path) -> None:
+    """Hookless public write aliases fail on real contract gates, not bootstrap receipt."""
     prepare_v4_plan(tmp_path)
     patch = tmp_path / "truth.yaml"
     patch.write_text("truth_refs:\n- project:truth-source\n", encoding="utf-8")
@@ -1445,7 +1431,7 @@ def test_top_level_write_aliases_require_ready_receipt(tmp_path: Path) -> None:
     for command in commands:
         result = run_without_receipt(tmp_path, *command)
         assert result.returncode == 2, command
-        assert "BOOTSTRAP_RECEIPT_REQUIRED" in result.stderr
+        assert "BOOTSTRAP_RECEIPT_REQUIRED" not in result.stderr
 
 
 def test_gate_aliases_are_directional_for_current_schema(
@@ -1550,24 +1536,14 @@ def test_v5_apply_creates_backup_bundle_and_recovers_after_replace_interrupt(
         f"migrate recover --migration-id {journal_path.parent.name}"
     )
 
-    bypass = run_without_receipt(
+    recovered = run_without_receipt(
         tmp_path,
         "migrate",
         "recover",
         "--migration-id",
         journal_path.parent.name,
     )
-    assert bypass.returncode == 2
-    assert "BOOTSTRAP_RECEIPT_REQUIRED" in bypass.stderr
-    assert json.loads(journal_path.read_text(encoding="utf-8"))["status"] == "plan-replaced"
-
-    recovered = run_workctl(
-        tmp_path,
-        "migrate",
-        "recover",
-        "--migration-id",
-        journal_path.parent.name,
-    )
+    assert recovered.returncode == 0
     assert "CURRENT_PLAN_SCHEMA_REFRESH_RECOVERED" in recovered.stdout
     assert json.loads(journal_path.read_text(encoding="utf-8"))["status"] == "committed"
     assert (journal_path.parent / "backup" / "plan.md").read_bytes() == source_before
