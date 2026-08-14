@@ -1,6 +1,6 @@
 {
   "name": "work-governance",
-  "version": "1.1.0+codex.20260814132137",
+  "version": "1.1.0+codex.20260814135001",
   "description": "Govern goal-driven Codex work with trusted intake, durable Plan contracts, runtime state, evidence, and recovery.",
   "author": {
     "name": "Work Governance Contributors"
@@ -12,9 +12,6 @@
     "planning",
     "validation"
   ],
-  "plan": {
-    "current_schema_version": 5
-  },
   "skills": "./skills/",
   "interface": {
     "displayName": "Work Governance",

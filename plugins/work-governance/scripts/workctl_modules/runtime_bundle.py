@@ -68,8 +68,7 @@ def validated_runtime_bundle_module_files(
             relative_path.is_absolute()
             or ".." in relative_path.parts
             or len(relative_path.parts) < 2
-            or relative_path.parts[0] != "workctl_modules"
-            or relative_path.suffix != ".py"
+            or not _runtime_bundle_file_path_allowed(relative_path)
         ):
             raise RuntimeBundleError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
         module_path = bundle / relative_path
@@ -86,3 +85,14 @@ def validated_runtime_bundle_module_files(
             raise RuntimeBundleError("BOOTSTRAP_RUNTIME_BUNDLE_INVALID")
         typed_files.append({"path": entry["path"], "sha256": entry["sha256"]})
     return typed_files
+
+
+def _runtime_bundle_file_path_allowed(relative_path: Path) -> bool:
+    """Return whether a runtime bundle manifest may bind this relative file."""
+    if relative_path.parts[0] == "workctl_modules":
+        return relative_path.suffix == ".py"
+    if relative_path.parts[0] != "vendor" or "__pycache__" in relative_path.parts:
+        return False
+    if relative_path.suffix in {".py", ".md"}:
+        return True
+    return relative_path.name in {"LICENSE", "METADATA"}

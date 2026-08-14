@@ -75,9 +75,13 @@ not derive a relative `plugins/.../workctl` path from an arbitrary project cwd.
 
 The wrapper selects Python >= 3.12 and invokes `workctl.py` directly. It does
 not call `uv run`, does not prewarm script dependencies, and does not maintain a
-project-local `.work-governance/cache/uv` directory. The current controller uses
-a stdlib-backed YAML compatibility layer, so cold-start help, diagnostics, and
-layout recovery do not depend on fetching PyYAML.
+project-local `.work-governance/cache/uv` directory. Runtime Python dependency
+closure is packaged with the Plugin: `scripts/vendor/yaml` contains
+`pyyaml==6.0.3`, and `workctl.py` prepends that vendor directory before loading
+the controller. If PyYAML is absent from the installed Plugin package or
+resolves from outside `scripts/vendor`, the controller fails fast with
+`WORKCTL_PACKAGED_DEPENDENCY_MISSING` instead of falling back to a system
+package or a local parser.
 
 The legacy canonical Plan evidence path remains supported for compatibility:
 

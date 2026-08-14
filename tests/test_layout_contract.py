@@ -91,6 +91,8 @@ def test_controller_runtime_bootstrap_has_no_uv_script_dependency() -> None:
 
     assert "uv run" not in wrapper
     assert "# /// script" not in wrapper
+    assert "sys.dont_write_bytecode = True" in wrapper
+    assert 'VENDOR_DIR = SCRIPT_DIR / "vendor"' in wrapper
     assert "yaml_compat" in controller
 
 

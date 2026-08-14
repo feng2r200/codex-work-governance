@@ -13,6 +13,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import cast
 
+import pytest
 import yaml
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -55,12 +56,11 @@ def test_plugin_manifest_describes_goal_driven_runtime() -> None:
     typed_manifest = cast(Mapping[str, object], manifest)
     assert cast(str, typed_manifest["version"]).startswith("1.1.0+codex.")
     assert "goal-driven" in cast(str, typed_manifest["description"])
-    plan = cast(Mapping[str, object], typed_manifest["plan"])
-    assert plan["current_schema_version"] == 5
+    assert "plan" not in typed_manifest
     plan_schema = runpy.run_path(
         str(PLUGIN_ROOT / "scripts" / "workctl_modules" / "plan_schema.py")
     )
-    assert plan["current_schema_version"] == plan_schema["CURRENT_PLAN_SCHEMA_VERSION"]
+    assert plan_schema["CURRENT_PLAN_SCHEMA_VERSION"] == 5
     interface = cast(Mapping[str, object], typed_manifest["interface"])
     assert "durable Plan contracts" in cast(str, interface["longDescription"])
 
@@ -183,22 +183,36 @@ def test_registered_workctl_bootstraps_schema_v5_without_hooks_or_uv(tmp_path: P
     assert not (tmp_path / ".work-governance" / "cache" / "uv").exists()
 
 
-def test_yaml_compat_fallback_loads_and_dumps_governance_yaml() -> None:
-    """The controller can read generated YAML when PyYAML is unavailable."""
-    previous = os.environ.get("WORK_GOVERNANCE_DISABLE_PYYAML")
-    os.environ["WORK_GOVERNANCE_DISABLE_PYYAML"] = "1"
-    try:
-        namespace = runpy.run_path(
-            str(PLUGIN_ROOT / "scripts" / "workctl_modules" / "yaml_compat.py"),
-            run_name="yaml_compat_fallback_test",
-        )
-    finally:
-        if previous is None:
-            os.environ.pop("WORK_GOVERNANCE_DISABLE_PYYAML", None)
-        else:
-            os.environ["WORK_GOVERNANCE_DISABLE_PYYAML"] = previous
+def test_packaged_pyyaml_runtime_dependency_is_bundled() -> None:
+    """The Plugin source carries PyYAML as a runtime dependency package."""
+    vendor = PLUGIN_ROOT / "scripts" / "vendor"
+    yaml_package = vendor / "yaml"
+    metadata = vendor / "pyyaml-6.0.3.dist-info" / "METADATA"
+    license_file = vendor / "pyyaml-6.0.3.dist-info" / "licenses" / "LICENSE"
+
+    assert (yaml_package / "__init__.py").is_file()
+    assert metadata.is_file()
+    assert license_file.is_file()
+    assert not (vendor / "pyyaml-6.0.3.dist-info" / "WHEEL").exists()
+    assert not list(yaml_package.glob("*.so"))
+    assert "Name: PyYAML" in metadata.read_text(encoding="utf-8")
+    assert "Version: 6.0.3" in metadata.read_text(encoding="utf-8")
+
+
+def test_yaml_compat_loads_packaged_pyyaml_only() -> None:
+    """The controller YAML adapter resolves PyYAML from the Plugin vendor directory."""
+    namespace = runpy.run_path(
+        str(PLUGIN_ROOT / "scripts" / "workctl_modules" / "yaml_compat.py"),
+        run_name="yaml_compat_packaged_test",
+    )
+    pyyaml_file = cast(Path, namespace["_pyyaml_file"])
+    pyyaml_module = cast(ModuleType, namespace["_pyyaml"])
     safe_load = cast(Callable[[str], object], namespace["safe_load"])
     safe_dump = cast(Callable[..., str], namespace["safe_dump"])
+
+    pyyaml_file.relative_to((PLUGIN_ROOT / "scripts" / "vendor").resolve())
+    assert cast(str, pyyaml_module.__dict__["__version__"]) == "6.0.3"
+    assert cast(bool, pyyaml_module.__dict__["__with_libyaml__"]) is False
 
     payload = safe_load(
         """schema_version: 1
@@ -275,15 +289,41 @@ plans:
     incident_payload = safe_load(
         """checks:
 - "Risk feature hit \\u5DF2\\
-  \\u7531 fallback\\
+  \\u7531 packaged\\
   \\ text tied."
 """
     )
-    assert incident_payload == {"checks": ["Risk feature hit 已由 fallback text tied."]}
+    assert incident_payload == {"checks": ["Risk feature hit 已由 packaged text tied."]}
 
 
-def test_yaml_compat_dump_is_fallback_readable_with_pyyaml_present() -> None:
-    """Controller writes must stay readable by the dependency-free cold-start path."""
+def test_yaml_compat_rejects_missing_packaged_pyyaml(tmp_path: Path) -> None:
+    """The adapter does not fall back to a system PyYAML installation."""
+    module_dir = tmp_path / "scripts" / "workctl_modules"
+    module_dir.mkdir(parents=True)
+    copied = module_dir / "yaml_compat.py"
+    copied.write_text(
+        (PLUGIN_ROOT / "scripts" / "workctl_modules" / "yaml_compat.py").read_text(
+            encoding="utf-8"
+        ),
+        encoding="utf-8",
+    )
+    yaml_modules = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "yaml" or name.startswith("yaml.")
+    }
+    try:
+        with pytest.raises(RuntimeError, match="WORKCTL_PACKAGED_DEPENDENCY_MISSING"):
+            runpy.run_path(str(copied), run_name="yaml_compat_missing_vendor_test")
+    finally:
+        for name in tuple(sys.modules):
+            if name == "yaml" or name.startswith("yaml."):
+                del sys.modules[name]
+        sys.modules.update(yaml_modules)
+
+
+def test_yaml_compat_dump_round_trips_with_packaged_pyyaml() -> None:
+    """Controller writes round-trip through the packaged PyYAML dependency."""
     namespace = runpy.run_path(
         str(PLUGIN_ROOT / "scripts" / "workctl_modules" / "yaml_compat.py"),
         run_name="yaml_compat_dump_test",
@@ -314,27 +354,11 @@ def test_yaml_compat_dump_is_fallback_readable_with_pyyaml_present() -> None:
     }
 
     dumped = safe_dump(payload, sort_keys=False, allow_unicode=False)
-    previous = os.environ.get("WORK_GOVERNANCE_DISABLE_PYYAML")
-    os.environ["WORK_GOVERNANCE_DISABLE_PYYAML"] = "1"
-    try:
-        fallback_namespace = runpy.run_path(
-            str(PLUGIN_ROOT / "scripts" / "workctl_modules" / "yaml_compat.py"),
-            run_name="yaml_compat_dump_fallback_test",
-        )
-    finally:
-        if previous is None:
-            os.environ.pop("WORK_GOVERNANCE_DISABLE_PYYAML", None)
-        else:
-            os.environ["WORK_GOVERNANCE_DISABLE_PYYAML"] = previous
-    fallback_safe_load = cast(Callable[[str], object], fallback_namespace["safe_load"])
 
-    assert "\\\n" not in dumped
     assert safe_load(dumped) == payload
-    assert fallback_safe_load(dumped) == payload
     unicode_payload = {"line_break_text": ["foo\u0085bar", "foo\u2028bar", "foo\u2029bar"]}
     unicode_dumped = safe_dump(unicode_payload, sort_keys=False, allow_unicode=True)
     assert safe_load(unicode_dumped) == unicode_payload
-    assert fallback_safe_load(unicode_dumped) == unicode_payload
 
 
 def test_cli_reference_is_generated_from_the_current_parser() -> None:

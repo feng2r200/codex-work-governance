@@ -28,6 +28,29 @@ def sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def runtime_bundle_file_manifest(bundle: Path) -> list[dict[str, str]]:
+    """Return the runtime files bound by one direct test receipt bundle."""
+    files: list[dict[str, str]] = []
+    for root_name in ("workctl_modules", "vendor"):
+        root = bundle / root_name
+        if not root.is_dir():
+            continue
+        for path in sorted(
+            candidate
+            for candidate in root.rglob("*")
+            if candidate.is_file()
+            and "__pycache__" not in candidate.parts
+            and candidate.suffix != ".pyc"
+        ):
+            files.append(
+                {
+                    "path": path.relative_to(bundle).as_posix(),
+                    "sha256": sha256_bytes(path.read_bytes()),
+                }
+            )
+    return files
+
+
 def controller_receipt_digest(payload: dict[str, object]) -> str:
     """Hash one READY receipt using the controller-compatible JSON encoding."""
     return sha256_bytes((json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"))
@@ -85,12 +108,17 @@ def write_ready_receipt(
         plugin_root / "scripts" / "workctl_modules",
         bundle / "workctl_modules",
         dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    shutil.copytree(
+        plugin_root / "scripts" / "vendor",
+        bundle / "vendor",
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
     lifecycle.write_bytes((plugin_root / "skills" / "work-lifecycle" / "SKILL.md").read_bytes())
     controller_sha256 = sha256_bytes(controller.read_bytes())
     lifecycle_sha256 = sha256_bytes(lifecycle.read_bytes())
-    module_controller = bundle / "workctl_modules" / "kernel" / "controller.py"
-    module_controller_sha256 = sha256_bytes(module_controller.read_bytes())
     runtime_manifest = {
         "schema_version": 1,
         "kind": "work-governance-runtime-bundle",
@@ -101,12 +129,7 @@ def write_ready_receipt(
         "controller_sha256": controller_sha256,
         "lifecycle_ref": lifecycle.relative_to(project).as_posix(),
         "lifecycle_sha256": lifecycle_sha256,
-        "module_files": [
-            {
-                "path": "workctl_modules/kernel/controller.py",
-                "sha256": module_controller_sha256,
-            }
-        ],
+        "module_files": runtime_bundle_file_manifest(bundle),
     }
     runtime_manifest_path = bundle / "manifest.json"
     runtime_manifest_path.write_text(
@@ -267,7 +290,7 @@ def rewrite_plan_with_pyyaml_escaped_continuation(project: Path, plan_id: str) -
     new = "\n".join(
         [
             '  validation_standard: "Risk feature hit \\u5DF2\\',
-            "    \\u7531 fallback\\",
+            "    \\u7531 packaged\\",
             '    \\ text tied."',
         ]
     )
@@ -1673,8 +1696,6 @@ def test_rollover_recovery_accepts_legacy_confirmation_payload_journal(
             f"---\n{yaml.safe_dump(unsigned_frontmatter, sort_keys=False)}---\n{body}"
         ).encode()
     )
-    assert legacy_target_contract_sha256 != journal["target_contract_sha256"]
-    journal["target_contract_sha256"] = legacy_target_contract_sha256
     legacy_payload = {
         "rollover_id": journal["rollover_id"],
         "source_plan": journal["source_plan"],
@@ -1695,6 +1716,7 @@ def test_rollover_recovery_accepts_legacy_confirmation_payload_journal(
             separators=(",", ":"),
         ).encode("utf-8")
     )
+    assert legacy_proposal_sha256 != journal["proposal_sha256"]
     confirmations = cast(
         list[dict[str, object]],
         cast(dict[str, object], staged_frontmatter["confirmations"])["required"],

@@ -42,6 +42,29 @@ def nearest_layout_root(cwd: Path) -> Path | None:
     return None
 
 
+def runtime_bundle_file_manifest(bundle: Path) -> list[dict[str, str]]:
+    """Return the runtime files bound by one test receipt bundle."""
+    files: list[dict[str, str]] = []
+    for root_name in ("workctl_modules", "vendor"):
+        root = bundle / root_name
+        if not root.is_dir():
+            continue
+        for path in sorted(
+            candidate
+            for candidate in root.rglob("*")
+            if candidate.is_file()
+            and "__pycache__" not in candidate.parts
+            and candidate.suffix != ".pyc"
+        ):
+            files.append(
+                {
+                    "path": path.relative_to(bundle).as_posix(),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                }
+            )
+    return files
+
+
 def ensure_test_ready_receipt(
     cwd: Path,
     *,
@@ -185,7 +208,20 @@ def ensure_test_ready_receipt(
     controller.write_text(wrapper_source, encoding="utf-8")
     module_source = SCRIPT.parent / "workctl_modules"
     if module_source.is_dir():
-        shutil.copytree(module_source, bundle / "workctl_modules", dirs_exist_ok=True)
+        shutil.copytree(
+            module_source,
+            bundle / "workctl_modules",
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+    vendor_source = SCRIPT.parent / "vendor"
+    if vendor_source.is_dir():
+        shutil.copytree(
+            vendor_source,
+            bundle / "vendor",
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
     (bundle / "workctl_modules" / "kernel" / "controller.py").write_text(
         controller_source,
         encoding="utf-8",
@@ -205,6 +241,7 @@ def ensure_test_ready_receipt(
         "controller_sha256": controller_sha256,
         "lifecycle_ref": lifecycle_ref,
         "lifecycle_sha256": lifecycle_sha256,
+        "module_files": runtime_bundle_file_manifest(bundle),
     }
     manifest = bundle / "manifest.json"
     manifest.write_text(
@@ -417,7 +454,7 @@ def rewrite_plan_with_pyyaml_escaped_continuation(path: Path) -> None:
     new = "\n".join(
         [
             '  validation_standard: "Risk feature hit \\u5DF2\\',
-            "    \\u7531 fallback\\",
+            "    \\u7531 packaged\\",
             '    \\ text tied."',
         ]
     )
@@ -1200,18 +1237,12 @@ def test_layout_validate_does_not_parse_active_plan_frontmatter(tmp_path: Path) 
         tmp_path / ".work-governance" / "_Plan" / "PLAN-20260805-001.md"
     )
 
-    layout = run_workctl(
-        tmp_path,
-        "layout",
-        "validate",
-        env={"WORK_GOVERNANCE_DISABLE_PYYAML": "1"},
-    )
+    layout = run_workctl(tmp_path, "layout", "validate")
     status = json.loads(
         run_workctl(
             tmp_path,
             "layout",
             "status",
-            env={"WORK_GOVERNANCE_DISABLE_PYYAML": "1"},
         ).stdout
     )
     plan = run_workctl(
@@ -1219,7 +1250,6 @@ def test_layout_validate_does_not_parse_active_plan_frontmatter(tmp_path: Path) 
         "plan",
         "validate",
         check=False,
-        env={"WORK_GOVERNANCE_DISABLE_PYYAML": "1"},
     )
 
     assert layout.stdout.strip() == "LAYOUT_VALID"
@@ -1230,21 +1260,16 @@ def test_layout_validate_does_not_parse_active_plan_frontmatter(tmp_path: Path) 
     assert "Traceback" not in plan.stderr
 
 
-def test_pyyaml_escaped_continuation_plan_validates_without_pyyaml(
+def test_pyyaml_escaped_continuation_plan_validates_with_packaged_pyyaml(
     tmp_path: Path,
 ) -> None:
-    """The fallback reader accepts the PyYAML continuation shape from the incident."""
+    """The packaged PyYAML reader accepts the continuation shape from the incident."""
     run_workctl(tmp_path, "layout", "migrate")
     write_legacy_plan_fixture(tmp_path, plan_id="PLAN-20260805-001")
     active = tmp_path / ".work-governance" / "_Plan" / "PLAN-20260805-001.md"
     rewrite_plan_with_pyyaml_escaped_continuation(active)
 
-    validation = run_workctl(
-        tmp_path,
-        "plan",
-        "validate",
-        env={"WORK_GOVERNANCE_DISABLE_PYYAML": "1"},
-    )
+    validation = run_workctl(tmp_path, "plan", "validate")
 
     assert validation.stdout.strip() == "PLAN_VALID"
 
