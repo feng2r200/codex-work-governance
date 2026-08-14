@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 import subprocess
@@ -425,6 +426,84 @@ def test_v5_closeout_and_complete_use_runtime_state(tmp_path: Path) -> None:
     )
     assert history["task_counts"] == {"verified": 1}
     assert history["tasks"][0]["status"] == "verified"
+
+
+def test_v5_closeout_retry_after_evidence_capture_reuses_record(tmp_path: Path) -> None:
+    """A retry after closeout evidence capture reuses the deterministic record."""
+    plan_id = "PLAN-20260806-110"
+    init_minimal_v5_goal(tmp_path, plan_id)
+    run_workctl(
+        tmp_path,
+        "task",
+        "done",
+        "--task-id",
+        "T-001",
+        "--expected-state-sequence",
+        "0",
+        "--evidence-stdin",
+        "--summary",
+        "runtime closeout retry evidence",
+        input_text="runtime task verified\n",
+        env=STRICT_CONTROLLER_ENV,
+    )
+
+    frontmatter, _body = read_plan_by_id(tmp_path, plan_id)
+    state_path = (
+        tmp_path
+        / ".work-governance"
+        / "runtime"
+        / "plans"
+        / plan_id
+        / "state.json"
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    script_root = SCRIPT.parent
+    if str(script_root) not in sys.path:
+        sys.path.insert(0, str(script_root))
+    controller: Any = importlib.import_module("workctl_modules.kernel.controller")
+
+    first_ref, first_sha256 = controller._closeout_call(
+        controller.module_kernel_closeout.v5_closeout_evidence,
+        tmp_path,
+        frontmatter,
+        state,
+        None,
+    )
+    second_ref, second_sha256 = controller._closeout_call(
+        controller.module_kernel_closeout.v5_closeout_evidence,
+        tmp_path,
+        frontmatter,
+        state,
+        None,
+    )
+    assert (second_ref, second_sha256) == (first_ref, first_sha256)
+
+    record_dir = tmp_path / ".work-governance" / "evidence" / "records"
+    closeout_records = []
+    for path in record_dir.glob("*.json"):
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if record.get("evidence_kind") == "closeout":
+            closeout_records.append(record)
+    assert len(closeout_records) == 1
+    assert closeout_records[0]["idempotency_key"] == f"{plan_id}:closeout:1"
+
+    run_workctl(
+        tmp_path,
+        "plan",
+        "complete",
+        "--expected-state-sequence",
+        "1",
+        env=STRICT_CONTROLLER_ENV,
+    )
+    completed_frontmatter, _body = read_plan_by_id(tmp_path, plan_id)
+    assert completed_frontmatter["completion"]["evidence_ref"] == first_ref
+    assert completed_frontmatter["completion"]["evidence_sha256"] == first_sha256
+    closeout_records_after_complete = []
+    for path in record_dir.glob("*.json"):
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if record.get("evidence_kind") == "closeout":
+            closeout_records_after_complete.append(record)
+    assert closeout_records_after_complete == closeout_records
 
 
 def test_v5_complete_rejects_stale_state_sequence(tmp_path: Path) -> None:
