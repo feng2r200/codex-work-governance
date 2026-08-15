@@ -1,7 +1,0 @@
-schema_version: 1
-active_plan_id: PLAN-20260815-001
-plans:
-- id: PLAN-20260815-001
-  path: PLAN-20260815-001.md
-  title: Release and Reinstall Work Governance 1.2.0
-  created_at: '2026-08-15T00:14:52+00:00'
