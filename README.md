@@ -2,16 +2,16 @@
 
 Work Governance is a Codex plugin that helps Codex move from an idea or
 unclear request to exploration, goal clarification, an auditable plan,
-execution, correction, validation, and handoff. The 1.1.0 candidate keeps the
-plugin goal-driven: Plan, Skill, script, and Hook behavior support the user
+execution, correction, validation, and handoff. The 1.2.0 candidate keeps the
+plugin goal-driven: Plan, Skill, and direct script behavior support the user
 goal instead of turning every turn into a heavy governance ritual.
 
 The repository-local marketplace is `.agents/plugins/marketplace.json` and the
 plugin source is `plugins/work-governance`.
 
-This repository can prepare a local 1.1.0 candidate, but candidate preparation
+This repository can prepare a local 1.2.0 candidate, but candidate preparation
 does not install, enable, or switch the user's live Codex plugin. Live
-activation remains blocked on `CONFIRM_ACTIVATE_WORK_GOVERNANCE_1_1_0`.
+activation remains blocked on `CONFIRM_ACTIVATE_WORK_GOVERNANCE_1_2_0`.
 The candidate implements the documented core control plane; it does not claim
 that every command named in the architecture draft is already present. Treat
 `workctl help <workflow>` and [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) as
