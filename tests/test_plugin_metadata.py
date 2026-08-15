@@ -54,7 +54,7 @@ def test_plugin_manifest_describes_goal_driven_runtime() -> None:
     )
     assert isinstance(manifest, dict)
     typed_manifest = cast(Mapping[str, object], manifest)
-    assert cast(str, typed_manifest["version"]).startswith("1.1.0+codex.")
+    assert cast(str, typed_manifest["version"]).startswith("1.2.0+codex.")
     assert "goal-driven" in cast(str, typed_manifest["description"])
     assert "plan" not in typed_manifest
     plan_schema = runpy.run_path(
