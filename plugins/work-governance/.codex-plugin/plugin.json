@@ -1,6 +1,6 @@
 {
   "name": "work-governance",
-  "version": "1.4.0+codex.20260817000000",
+  "version": "1.4.1+codex.20260817090636",
   "description": "Govern goal-driven Codex work with executable decision frontiers, compact work status, role-scoped context packages, evidence, and recovery.",
   "author": {
     "name": "Work Governance Contributors"

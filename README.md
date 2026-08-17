@@ -2,7 +2,7 @@
 
 Work Governance is a Codex plugin that helps Codex move from an idea or
 unclear request to exploration, goal clarification, an auditable plan,
-execution, correction, validation, and handoff. The 1.4.0 candidate keeps the
+execution, correction, validation, and handoff. The 1.4.1 candidate keeps the
 plugin goal-driven and lighter at the interaction boundary: Plan, Skill,
 context-package, and direct script behavior support the user goal instead of
 turning every turn into a heavy governance ritual.
@@ -10,9 +10,9 @@ turning every turn into a heavy governance ritual.
 The repository-local marketplace is `.agents/plugins/marketplace.json` and the
 plugin source is `plugins/work-governance`.
 
-This repository can prepare a local 1.4.0 candidate, but candidate preparation
+This repository can prepare a local 1.4.1 candidate, but candidate preparation
 does not install, enable, or switch the user's live Codex plugin. Live
-activation remains blocked on `CONFIRM_ACTIVATE_WORK_GOVERNANCE_1_4_0`.
+activation remains blocked on `CONFIRM_ACTIVATE_WORK_GOVERNANCE_1_4_1`.
 The candidate implements the documented core control plane; it does not claim
 that every command named in the architecture draft is already present. Treat
 `workctl help <workflow>` and [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) as
@@ -28,9 +28,9 @@ the current executable surface.
 - `work-governance:independent-validation` challenges plans, artifacts, and
   completion evidence.
 
-## 1.4.0 Lightweight Work Surface
+## 1.4.1 Lightweight Work Surface
 
-The 1.4.0 candidate turns the useful part of lightweight Socratic planning into
+The 1.4.1 candidate turns the useful part of lightweight Socratic planning into
 small executable read-only surfaces. Unclear requirements should become a
 decision frontier, not a long essay. The model investigates agent-owned facts
 first, then asks one path-changing user-owned question with a recommended answer
@@ -53,8 +53,8 @@ runtime state.
 
 `workctl work status [--full]` aggregates layout, intake, active Plan queue,
 registered `workctl` shim health, and the candidate-release boundary. It makes
-the non-activation state explicit so preparing 1.4.0 does not imply the live
-Codex plugin has switched from 1.3.0.
+the non-activation state explicit so preparing 1.4.1 does not imply the live
+Codex plugin has switched from 1.4.0.
 
 When Git isolation needs a new worktree, the default location is
 `<project-root>/.work-governance/worktrees/<task-or-branch-slug>`. Existing
