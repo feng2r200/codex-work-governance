@@ -70,6 +70,12 @@ component, and the recovery condition.
   Plan: group the next path-changing choices, recommend the default answer,
   ask only the smallest blocking user-owned question, and continue exploring
   agent-owned facts locally.
+- Before any non-trivial implementation or Plan-controlled mutation, establish
+  a compact `Pre-Implementation Contract`: goal anchor, scoped slices,
+  evidence basis, unresolved user-owned frontier, exact execution actions,
+  validation anchors, and stop/revision triggers. If the contract exposes a
+  blocking user-owned unknown, ask at the frontier; otherwise report the
+  contract briefly and continue through the authorized next slice.
 - Treat local exploration, continuation requests, network recovery, and
   credential-ready notices as runtime signals by default. Do not create a
   speculative Plan unknown or revise the contract until evidence shows that
@@ -133,7 +139,8 @@ component, and the recovery condition.
   `references/l0-decision-frontier.md` when requirements are broad, ambiguous,
   or likely to trigger user questions.
 - `L1 Demand Contract`: define obligations, acceptance, scope, no-go boundaries,
-  and confirmation gates. Read `references/l1-demand-contract.md`.
+  the `Pre-Implementation Contract`, and confirmation gates. Read
+  `references/l1-demand-contract.md`.
 - `L2 Plan Control`: admit, validate, revise, confirm, or recover a Plan. Read
   `references/l2-plan-control.md` before any Plan mutation.
 - `L3 Execution`: execute the next verified slice, preserve evidence, and avoid

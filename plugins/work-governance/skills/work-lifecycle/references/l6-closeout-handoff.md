@@ -15,6 +15,9 @@ Report:
 - current slice status and project route status;
 - next phase, its validation standard, and its confirmation gate;
 - changed files and delivery boundary;
+- pre-implementation contract result: planned action versus actual change,
+  expected evidence versus observed evidence, and whether any stop or revision
+  trigger fired;
 - obligations covered and the check for each;
 - acceptance anchors for every must-have obligation;
 - weak-link surfaces checked, their artifact digests or freshness evidence, and

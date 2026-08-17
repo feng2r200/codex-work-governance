@@ -11,6 +11,9 @@ Validation roles:
   missing behavior, hidden side effects, or untracked generated files.
 - Evidence audit: confirm that checks prove the obligations rather than nearby
   facts.
+- Pre-implementation audit: compare the stated execution contract with the
+  actual diff, commands, evidence, user-owned uncertainty handling, and stop or
+  revision triggers.
 - Weak-link audit: confirm that docs, templates, public help, migration notes,
   rollback information, activation instructions, and handoff wording were
   checked when the route touched those surfaces.
@@ -55,5 +58,7 @@ If role isolation is unavailable:
   downgrade.
 
 Validation standard: every completion claim names the obligation, check, and
-fresh evidence; every material test has provenance; weak links have freshness
-evidence when they are in scope; reality-bound gaps are reported as gaps.
+fresh evidence; every material test has provenance; the pre-implementation
+contract still matches the artifact or any mismatch is handled through L5;
+weak links have freshness evidence when they are in scope; reality-bound gaps
+are reported as gaps.

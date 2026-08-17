@@ -15,6 +15,11 @@
 - 无 active Plan 且需要治理执行时，优先用
   `goal init --stdin|--from-file`。输入最小目标契约，controller 生成
   schema-v5 Plan、runtime state、event ledger 和 index。
+- 非简单实现或 Plan-controlled mutation 前，先给出简短
+  `Pre-Implementation Contract`：目标锚点、当前 slice、已读依据、仍需获取的
+  依据、是否存在 user-owned frontier、准备修改/执行的精确内容、验收锚点和
+  停止/修订触发条件。没有用户侧 blocker 时，这不是等待确认；有 blocker 时，
+  先用 frontier 问最小问题。
 - 只需要记录执行路径调整时，用
   `plan adapt --intent-stdin|--intent-from-file`。不要先手写 strict
   adaptation manifest，除非确实需要低层精确 patch。当前 active Plan 仍是
