@@ -54,7 +54,7 @@ def test_plugin_manifest_describes_goal_driven_runtime() -> None:
     )
     assert isinstance(manifest, dict)
     typed_manifest = cast(Mapping[str, object], manifest)
-    assert cast(str, typed_manifest["version"]).startswith("1.3.0+codex.")
+    assert cast(str, typed_manifest["version"]).startswith("1.4.0+codex.")
     assert "goal-driven" in cast(str, typed_manifest["description"])
     assert "plan" not in typed_manifest
     plan_schema = runpy.run_path(
@@ -62,7 +62,7 @@ def test_plugin_manifest_describes_goal_driven_runtime() -> None:
     )
     assert plan_schema["CURRENT_PLAN_SCHEMA_VERSION"] == 5
     interface = cast(Mapping[str, object], typed_manifest["interface"])
-    assert "durable Plan contracts" in cast(str, interface["longDescription"])
+    assert "compact model-facing work status" in cast(str, interface["longDescription"])
 
 
 def test_public_workctl_entry_is_bash_first_wrapper() -> None:
@@ -377,7 +377,10 @@ def test_cli_reference_is_generated_from_the_current_parser() -> None:
     assert "### `gate list`" in reference
     assert "### `truth list`" in reference
     assert "### `review status`" in reference
+    assert "### `frontier draft`" in reference
     assert "### `context build`" in reference
+    assert "### `context lint`" in reference
+    assert "### `work status`" in reference
     assert "### `plan status`" in reference
     assert "### `task verify`" in reference
     assert "### `evidence capture`" in reference

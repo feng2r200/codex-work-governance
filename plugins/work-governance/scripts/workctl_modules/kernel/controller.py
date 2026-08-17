@@ -54,6 +54,7 @@ from workctl_modules import current_advancement_targets as MODULE_CURRENT_ADVANC
 from workctl_modules import dump_scheduler_state as MODULE_DUMP_SCHEDULER_STATE
 from workctl_modules import evidence as module_evidence
 from workctl_modules import context_pack as module_context_pack
+from workctl_modules import frontier as module_frontier
 from workctl_modules import load_scheduler_state as MODULE_LOAD_SCHEDULER_STATE
 from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
 from workctl_modules import plan_sources as module_plan_sources
@@ -64,6 +65,7 @@ from workctl_modules.authority import candidate_to_dict as module_candidate_to_d
 from workctl_modules.authority import parse_candidate_specs as module_parse_candidate_specs
 from workctl_modules.confirmation import confirmation_lookup as module_confirmation_lookup
 from workctl_modules.context_pack import ContextPackageError as ModuleContextPackageError
+from workctl_modules.frontier import FrontierError as ModuleFrontierError
 from workctl_modules import filesystem as module_filesystem
 from workctl_modules.filesystem import FilesystemError as ModuleFilesystemError
 from workctl_modules.history import PlanHistoryError as ModulePlanHistoryError
@@ -93,6 +95,7 @@ from workctl_modules.risk import risk_factors_for_action as module_risk_factors_
 from workctl_modules.risk import risk_inspection_payload as module_risk_inspection_payload
 from workctl_modules import runtime_bundle as module_runtime_bundle
 from workctl_modules.runtime_bundle import RuntimeBundleError as ModuleRuntimeBundleError
+from workctl_modules import work_surface as module_work_surface
 from workctl_modules.status import blocking_artifacts as module_blocking_artifacts
 from workctl_modules.status import compact_plan_status as module_compact_plan_status
 from workctl_modules.status import completion_claims as module_completion_claims
@@ -5962,18 +5965,11 @@ def cmd_layout_validate(_args: argparse.Namespace) -> None:
     print("LAYOUT_VALID")
 
 
-def cmd_intake_status(args: argparse.Namespace) -> None:
-    """Classify Plan intake readiness for direct or legacy receipt-bound use."""
-    root = project_root()
-    receipt = (
-        validate_current_ready_receipt(
-            root,
-            args.receipt_sha256,
-            require_current_controller=True,
-        )
-        if isinstance(args.receipt_sha256, str)
-        else None
-    )
+def intake_status_payload(
+    root: Path,
+    receipt: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Build the public intake-status JSON payload."""
     layout = inspect_layout(root)
     authority_state = "NOT_INSPECTED"
     plan_contract_state = "NO_ACTIVE_PLAN"
@@ -5995,23 +5991,32 @@ def cmd_intake_status(args: argparse.Namespace) -> None:
         if plan_contract_state == "PLAN_SCHEMA_REFRESH_REQUIRED"
         else "INTAKE_BLOCKED"
     )
-    print(
-        json.dumps(
-            {
-                "intake_state": intake_state,
-                "layout_state": layout.state,
-                "authority_state": authority_state,
-                "contract_state": plan_contract_state,
-                "plan_id": plan_id,
-                "receipt_schema_version": receipt["schema_version"] if receipt else None,
-                "session_id": receipt["session_id"] if receipt else None,
-                "controller_ref": receipt["controller_ref"] if receipt else None,
-                "controller_sha256": receipt["controller_sha256"] if receipt else None,
-            },
-            indent=2,
-            sort_keys=True,
+    return {
+        "intake_state": intake_state,
+        "layout_state": layout.state,
+        "authority_state": authority_state,
+        "contract_state": plan_contract_state,
+        "plan_id": plan_id,
+        "receipt_schema_version": receipt["schema_version"] if receipt else None,
+        "session_id": receipt["session_id"] if receipt else None,
+        "controller_ref": receipt["controller_ref"] if receipt else None,
+        "controller_sha256": receipt["controller_sha256"] if receipt else None,
+    }
+
+
+def cmd_intake_status(args: argparse.Namespace) -> None:
+    """Classify Plan intake readiness for direct or legacy receipt-bound use."""
+    root = project_root()
+    receipt = (
+        validate_current_ready_receipt(
+            root,
+            args.receipt_sha256,
+            require_current_controller=True,
         )
+        if isinstance(args.receipt_sha256, str)
+        else None
     )
+    print(json.dumps(intake_status_payload(root, receipt), indent=2, sort_keys=True))
 
 
 def current_turn_receipt_path(root: Path, session_id: str | None = None) -> Path:
@@ -13920,6 +13925,62 @@ def active_plan_id_for_context(root: Path) -> str | None:
     return str(plan_id) if isinstance(plan_id, str) else None
 
 
+def plugin_manifest_version() -> str | None:
+    """Return the source plugin manifest version when available."""
+    manifest_path = SCRIPT_DIR.parent / ".codex-plugin" / "plugin.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return None
+    try:
+        payload: object = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    version = payload.get("version")
+    return version if isinstance(version, str) else None
+
+
+def compact_active_plan_status(root: Path, report: AuthorityReport) -> dict[str, object] | None:
+    """Return compact active-Plan status for the work surface, when available."""
+    try:
+        doc = load_plan(active_plan_path(root))
+    except WorkctlError:
+        return None
+    if contract_state(doc.frontmatter) == "PLAN_SCHEMA_REFRESH_REQUIRED":
+        return current_schema_refresh_status(root, doc.frontmatter, report, full=False)
+    runtime_doc = doc.frontmatter
+    scheduler: Mapping[str, object]
+    if doc.frontmatter.get("schema_version") == 5:
+        state = load_v5_state(root, doc.frontmatter)
+        runtime_doc = v5_runtime_frontmatter(root, doc.frontmatter, state)
+        scheduler = state
+    else:
+        scheduler = load_scheduler_state(root, str(doc.frontmatter["plan_id"]))
+    return compact_plan_status(root, runtime_doc, scheduler=scheduler)
+
+
+def cmd_frontier_draft(args: argparse.Namespace) -> None:
+    """Build a read-only decision-frontier draft from explicit input."""
+    raw_manifest = read_workflow_input_bytes(
+        args,
+        stdin_attr="stdin",
+        file_attr="manifest",
+        required=True,
+        max_bytes=module_context_pack.CONTEXT_MANIFEST_MAX_BYTES,
+    )
+    if raw_manifest is None:
+        raise WorkctlError("FRONTIER_MANIFEST_REQUIRED")
+    manifest = parse_workflow_mapping(raw_manifest, error_prefix="FRONTIER_MANIFEST")
+    try:
+        payload = module_frontier.build_frontier_draft(
+            manifest,
+            manifest_sha256=sha256_bytes(raw_manifest),
+        )
+    except ModuleFrontierError as exc:
+        raise WorkctlError(str(exc)) from exc
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
 def cmd_context_build(args: argparse.Namespace) -> None:
     """Build a bounded role-scoped context package without mutating Plan state."""
     root = project_root()
@@ -13948,6 +14009,51 @@ def cmd_context_build(args: argparse.Namespace) -> None:
     except ModuleContextPackageError as exc:
         raise WorkctlError(str(exc)) from exc
     print(json.dumps(package, indent=2, sort_keys=True))
+
+
+def cmd_context_lint(args: argparse.Namespace) -> None:
+    """Validate a context manifest without emitting source content."""
+    root = project_root()
+    raw_manifest = read_workflow_input_bytes(
+        args,
+        stdin_attr="stdin",
+        file_attr="manifest",
+        required=True,
+        max_bytes=module_context_pack.CONTEXT_MANIFEST_MAX_BYTES,
+    )
+    if raw_manifest is None:
+        raise WorkctlError("CONTEXT_MANIFEST_REQUIRED")
+    manifest = parse_workflow_mapping(raw_manifest, error_prefix="CONTEXT_MANIFEST")
+    try:
+        payload = module_context_pack.lint_context_manifest(
+            root,
+            manifest,
+            roles=args.role,
+            manifest_sha256=sha256_bytes(raw_manifest),
+        )
+    except ModuleContextPackageError as exc:
+        raise WorkctlError(str(exc)) from exc
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_work_status(args: argparse.Namespace) -> None:
+    """Print one compact read-only status surface for the current work."""
+    root = project_root()
+    layout = layout_report_payload(root, inspect_layout(root))
+    intake = intake_status_payload(root, receipt=None)
+    report = inspect_authority(root) if layout.get("layout_state") == "LAYOUT_READY" else None
+    plan = compact_active_plan_status(root, report) if report is not None else None
+    payload = module_work_surface.build_work_status(
+        layout=layout,
+        intake=intake,
+        plan=plan,
+        registered_workctl=module_kernel_legacy_refresh.registered_workctl_report(),
+        plugin_version=plugin_manifest_version(),
+        source_workctl_path=(SCRIPT_DIR / "workctl").resolve(strict=False).as_posix(),
+        release_target_version=args.release_target_version,
+        full=bool(args.full),
+    )
+    print(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def cmd_goal_show(_args: argparse.Namespace) -> None:
@@ -20496,7 +20602,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def command_mutates_state(args: argparse.Namespace) -> bool:
     """Classify commands that must be bound to the newest session receipt."""
-    if args.domain in {"intake", "help", "risk", "context"}:
+    if args.domain in {"intake", "help", "risk", "context", "frontier", "work"}:
         return False
     if args.domain == "evidence":
         return True

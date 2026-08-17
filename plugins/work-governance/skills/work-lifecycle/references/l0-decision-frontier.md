@@ -18,6 +18,12 @@ Turn the remaining user-owned uncertainty into the smallest useful frontier:
 - record the accepted answer as a Plan confirmation only when it becomes durable
   Plan authority.
 
+Prefer `workctl frontier draft --manifest PATH|--stdin` when the unresolved
+choices should be shared, reviewed, or carried across context. The command is
+read-only: it validates a goal anchor, agent-owned facts or unknowns,
+user-owned questions, recommended answers, and blocked targets, but it does not
+create Plan authority or mutate runtime state.
+
 Prefer choices over essays. The user should be able to approve, reject, or edit
 the recommended answer without reading a speculative design document.
 

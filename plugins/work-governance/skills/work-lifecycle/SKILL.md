@@ -194,10 +194,17 @@ The public command aliases are generated from the controller parser. Read
 option table in this Skill. Schema-v5 Plans keep the contract revision in the
 Plan and task, event, and evidence runtime state in the ignored bundle
 referenced by `state_ref`, `event_ref`, and `evidence_store_ref`.
-Use `workctl context build --role implement|check|review|truth
+Use `workctl frontier draft --manifest PATH|--stdin` to turn unresolved,
+user-owned decisions into a deterministic Socratic frontier before asking a
+blocking question. Use `workctl context lint --manifest PATH|--stdin
+[--role ROLE]` to validate manifest paths and role visibility without emitting
+source content, then `workctl context build --role implement|check|review|truth
 --manifest PATH|--stdin` to produce role-scoped context packages from explicit
-project-local files. This is a bounded read-only packaging command; it does
-not create Plan authority, mutate runtime state, or install hooks.
+project-local files. Use `workctl work status [--full]` for a compact
+model-facing aggregate of layout, intake, active Plan queue, registered shim,
+and non-activation release boundary. These are bounded read-only commands; they
+do not create Plan authority, mutate runtime state, activate a candidate, or
+install hooks.
 
 Never infer a second execution authority from a filename, Git history, a phase
 design, or text such as "next step" alone. A likely second authority requires

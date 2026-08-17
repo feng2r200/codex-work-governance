@@ -1,7 +1,7 @@
 {
   "name": "work-governance",
-  "version": "1.3.0+codex.20260817055020",
-  "description": "Govern goal-driven Codex work with lightweight decision frontiers, durable Plan contracts, role-scoped context packages, evidence, and recovery.",
+  "version": "1.4.0+codex.20260817000000",
+  "description": "Govern goal-driven Codex work with executable decision frontiers, compact work status, role-scoped context packages, evidence, and recovery.",
   "author": {
     "name": "Work Governance Contributors"
   },
@@ -16,7 +16,7 @@
   "interface": {
     "displayName": "Work Governance",
     "shortDescription": "Govern goal-driven work, evidence, plans, and Git boundaries.",
-    "longDescription": "Work Governance provides a fail-closed, goal-first lifecycle with direct local workctl execution, lightweight decision-frontier intake, durable Plan contracts and runtime state, role-scoped context packages, explicit migration and recovery, deterministic evidence control, and focused skills for Git changes, project truth sources, and independent validation.",
+    "longDescription": "Work Governance provides a fail-closed, goal-first lifecycle with direct local workctl execution, executable decision-frontier intake, compact model-facing work status, durable Plan contracts and runtime state, role-scoped context packages, explicit migration and recovery, deterministic evidence control, and focused skills for Git changes, project truth sources, and independent validation.",
     "developerName": "Work Governance Contributors",
     "category": "Productivity",
     "websiteURL": "https://github.com/feng2r200/codex-work-governance",

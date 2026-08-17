@@ -10,7 +10,7 @@ Use the registered direct `workctl` executable. It runs without `uv run` and wit
 workctl <domain> <command> [options]
 ```
 
-Legacy schema-v4 compatibility commands may require an explicitly supplied current turn receipt. Ordinary schema-v5 runtime commands use the expected state guard without turn intake. Outdated active Plans report `PLAN_SCHEMA_REFRESH_REQUIRED` and allow only read-only inspection plus explicit current-schema refresh. `plan status`, `plan show`, queue views, `help`, `migrate inspect`, `migrate apply --dry-run`, `migrate rollback-info`, `context build`, and default `doctor` are read-only views.
+Legacy schema-v4 compatibility commands may require an explicitly supplied current turn receipt. Ordinary schema-v5 runtime commands use the expected state guard without turn intake. Outdated active Plans report `PLAN_SCHEMA_REFRESH_REQUIRED` and allow only read-only inspection plus explicit current-schema refresh. `plan status`, `plan show`, queue views, `help`, `migrate inspect`, `migrate apply --dry-run`, `migrate rollback-info`, `frontier draft`, `context build`, `context lint`, `work status`, and default `doctor` are read-only views.
 
 ## Stable workflow aliases
 
@@ -30,8 +30,9 @@ Single-use capabilities and leases remain compatibility/advanced tools; confirma
 ### `context`
 
 - `context build --role implement|check|review|truth --manifest PATH|--stdin`
+- `context lint --manifest PATH|--stdin [--role ROLE]`
 
-Build a bounded role-scoped context package from explicit project-local files. This is read-only, hookless, and does not create or mutate Plan authority.
+Build a bounded role-scoped context package from explicit project-local files, or lint the manifest without emitting source content. This is read-only, hookless, and does not create or mutate Plan authority.
 
 ### `doctor`
 
@@ -48,6 +49,12 @@ Doctor is read-only by default and reports the PATH-registered workctl shim; cle
 - `plan evidence record --manifest PATH|--stdin`
 
 Command evidence stores redacted stdout/stderr transcript blobs plus argv/cwd/exit metadata; Plan evidence records remain the bounded canonical compatibility path.
+
+### `frontier`
+
+- `frontier draft --manifest PATH|--stdin`
+
+Build a read-only Socratic decision frontier with goal anchor, agent-owned facts, path-changing user questions, recommended answers, and blocked targets. It does not create Plan authority.
 
 ### `gate`
 
@@ -131,6 +138,12 @@ Prefer evidence command followed by task done with the direct evidence record re
 
 Truth writes are aliases over the confirmed contract revision path.
 
+### `work`
+
+- `work status [--full]`
+
+Aggregate layout, intake, active Plan queue, registered workctl shim, and non-activation release boundary into one read-only model-facing work surface.
+
 ### `worktree`
 
 - `worktree begin --worktree-id WT-ID --path PATH --branch BRANCH`
@@ -145,11 +158,11 @@ Worktree ledgers are runtime-only NON_AUTHORITY execution logs; only their close
 ### `action authorize`
 
 ```text
-usage: workctl action authorize [-h] --action-kind
-                                {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
-                                --target-ref TARGET_REF --action-sha256
-                                ACTION_SHA256 --confirmation-id
-                                CONFIRMATION_ID --ref REF
+usage: workctl action authorize [-h]
+                                --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+                                --target-ref TARGET_REF
+                                --action-sha256 ACTION_SHA256
+                                --confirmation-id CONFIRMATION_ID --ref REF
                                 --turn-receipt-sha256 TURN_RECEIPT_SHA256
                                 [--ttl-seconds TTL_SECONDS]
 
@@ -168,10 +181,9 @@ options:
 
 ```text
 usage: workctl action consume [-h] --authorization-id AUTHORIZATION_ID
-                              --action-kind
-                              {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
-                              --target-ref TARGET_REF --action-sha256
-                              ACTION_SHA256
+                              --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+                              --target-ref TARGET_REF
+                              --action-sha256 ACTION_SHA256
                               [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
                               --consumer-ref CONSUMER_REF
 
@@ -188,10 +200,10 @@ options:
 ### `action lease authorize`
 
 ```text
-usage: workctl action lease authorize [-h] --lease-id LEASE_ID --action-kind
-                                      {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
-                                      --target-ref TARGET_REF --action-sha256
-                                      ACTION_SHA256
+usage: workctl action lease authorize [-h] --lease-id LEASE_ID
+                                      --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+                                      --target-ref TARGET_REF
+                                      --action-sha256 ACTION_SHA256
                                       [--idempotency-key IDEMPOTENCY_KEY]
                                       [--ttl-seconds TTL_SECONDS]
 
@@ -208,8 +220,8 @@ options:
 ### `action lease issue`
 
 ```text
-usage: workctl action lease issue [-h] --action-kind
-                                  {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+usage: workctl action lease issue [-h]
+                                  --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
                                   [--target-ref TARGET_REF]
                                   [--target-prefix TARGET_PREFIX]
                                   [--action-digest-policy {dynamic,exact-list}]
@@ -246,8 +258,8 @@ options:
 ### `action lease prepare`
 
 ```text
-usage: workctl action lease prepare [-h] --action-kind
-                                    {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
+usage: workctl action lease prepare [-h]
+                                    --action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}
                                     [--target-ref TARGET_REF]
                                     [--target-prefix TARGET_PREFIX]
                                     [--action-digest-policy {dynamic,exact-list}]
@@ -325,6 +337,19 @@ options:
   --max-total-bytes MAX_TOTAL_BYTES
 ```
 
+### `context lint`
+
+```text
+usage: workctl context lint [-h] (--manifest MANIFEST | --stdin)
+                            [--role {check,implement,review,truth}]
+
+options:
+  -h, --help            show this help message and exit
+  --manifest MANIFEST
+  --stdin               Read a JSON/YAML context manifest from standard input.
+  --role {check,implement,review,truth}
+```
+
 ### `doctor`
 
 ```text
@@ -340,8 +365,9 @@ options:
 ### `evidence capture`
 
 ```text
-usage: workctl evidence capture [-h] [--task TASK] --kind KIND --summary
-                                SUMMARY [--from-file FROM_FILE] [--stdin]
+usage: workctl evidence capture [-h] [--task TASK] --kind KIND
+                                --summary SUMMARY [--from-file FROM_FILE]
+                                [--stdin]
                                 [--redaction-policy REDACTION_POLICY]
                                 [--idempotency-key IDEMPOTENCY_KEY]
                                 [--expected-state-sequence EXPECTED_STATE_SEQUENCE]
@@ -362,8 +388,8 @@ options:
 ### `evidence command`
 
 ```text
-usage: workctl evidence command [-h] --task TASK [--kind KIND] --summary
-                                SUMMARY [--cwd CWD]
+usage: workctl evidence command [-h] --task TASK [--kind KIND]
+                                --summary SUMMARY [--cwd CWD]
                                 [--timeout-seconds TIMEOUT_SECONDS]
                                 [--max-output-bytes MAX_OUTPUT_BYTES]
                                 [--idempotency-key IDEMPOTENCY_KEY]
@@ -396,6 +422,17 @@ options:
   --stdin
 ```
 
+### `frontier draft`
+
+```text
+usage: workctl frontier draft [-h] (--manifest MANIFEST | --stdin)
+
+options:
+  -h, --help           show this help message and exit
+  --manifest MANIFEST
+  --stdin              Read a JSON/YAML frontier manifest from standard input.
+```
+
 ### `gate check`
 
 ```text
@@ -418,10 +455,10 @@ options:
 ### `gate open`
 
 ```text
-usage: workctl gate open [-h] --confirmation-id CONFIRMATION_ID --description
-                         DESCRIPTION [--status STATUS] [--ref REF]
-                         --intervention-kind
-                         {deviation_recovery,external_authority,plan_contract}
+usage: workctl gate open [-h] --confirmation-id CONFIRMATION_ID
+                         --description DESCRIPTION [--status STATUS]
+                         [--ref REF]
+                         --intervention-kind {deviation_recovery,external_authority,plan_contract}
                          --blocks BLOCKS --basis-ref BASIS_REF
                          [--basis-sha256 BASIS_SHA256]
                          [--action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}]
@@ -503,9 +540,8 @@ options:
 ### `goal init`
 
 ```text
-usage: workctl goal init [-h] [--plan-id PLAN_ID] [--title TITLE]
-                         (--stdin | --from-file FROM_FILE)
-                         [--mode {autonomous,strict}]
+usage: workctl goal init [-h] [--plan-id PLAN_ID] [--title TITLE] (--stdin |
+                         --from-file FROM_FILE) [--mode {autonomous,strict}]
 
 options:
   -h, --help            show this help message and exit
@@ -539,10 +575,10 @@ options:
 
 ```text
 usage: workctl help [-h]
-                    [{plan,task,evidence,action,migrate,migration,goal,gate,truth,review,context,risk,worktree,doctor}]
+                    [{plan,task,evidence,action,migrate,migration,goal,frontier,gate,truth,review,context,work,risk,worktree,doctor}]
 
 positional arguments:
-  {plan,task,evidence,action,migrate,migration,goal,gate,truth,review,context,risk,worktree,doctor}
+  {plan,task,evidence,action,migrate,migration,goal,frontier,gate,truth,review,context,work,risk,worktree,doctor}
 
 options:
   -h, --help            show this help message and exit
@@ -553,8 +589,8 @@ options:
 ```text
 usage: workctl intake receipt [-h] --turn-receipt-sha256 TURN_RECEIPT_SHA256
                               --classification {no_plan,plan_controlled}
-                              --decision {proceed,explore,ask} --rationale
-                              RATIONALE --targets TARGETS
+                              --decision {proceed,explore,ask}
+                              --rationale RATIONALE --targets TARGETS
                               [--current-unknown-id CURRENT_UNKNOWN_ID]
                               [--candidate-plan CANDIDATE_PLAN]
 
@@ -581,9 +617,10 @@ options:
 ### `layout adopt`
 
 ```text
-usage: workctl layout adopt [-h] --expected-manifest-sha256
-                            EXPECTED_MANIFEST_SHA256 --expected-active-plan-id
-                            EXPECTED_ACTIVE_PLAN_ID --ref REF
+usage: workctl layout adopt [-h]
+                            --expected-manifest-sha256 EXPECTED_MANIFEST_SHA256
+                            --expected-active-plan-id EXPECTED_ACTIVE_PLAN_ID
+                            --ref REF
 
 options:
   -h, --help            show this help message and exit
@@ -724,8 +761,9 @@ options:
 ### `plan activation-repair`
 
 ```text
-usage: workctl plan activation-repair [-h] --task-id TASK_ID --target-ref
-                                      TARGET_REF --confirmation CONFIRMATION
+usage: workctl plan activation-repair [-h] --task-id TASK_ID
+                                      --target-ref TARGET_REF
+                                      --confirmation CONFIRMATION
                                       --expected-revision EXPECTED_REVISION
                                       [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
                                       [--expected-intake-sha256 EXPECTED_INTAKE_SHA256]
@@ -743,8 +781,8 @@ options:
 ### `plan adapt`
 
 ```text
-usage: workctl plan adapt [-h]
-                          (--manifest MANIFEST | --intent-stdin | --intent-from-file INTENT_FROM_FILE)
+usage: workctl plan adapt [-h] (--manifest MANIFEST | --intent-stdin |
+                          --intent-from-file INTENT_FROM_FILE)
                           [--summary SUMMARY]
                           [--idempotency-key IDEMPOTENCY_KEY]
                           [--expected-revision EXPECTED_REVISION]
@@ -787,8 +825,8 @@ options:
 ### `plan artifact-state`
 
 ```text
-usage: workctl plan artifact-state [-h] --artifact-id ARTIFACT_ID --state
-                                   {suspect,quarantined,rollback-pending}
+usage: workctl plan artifact-state [-h] --artifact-id ARTIFACT_ID
+                                   --state {suspect,quarantined,rollback-pending}
                                    [--confirmation CONFIRMATION]
                                    [--evidence-manifest EVIDENCE_MANIFEST]
                                    [--evidence-ref EVIDENCE_REF]
@@ -896,8 +934,7 @@ options:
 usage: workctl plan confirmation add [-h] --confirmation-id CONFIRMATION_ID
                                      --description DESCRIPTION
                                      [--status STATUS] [--ref REF]
-                                     --intervention-kind
-                                     {deviation_recovery,external_authority,plan_contract}
+                                     --intervention-kind {deviation_recovery,external_authority,plan_contract}
                                      --blocks BLOCKS --basis-ref BASIS_REF
                                      [--basis-sha256 BASIS_SHA256]
                                      [--action-kind {destructive_operation,production_change,remote_write,secret_handling,substantive_rollback}]
@@ -921,8 +958,7 @@ options:
 
 ```text
 usage: workctl plan confirmation classify [-h] --manifest MANIFEST
-                                          --expected-revision
-                                          EXPECTED_REVISION
+                                          --expected-revision EXPECTED_REVISION
 
 options:
   -h, --help            show this help message and exit
@@ -1048,8 +1084,9 @@ options:
 ### `plan finalize-artifact`
 
 ```text
-usage: workctl plan finalize-artifact [-h] --artifact-id ARTIFACT_ID --task-id
-                                      TASK_ID --confirmation CONFIRMATION
+usage: workctl plan finalize-artifact [-h] --artifact-id ARTIFACT_ID
+                                      --task-id TASK_ID
+                                      --confirmation CONFIRMATION
                                       [--evidence-manifest EVIDENCE_MANIFEST]
                                       [--evidence-ref EVIDENCE_REF]
                                       [--evidence-sha256 EVIDENCE_SHA256]
@@ -1094,8 +1131,7 @@ options:
 
 ```text
 usage: workctl plan independent-review record [-h] --manifest MANIFEST
-                                              --expected-revision
-                                              EXPECTED_REVISION
+                                              --expected-revision EXPECTED_REVISION
                                               [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
                                               [--expected-intake-sha256 EXPECTED_INTAKE_SHA256]
 
@@ -1123,8 +1159,8 @@ options:
 ### `plan intake record`
 
 ```text
-usage: workctl plan intake record [-h] --manifest MANIFEST --expected-revision
-                                  EXPECTED_REVISION
+usage: workctl plan intake record [-h] --manifest MANIFEST
+                                  --expected-revision EXPECTED_REVISION
 
 options:
   -h, --help            show this help message and exit
@@ -1324,8 +1360,8 @@ options:
 ### `plan structural-rebase recover`
 
 ```text
-usage: workctl plan structural-rebase recover [-h] --transaction-id
-                                              TRANSACTION_ID
+usage: workctl plan structural-rebase recover [-h]
+                                              --transaction-id TRANSACTION_ID
 
 options:
   -h, --help            show this help message and exit
@@ -1335,9 +1371,10 @@ options:
 ### `plan unknown add`
 
 ```text
-usage: workctl plan unknown add [-h] --unknown-id UNKNOWN_ID --question
-                                QUESTION --owner {agent,user} --impact
-                                {blocking,non_blocking} [--blocks BLOCKS]
+usage: workctl plan unknown add [-h] --unknown-id UNKNOWN_ID
+                                --question QUESTION --owner {agent,user}
+                                --impact {blocking,non_blocking}
+                                [--blocks BLOCKS]
                                 --expected-evidence EXPECTED_EVIDENCE
                                 --expected-revision EXPECTED_REVISION
 
@@ -1367,10 +1404,10 @@ options:
 ### `plan unknown resolve`
 
 ```text
-usage: workctl plan unknown resolve [-h] --unknown-id UNKNOWN_ID --resolution
-                                    RESOLUTION --evidence-manifest
-                                    EVIDENCE_MANIFEST --expected-revision
-                                    EXPECTED_REVISION
+usage: workctl plan unknown resolve [-h] --unknown-id UNKNOWN_ID
+                                    --resolution RESOLUTION
+                                    --evidence-manifest EVIDENCE_MANIFEST
+                                    --expected-revision EXPECTED_REVISION
 
 options:
   -h, --help            show this help message and exit
@@ -1394,8 +1431,8 @@ options:
 
 ```text
 usage: workctl plan verify-entry [-h] --field {obligations,validations}
-                                 --entry-id ENTRY_ID --confirmation
-                                 CONFIRMATION
+                                 --entry-id ENTRY_ID
+                                 --confirmation CONFIRMATION
                                  [--evidence-manifest EVIDENCE_MANIFEST]
                                  [--evidence-ref EVIDENCE_REF]
                                  [--evidence-sha256 EVIDENCE_SHA256]
@@ -1421,8 +1458,7 @@ options:
 ```text
 usage: workctl review acquisition check [-h] --target-ref TARGET_REF
                                         --mechanism MECHANISM
-                                        --review-input-sha256
-                                        REVIEW_INPUT_SHA256
+                                        --review-input-sha256 REVIEW_INPUT_SHA256
 
 options:
   -h, --help            show this help message and exit
@@ -1436,8 +1472,7 @@ options:
 ```text
 usage: workctl review acquisition record-failure [-h] --target-ref TARGET_REF
                                                  --mechanism MECHANISM
-                                                 --review-input-sha256
-                                                 REVIEW_INPUT_SHA256
+                                                 --review-input-sha256 REVIEW_INPUT_SHA256
                                                  --attempt-ref ATTEMPT_REF
                                                  --exit-code EXIT_CODE
                                                  [--failure-class {auto,attestor_untrusted,auth_unavailable,command_missing,network_proxy_blocked,timeout,unknown_failure}]
@@ -1479,8 +1514,8 @@ options:
 ### `review attach`
 
 ```text
-usage: workctl review attach [-h] --manifest MANIFEST --expected-revision
-                             EXPECTED_REVISION
+usage: workctl review attach [-h] --manifest MANIFEST
+                             --expected-revision EXPECTED_REVISION
                              [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
                              [--expected-intake-sha256 EXPECTED_INTAKE_SHA256]
 
@@ -1513,10 +1548,10 @@ options:
 ### `risk inspect`
 
 ```text
-usage: workctl risk inspect [-h] --action-kind
-                            {data_read,data_write,destructive_operation,local_commit,local_edit,production_change,remote_read,remote_write,secret_handling,substantive_rollback}
-                            --target-ref TARGET_REF
-                            [--action-stdin | --action-from-file ACTION_FROM_FILE]
+usage: workctl risk inspect [-h]
+                            --action-kind {data_read,data_write,destructive_operation,local_commit,local_edit,production_change,remote_read,remote_write,secret_handling,substantive_rollback}
+                            --target-ref TARGET_REF [--action-stdin |
+                            --action-from-file ACTION_FROM_FILE]
 
 options:
   -h, --help            show this help message and exit
@@ -1550,7 +1585,10 @@ usage: workctl task done [-h] --task-id TASK_ID
                          [--expected-state-sequence EXPECTED_STATE_SEQUENCE]
                          [--note NOTE] [--kind KIND] [--summary SUMMARY]
                          [--idempotency-key IDEMPOTENCY_KEY]
-                         [--evidence-stdin | --evidence-from-file EVIDENCE_FROM_FILE | --from-file EVIDENCE_FROM_FILE | --evidence-ref EVIDENCE_REF]
+                         [--evidence-stdin |
+                         --evidence-from-file EVIDENCE_FROM_FILE |
+                         --from-file EVIDENCE_FROM_FILE |
+                         --evidence-ref EVIDENCE_REF]
                          [--evidence-sha256 EVIDENCE_SHA256]
                          [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
                          [--expected-intake-sha256 EXPECTED_INTAKE_SHA256]
@@ -1577,8 +1615,7 @@ options:
 
 ```text
 usage: workctl task reprioritize [-h] --task-id TASK_ID --priority PRIORITY
-                                 --expected-state-sequence
-                                 EXPECTED_STATE_SEQUENCE
+                                 --expected-state-sequence EXPECTED_STATE_SEQUENCE
 
 options:
   -h, --help            show this help message and exit
@@ -1654,7 +1691,8 @@ usage: workctl task verify [-h] --task-id TASK_ID
                            [--expected-revision EXPECTED_REVISION]
                            [--expected-state-sequence EXPECTED_STATE_SEQUENCE]
                            [--note NOTE]
-                           [--evidence-manifest EVIDENCE_MANIFEST | --evidence-stdin]
+                           [--evidence-manifest EVIDENCE_MANIFEST |
+                           --evidence-stdin]
                            [--turn-receipt-sha256 TURN_RECEIPT_SHA256]
                            [--expected-intake-sha256 EXPECTED_INTAKE_SHA256]
 
@@ -1707,6 +1745,18 @@ usage: workctl truth resolve [-h] --manifest MANIFEST
 options:
   -h, --help           show this help message and exit
   --manifest MANIFEST
+```
+
+### `work status`
+
+```text
+usage: workctl work status [-h] [--full]
+                           [--release-target-version RELEASE_TARGET_VERSION]
+
+options:
+  -h, --help            show this help message and exit
+  --full
+  --release-target-version RELEASE_TARGET_VERSION
 ```
 
 ### `worktree begin`

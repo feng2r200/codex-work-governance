@@ -8,6 +8,7 @@ from .context_pack import (
     VALID_CONTEXT_ROLES,
     ContextPackageError,
     build_context_package,
+    lint_context_manifest,
 )
 from .evidence import (
     append_capture_record,
@@ -32,6 +33,7 @@ from .evidence import (
     verify_capture_record_file,
     workflow_evidence_payload,
 )
+from .frontier import FrontierError, build_frontier_draft
 from .migration import build_v5_contract, build_v5_state, migration_projection
 from .scheduler import (
     SchedulerStateError,
@@ -44,6 +46,7 @@ from .scheduler import (
     scheduler_state_path,
 )
 from .storage import canonical_json_bytes
+from .work_surface import build_work_status
 
 __all__ = [
     "WORKFLOW_HELP",
@@ -56,9 +59,12 @@ __all__ = [
     "append_capture_record",
     "build_v5_contract",
     "build_context_package",
+    "build_frontier_draft",
+    "build_work_status",
     "build_v5_state",
     "canonical_evidence_bytes",
     "ContextPackageError",
+    "FrontierError",
     "confirmation_from_manifest",
     "capture_record_id",
     "evidence_capture_blob_path",
@@ -74,6 +80,7 @@ __all__ = [
     "current_advancement_targets",
     "dump_scheduler_state",
     "load_scheduler_state",
+    "lint_context_manifest",
     "next_suggestion",
     "parse_evidence_bytes",
     "persist_capture_blob",

@@ -43,10 +43,19 @@
   confirmation 或 evidence 当成当前 runtime state。
 - 判断高影响动作前，可用 `risk inspect --action-kind KIND --target-ref REF`
   获取风险事实。controller 不替模型决定是否必须向用户确认。
+- 需求仍模糊但已经能归纳成几个路径选择时，用
+  `frontier draft --manifest PATH|--stdin` 生成决策前沿。输出必须包含目标锚点、
+  agent-owned facts/unknowns、user-owned questions、推荐答案和 blocked targets；
+  它只读，不创建 Plan authority。
 - 需要把上下文交给实现、检查、评审或项目真理源角色时，用
+  `context lint --manifest PATH|--stdin [--role ROLE]` 先检查 manifest 路径和角色，
+  不输出源码正文；再用
   `context build --role implement|check|review|truth --manifest PATH|--stdin`。
-  manifest 只列项目内显式文件；输出包含 SHA256、截断状态和 bounded content。
-  该命令只读、无 hook、不创建 Plan，也不改 runtime state。
+  manifest 只列项目内显式文件；build 输出包含 SHA256、截断状态和 bounded
+  content。这两个命令只读、无 hook、不创建 Plan，也不改 runtime state。
+- 需要快速判断当前能不能继续工作时，用 `work status [--full]`。它聚合 layout、
+  intake、active Plan 队列、注册 `workctl` shim 和候选版本未激活边界；它不替代
+  `plan status --full` 的详细审计视图。
 - 子 worktree 执行只记录
   `worktree begin|record|close`。`begin` 会记录父 Plan `fork_base`；`close`
   会输出带 fork 基线的 close summary。完成后先运行

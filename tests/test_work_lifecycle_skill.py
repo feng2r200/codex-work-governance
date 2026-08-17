@@ -181,7 +181,10 @@ def test_decision_frontier_and_context_governance_are_routed_from_lifecycle() ->
     assert "references/l7-context-governance.md" in skill
     assert "recommended answer" in frontier
     assert "ask one blocking question at a time" in frontier
+    assert "workctl frontier draft --manifest PATH|--stdin" in frontier
+    assert "workctl context lint --manifest PATH|--stdin [--role ROLE]" in context
     assert "workctl context build --role implement|check|review|truth" in skill
+    assert "workctl work status [--full]" in skill
     assert "does not mutate the contract or runtime state" in context
     assert "Do not install automatic context-injection hooks by default" in context
 
