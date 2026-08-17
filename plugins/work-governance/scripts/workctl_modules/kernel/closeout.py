@@ -234,6 +234,39 @@ def v5_closeout_evidence(
     return str(direct_record["evidence_ref"]), str(direct_record["evidence_sha256"])
 
 
+def completion_payload(
+    frontmatter: Mapping[str, Any],
+    *,
+    active_released: bool,
+    route_finalized: bool,
+) -> dict[str, object]:
+    """Return an automation-friendly terminal completion payload."""
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "kind": "work-governance-plan-completion",
+        "status": "PLAN_COMPLETED",
+        "plan_id": frontmatter.get("plan_id"),
+        "plan_schema_version": frontmatter.get("schema_version"),
+        "revision": frontmatter.get("revision"),
+        "contract_revision": frontmatter.get("contract_revision"),
+        "state_sequence": None,
+        "active_released": active_released,
+        "route_finalized": route_finalized,
+    }
+    completion = frontmatter.get("completion")
+    if isinstance(completion, dict):
+        payload["completion"] = dict(completion)
+        payload["state_sequence"] = completion.get("state_sequence")
+        payload["evidence_ref"] = completion.get("evidence_ref")
+        payload["evidence_sha256"] = completion.get("evidence_sha256")
+    completion_evidence = frontmatter.get("completion_evidence")
+    if isinstance(completion_evidence, dict):
+        payload["completion_evidence"] = dict(completion_evidence)
+        payload["evidence_ref"] = completion_evidence.get("ref")
+        payload["evidence_sha256"] = completion_evidence.get("sha256")
+    return payload
+
+
 def cmd_plan_complete(args: argparse.Namespace) -> None:
     """Mark a Plan complete, optionally finalizing a ready route atomically."""
     root = project_root()
@@ -286,7 +319,17 @@ def cmd_plan_complete(args: argparse.Namespace) -> None:
                 },
             )
             release_v5_active_index(root, str(doc.frontmatter["plan_id"]))
-            print(f"PLAN_COMPLETED state_sequence={state['state_sequence']} active_released=true")
+            print(
+                json.dumps(
+                    completion_payload(
+                        doc.frontmatter,
+                        active_released=True,
+                        route_finalized=bool(args.finalize_route),
+                    ),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
             return
         require_expected_revision(doc.frontmatter, args.expected_revision)
         require_current_intake(
@@ -378,4 +421,14 @@ def cmd_plan_complete(args: argparse.Namespace) -> None:
             persist_intake_history_record(root, plan_id, refreshed_record)
         require_valid_candidate(doc)
         write_atomic(doc.path, dump_plan(doc))
-        print(f"PLAN_COMPLETED revision={doc.frontmatter['revision']}")
+        print(
+            json.dumps(
+                completion_payload(
+                    doc.frontmatter,
+                    active_released=False,
+                    route_finalized=finalized_atomically,
+                ),
+                indent=2,
+                sort_keys=True,
+            )
+        )

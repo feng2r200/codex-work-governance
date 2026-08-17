@@ -16,6 +16,10 @@ Plan is needed.
 - `workctl work status [--full]` aggregates layout, intake, active Plan queue,
   registered `workctl` shim health, and the release candidate boundary into one
   model-facing status object.
+- `workctl plan complete` and `workctl goal close` return a JSON completion
+  payload instead of a text-only status line, so automated closeout review can
+  parse completion state, revision or state sequence, evidence, route-finalized
+  status, and active-pointer release.
 - `workctl context build` remains bounded and redacted; 1.4.0 preserves the
   1.3.0 secret-path rejection and stream-before-budget behavior.
 
@@ -33,4 +37,5 @@ The candidate must prove:
 - decision frontiers ask only user-owned path-changing questions;
 - context lint never emits source content or secrets;
 - work status reports candidate non-activation explicitly;
+- terminal closeout emits parseable JSON;
 - generated `docs/CLI_REFERENCE.md` matches the parser.
