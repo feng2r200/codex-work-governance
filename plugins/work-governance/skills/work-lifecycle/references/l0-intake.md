@@ -36,6 +36,13 @@ target, choose `ask`.
 Prefer exploration over questions when the answer is discoverable locally.
 Ask only the path-changing question when user choice is required.
 
+Before implementation, make the intake output usable by the later
+`Pre-Implementation Contract`: separate confirmed facts, agent-owned evidence
+still to gather, and user-owned uncertainty that can change the route. A
+missing local fact should become an evidence-gathering step, not a question.
+A missing user preference should become a frontier question only when it blocks
+the next exact target.
+
 Routine exploration, a request to continue, a recovered network, or a
 credential-ready notice is not a contract revision by itself. Keep those
 signals in session/runtime evidence and promote them to a Plan unknown only

@@ -213,6 +213,41 @@ def test_goal_anchor_reality_probe_and_test_provenance_are_required() -> None:
     assert "exhaustive\ncoverage and invented scenarios are not delivery goals" in readme
 
 
+def test_pre_implementation_contract_is_required_before_mutation() -> None:
+    """Non-trivial work must plan evidence, uncertainty, actions, and checks first."""
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+    intake = L0_PATH.read_text(encoding="utf-8")
+    demand = L1_PATH.read_text(encoding="utf-8")
+    execution = L3_PATH.read_text(encoding="utf-8")
+    validation = L4_PATH.read_text(encoding="utf-8")
+    closeout = L6_PATH.read_text(encoding="utf-8")
+    readme = README_PATH.read_text(encoding="utf-8")
+    model_first = (REPOSITORY_ROOT / "docs" / "MODEL_FIRST.md").read_text(
+        encoding="utf-8"
+    )
+    public_contract = "\n".join(
+        (skill, intake, demand, execution, validation, closeout, readme, model_first)
+    )
+
+    assert "`Pre-Implementation Contract`" in skill
+    assert "Before implementation, make the intake output usable" in intake
+    for requirement in (
+        "goal anchor",
+        "evidence basis",
+        "unresolved user-owned uncertainty",
+        "exact files, data, commands, external surfaces, or documentation locations",
+        "validation anchors",
+        "stop or revision triggers",
+    ):
+        assert requirement in demand
+    assert "present the `Pre-Implementation Contract` for non-trivial work" in execution
+    assert "intended action versus actual change" in public_contract
+    assert "expected evidence versus observed evidence" in public_contract
+    assert "Pre-implementation audit" in validation
+    assert "有 blocker 时，\n  先用 frontier 问最小问题" in model_first
+    assert "This keeps the lightweight path\nSocratic and plan-first" in readme
+
+
 def test_ineffective_loop_has_a_deterministic_stop_loss() -> None:
     """Forbid evidence-free retries while preserving explicit monitoring."""
     skill = SKILL_PATH.read_text(encoding="utf-8")

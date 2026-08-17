@@ -11,6 +11,16 @@ Before edits:
 - protect user changes and unrelated dirty worktree state;
 - identify the exact files to edit and why those are the authority locations;
 - define the command or inspection that will prove the slice.
+- present the `Pre-Implementation Contract` for non-trivial work: planned
+  action, evidence basis, remaining evidence to gather, user-owned uncertainty
+  if any, validation anchors, and stop/revision triggers.
+
+The pre-implementation contract should make execution feel like following a
+reviewed route, not inventing the route while mutating files. It does not
+require a user pause when no user-owned blocker remains. It does require the
+agent to state what will be changed, why that is the right surface, what
+evidence is being relied on, and what fresh evidence will be used to judge the
+slice.
 
 Before repeating a command, workaround, or validation expansion, refresh the
 goal anchor and record an attempt tuple: action, relevant inputs/state,
@@ -98,7 +108,10 @@ For SubAgents, pass only a delegation contract and raw artifacts. Do not pass th
 intended answer unless the validation explicitly requires it.
 
 Validation standard: the changed artifact can be tied to a task, obligation, and
-planned check.
+planned check. The completion evidence should also be comparable with the
+pre-implementation contract: intended action versus actual change, expected
+evidence versus observed evidence, and declared stop triggers versus any
+deviation that occurred.
 
 ## Completion Boundary
 

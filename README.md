@@ -73,6 +73,23 @@ the next step. Plan-controlled work uses its `T-ID`; a No-Plan request uses
 `NO_PLAN`. In-progress, blocked, unverified, and SubAgent-only results cannot be
 reported as completed slices.
 
+## Pre-Implementation Contract
+
+For non-trivial work, the Skill layer now requires a compact
+pre-implementation contract before mutation. The model must name the goal
+anchor, scoped slice, evidence basis, remaining evidence to gather,
+user-owned uncertainty and recommended frontier answer when needed, exact
+actions or files to touch, validation anchors, and stop or revision triggers.
+If no user-owned blocker remains, the agent reports the contract briefly and
+continues; if a blocker remains, it asks the smallest frontier question before
+implementation.
+
+Slice verification then compares actual results against that contract: intended
+action versus actual change, expected evidence versus observed evidence, and
+declared stop triggers versus any deviation. This keeps the lightweight path
+Socratic and plan-first without moving every rule into the controller before
+the behavior has been proven useful.
+
 ## Communication and user intervention
 
 Work Governance separates communication from waiting. Discovery and planning

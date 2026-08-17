@@ -15,6 +15,29 @@ Define:
   authorization, project rules, reversibility, risk, or evidence are
   insufficient for a high-impact choice.
 
+Before implementation, derive a compact `Pre-Implementation Contract` from the
+obligation set. It is a reply-level execution contract, not a new schema
+requirement. It must name:
+
+- the goal anchor and the exact task or slice being advanced;
+- the evidence basis already inspected, including files, commands, runtime
+  observations, official sources, or user authority references;
+- evidence still required before or during the slice, with the expected result
+  that would change confidence;
+- unresolved user-owned uncertainty, its blocked targets, and the recommended
+  answer if a frontier is required;
+- exact files, data, commands, external surfaces, or documentation locations
+  intended to change;
+- validation anchors that will prove each must-have obligation touched by the
+  slice;
+- stop or revision triggers that would force L5, a new frontier, or a Plan
+  contract revision.
+
+For simple No-Plan work, the contract can be one sentence. For Plan-controlled
+work, it must be explicit before mutation. If the contract cannot tie a planned
+action to an obligation and validation anchor, do not execute that action; keep
+exploring, narrow the slice, or ask the blocking frontier question.
+
 Do not model conversation as a gate. A new confirmation must carry an
 `intervention` contract with:
 
