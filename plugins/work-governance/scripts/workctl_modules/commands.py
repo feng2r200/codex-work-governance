@@ -81,6 +81,16 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
             "validator-unavailable failures in runtime."
         ),
     },
+    "context": {
+        "commands": [
+            "context build --role implement|check|review|truth --manifest PATH|--stdin",
+        ],
+        "note": (
+            "Build a bounded role-scoped context package from explicit project-local "
+            "files. This is read-only, hookless, and does not create or mutate Plan "
+            "authority."
+        ),
+    },
     "evidence": {
         "commands": [
             "evidence capture --task T-001 --kind command-output --summary TEXT",
@@ -153,8 +163,9 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
     "doctor": {
         "commands": ["doctor", "doctor --clean-stale-transactions"],
         "note": (
-            "Doctor is read-only by default; cleanup only removes stale generic "
-            "runtime transaction directories with no journal."
+            "Doctor is read-only by default and reports the PATH-registered "
+            "workctl shim; cleanup only removes stale generic runtime "
+            "transaction directories with no journal."
         ),
     },
 }

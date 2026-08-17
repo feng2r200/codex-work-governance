@@ -6,6 +6,7 @@ from __future__ import annotations
 # ruff: noqa: F821
 import argparse
 import json
+import shlex
 import shutil
 import time
 from collections.abc import Mapping, Sequence
@@ -636,6 +637,81 @@ def clean_stale_runtime_transactions(root: Path, entries: Sequence[Mapping[str, 
     return cleaned
 
 
+def static_exec_target(shell_text: str) -> str | None:
+    """Return a static absolute exec target from a simple shell shim."""
+    for line in shell_text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("exec "):
+            continue
+        try:
+            parts = shlex.split(stripped)
+        except ValueError:
+            continue
+        if len(parts) >= 2 and parts[0] == "exec" and parts[1].startswith("/"):
+            return parts[1]
+    return None
+
+
+def registered_workctl_report() -> dict[str, Any]:
+    """Report whether the PATH-registered workctl shim points at an existing target."""
+    executable = shutil.which("workctl")
+    if executable is None:
+        return {
+            "state": "missing",
+            "path": None,
+            "reason": "WORKCTL_NOT_ON_PATH",
+        }
+
+    executable_path = Path(executable)
+    report: dict[str, Any] = {
+        "state": "unverified",
+        "path": str(executable_path),
+    }
+    if executable_path.is_symlink():
+        target = executable_path.resolve(strict=False)
+        target_exists = target.is_file()
+        report.update(
+            {
+                "state": "ok" if target_exists else "stale",
+                "target_path": str(target),
+                "target_exists": target_exists,
+            }
+        )
+        if not target_exists:
+            report["reason"] = "WORKCTL_SYMLINK_TARGET_MISSING"
+        return report
+
+    try:
+        with executable_path.open("rb") as stream:
+            shim_bytes = stream.read(64 * 1024)
+        shim_text = shim_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        report["reason"] = "WORKCTL_NOT_TEXT_SHIM"
+        return report
+    except OSError as exc:
+        report["reason"] = f"WORKCTL_SHIM_UNREADABLE: {exc.__class__.__name__}"
+        return report
+
+    target = static_exec_target(shim_text)
+    if target is None:
+        report["state"] = "dynamic"
+        report["reason"] = "WORKCTL_STATIC_EXEC_TARGET_NOT_FOUND"
+        return report
+
+    target_path = Path(target)
+    target_exists = target_path.is_file()
+    report.update(
+        {
+            "state": "ok" if target_exists else "stale",
+            "target_path": str(target_path),
+            "target_exists": target_exists,
+        }
+    )
+    if not target_exists:
+        report["reason"] = "WORKCTL_SHIM_TARGET_MISSING"
+    return report
+
+
 def cmd_doctor(args: argparse.Namespace) -> None:
     """Inspect or safely clean local runtime transaction health."""
     root = project_root()
@@ -678,6 +754,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
                 "blocking_reasons": report.blockers,
                 "schema_v5_migrations": migration_journals,
                 "runtime_transactions": stale_entries,
+                "registered_workctl": registered_workctl_report(),
                 "cleaned": cleaned,
                 "next_action": (
                     "Run migrate recover for incomplete current-schema refresh journals "

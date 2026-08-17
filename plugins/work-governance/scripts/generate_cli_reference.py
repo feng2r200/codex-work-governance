@@ -112,8 +112,8 @@ def render_reference(parser: argparse.ArgumentParser) -> str:
         "Outdated active Plans report `PLAN_SCHEMA_REFRESH_REQUIRED` and allow "
         "only read-only inspection plus explicit current-schema refresh. "
         "`plan status`, `plan show`, queue views, `help`, `migrate inspect`, "
-        "`migrate apply --dry-run`, `migrate rollback-info`, and default "
-        "`doctor` are read-only views.",
+        "`migrate apply --dry-run`, `migrate rollback-info`, `context build`, "
+        "and default `doctor` are read-only views.",
         "",
         workflow_section(cast(Mapping[str, Mapping[str, object]], WORKFLOW_HELP)),
         "",

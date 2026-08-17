@@ -10,7 +10,7 @@ Use the registered direct `workctl` executable. It runs without `uv run` and wit
 workctl <domain> <command> [options]
 ```
 
-Legacy schema-v4 compatibility commands may require an explicitly supplied current turn receipt. Ordinary schema-v5 runtime commands use the expected state guard without turn intake. Outdated active Plans report `PLAN_SCHEMA_REFRESH_REQUIRED` and allow only read-only inspection plus explicit current-schema refresh. `plan status`, `plan show`, queue views, `help`, `migrate inspect`, `migrate apply --dry-run`, `migrate rollback-info`, and default `doctor` are read-only views.
+Legacy schema-v4 compatibility commands may require an explicitly supplied current turn receipt. Ordinary schema-v5 runtime commands use the expected state guard without turn intake. Outdated active Plans report `PLAN_SCHEMA_REFRESH_REQUIRED` and allow only read-only inspection plus explicit current-schema refresh. `plan status`, `plan show`, queue views, `help`, `migrate inspect`, `migrate apply --dry-run`, `migrate rollback-info`, `context build`, and default `doctor` are read-only views.
 
 ## Stable workflow aliases
 
@@ -27,12 +27,18 @@ Legacy schema-v4 compatibility commands may require an explicitly supplied curre
 
 Single-use capabilities and leases remain compatibility/advanced tools; confirmation judgment belongs to the model using current user authority, project rules, reversibility, risk, and evidence.
 
+### `context`
+
+- `context build --role implement|check|review|truth --manifest PATH|--stdin`
+
+Build a bounded role-scoped context package from explicit project-local files. This is read-only, hookless, and does not create or mutate Plan authority.
+
 ### `doctor`
 
 - `doctor`
 - `doctor --clean-stale-transactions`
 
-Doctor is read-only by default; cleanup only removes stale generic runtime transaction directories with no journal.
+Doctor is read-only by default and reports the PATH-registered workctl shim; cleanup only removes stale generic runtime transaction directories with no journal.
 
 ### `evidence`
 
@@ -299,6 +305,26 @@ options:
   --authorization-id AUTHORIZATION_ID
 ```
 
+### `context build`
+
+```text
+usage: workctl context build [-h] --role {check,implement,review,truth}
+                             (--manifest MANIFEST | --stdin) [--task TASK]
+                             [--summary SUMMARY]
+                             [--max-file-bytes MAX_FILE_BYTES]
+                             [--max-total-bytes MAX_TOTAL_BYTES]
+
+options:
+  -h, --help            show this help message and exit
+  --role {check,implement,review,truth}
+  --manifest MANIFEST
+  --stdin               Read a JSON/YAML context manifest from standard input.
+  --task TASK
+  --summary SUMMARY
+  --max-file-bytes MAX_FILE_BYTES
+  --max-total-bytes MAX_TOTAL_BYTES
+```
+
 ### `doctor`
 
 ```text
@@ -513,10 +539,10 @@ options:
 
 ```text
 usage: workctl help [-h]
-                    [{plan,task,evidence,action,migrate,migration,goal,gate,truth,review,risk,worktree,doctor}]
+                    [{plan,task,evidence,action,migrate,migration,goal,gate,truth,review,context,risk,worktree,doctor}]
 
 positional arguments:
-  {plan,task,evidence,action,migrate,migration,goal,gate,truth,review,risk,worktree,doctor}
+  {plan,task,evidence,action,migrate,migration,goal,gate,truth,review,context,risk,worktree,doctor}
 
 options:
   -h, --help            show this help message and exit

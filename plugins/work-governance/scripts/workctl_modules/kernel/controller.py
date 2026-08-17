@@ -53,6 +53,7 @@ from workctl_modules import confirmation as module_confirmation
 from workctl_modules import current_advancement_targets as MODULE_CURRENT_ADVANCEMENT_TARGETS
 from workctl_modules import dump_scheduler_state as MODULE_DUMP_SCHEDULER_STATE
 from workctl_modules import evidence as module_evidence
+from workctl_modules import context_pack as module_context_pack
 from workctl_modules import load_scheduler_state as MODULE_LOAD_SCHEDULER_STATE
 from workctl_modules import parse_evidence_bytes as MODULE_PARSE_EVIDENCE_BYTES
 from workctl_modules import plan_sources as module_plan_sources
@@ -62,6 +63,7 @@ from workctl_modules import yaml_compat as yaml
 from workctl_modules.authority import candidate_to_dict as module_candidate_to_dict
 from workctl_modules.authority import parse_candidate_specs as module_parse_candidate_specs
 from workctl_modules.confirmation import confirmation_lookup as module_confirmation_lookup
+from workctl_modules.context_pack import ContextPackageError as ModuleContextPackageError
 from workctl_modules import filesystem as module_filesystem
 from workctl_modules.filesystem import FilesystemError as ModuleFilesystemError
 from workctl_modules.history import PlanHistoryError as ModulePlanHistoryError
@@ -184,6 +186,9 @@ ACTIVATION_CACHEBUSTER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 REFERENCE_RE = re.compile(
     r"^(user|project|git|runtime|evidence|handoff|codex-plugin-list|context|plugin):\S+$"
 )
+CONTEXT_ROLES = module_context_pack.VALID_CONTEXT_ROLES
+DEFAULT_MAX_FILE_BYTES = module_context_pack.DEFAULT_MAX_FILE_BYTES
+DEFAULT_MAX_TOTAL_BYTES = module_context_pack.DEFAULT_MAX_TOTAL_BYTES
 EVIDENCE_REFERENCE_FIELDS = {"evidence_ref", "state_evidence_ref"}
 ENTRY_ID_PATTERNS = {
     "obligations": re.compile(r"^O-\d{3}$"),
@@ -13906,6 +13911,45 @@ def cmd_workflow_help(args: argparse.Namespace) -> None:
     )
 
 
+def active_plan_id_for_context(root: Path) -> str | None:
+    """Return the current active Plan ID when one is authoritative."""
+    if inspect_authority(root).state != "GOVERNED_ACTIVE":
+        return None
+    doc = load_plan(active_plan_path(root))
+    plan_id = doc.frontmatter.get("plan_id")
+    return str(plan_id) if isinstance(plan_id, str) else None
+
+
+def cmd_context_build(args: argparse.Namespace) -> None:
+    """Build a bounded role-scoped context package without mutating Plan state."""
+    root = project_root()
+    raw_manifest = read_workflow_input_bytes(
+        args,
+        stdin_attr="stdin",
+        file_attr="manifest",
+        required=True,
+        max_bytes=module_context_pack.CONTEXT_MANIFEST_MAX_BYTES,
+    )
+    if raw_manifest is None:
+        raise WorkctlError("CONTEXT_MANIFEST_REQUIRED")
+    manifest = parse_workflow_mapping(raw_manifest, error_prefix="CONTEXT_MANIFEST")
+    try:
+        package = module_context_pack.build_context_package(
+            root,
+            manifest,
+            role=args.role,
+            task_id=args.task,
+            summary=args.summary,
+            max_file_bytes=args.max_file_bytes,
+            max_total_bytes=args.max_total_bytes,
+            manifest_sha256=sha256_bytes(raw_manifest),
+            active_plan_id=active_plan_id_for_context(root),
+        )
+    except ModuleContextPackageError as exc:
+        raise WorkctlError(str(exc)) from exc
+    print(json.dumps(package, indent=2, sort_keys=True))
+
+
 def cmd_goal_show(_args: argparse.Namespace) -> None:
     """Show the active Goal Contract projection."""
     root = project_root()
@@ -20452,7 +20496,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def command_mutates_state(args: argparse.Namespace) -> bool:
     """Classify commands that must be bound to the newest session receipt."""
-    if args.domain in {"intake", "help", "risk"}:
+    if args.domain in {"intake", "help", "risk", "context"}:
         return False
     if args.domain == "evidence":
         return True

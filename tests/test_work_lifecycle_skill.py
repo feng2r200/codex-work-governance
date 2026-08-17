@@ -6,12 +6,14 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 LIFECYCLE_ROOT = REPOSITORY_ROOT / "plugins" / "work-governance" / "skills" / "work-lifecycle"
 SKILL_PATH = LIFECYCLE_ROOT / "SKILL.md"
 L0_PATH = LIFECYCLE_ROOT / "references" / "l0-intake.md"
+L0_DECISION_FRONTIER_PATH = LIFECYCLE_ROOT / "references" / "l0-decision-frontier.md"
 L1_PATH = LIFECYCLE_ROOT / "references" / "l1-demand-contract.md"
 L2_PATH = LIFECYCLE_ROOT / "references" / "l2-plan-control.md"
 L3_PATH = LIFECYCLE_ROOT / "references" / "l3-execution.md"
 L4_PATH = LIFECYCLE_ROOT / "references" / "l4-validation.md"
 L5_PATH = LIFECYCLE_ROOT / "references" / "l5-deviation-rollback.md"
 L6_PATH = LIFECYCLE_ROOT / "references" / "l6-closeout-handoff.md"
+L7_PATH = LIFECYCLE_ROOT / "references" / "l7-context-governance.md"
 INDEPENDENT_PATH = (
     REPOSITORY_ROOT
     / "plugins"
@@ -144,6 +146,7 @@ def test_summary_is_reply_protocol_not_plan_schema() -> None:
 def test_lifecycle_requires_direct_workctl_and_canonical_layout() -> None:
     """Plan-controlled work starts from direct workctl layout readiness."""
     skill = SKILL_PATH.read_text(encoding="utf-8")
+    normalized_skill = " ".join(skill.split())
 
     assert "registered direct `workctl` executable" in skill
     assert "without `uv run`" in skill
@@ -151,7 +154,10 @@ def test_lifecycle_requires_direct_workctl_and_canonical_layout() -> None:
     assert ".work-governance/bootstrap-state.json" in skill
     assert ".work-governance/_Plan/index.yaml" in skill
     assert ".work-governance/workctl.lock" in skill
-    assert "All non-layout commands\nrequire `LAYOUT_READY`" in skill
+    assert "All non-layout commands require `LAYOUT_READY`" in normalized_skill
+    assert "stale local installation shim" in normalized_skill
+    assert "codex plugin list --json" in skill
+    assert "Do not use a derived cache/source path for Plan mutations" in normalized_skill
 
 
 def test_lifecycle_uses_hookless_direct_workctl() -> None:
@@ -163,6 +169,21 @@ def test_lifecycle_uses_hookless_direct_workctl() -> None:
     assert "Run the registered direct `workctl` executable" in skill
     assert "intake status" in skill
     assert "--no-project" not in skill
+
+
+def test_decision_frontier_and_context_governance_are_routed_from_lifecycle() -> None:
+    """Keep lightweight questions and context packages in the mandatory entry."""
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+    frontier = L0_DECISION_FRONTIER_PATH.read_text(encoding="utf-8")
+    context = L7_PATH.read_text(encoding="utf-8")
+
+    assert "references/l0-decision-frontier.md" in skill
+    assert "references/l7-context-governance.md" in skill
+    assert "recommended answer" in frontier
+    assert "ask one blocking question at a time" in frontier
+    assert "workctl context build --role implement|check|review|truth" in skill
+    assert "does not mutate the contract or runtime state" in context
+    assert "Do not install automatic context-injection hooks by default" in context
 
 
 def test_goal_anchor_reality_probe_and_test_provenance_are_required() -> None:
