@@ -66,9 +66,10 @@ Do not claim complete when:
 Use `plan closeout-check` before a terminal claim. Schema-v5 closeout is
 runtime-backed: task completion comes from the runtime state bundle, not Plan
 frontmatter, and `plan complete --expected-state-sequence <state_sequence>`
-records the terminal contract event, releases the active pointer, and leaves
-the completed Plan as history after readiness is true. For schema v4, `plan
-complete` remains revision/intake guarded and is legal only when
+records the terminal contract event, emits a JSON completion payload, releases
+the active pointer, and leaves the completed Plan as history after readiness is
+true. `goal close` is the same closeout path and returns the same JSON shape.
+For schema v4, `plan complete` remains revision/intake guarded and is legal only when
 `route.route_status=terminal`, every obligation/task/validation is verified or
 skipped, every artifact is final, every required confirmation is consistently
 resolved, and both route and handoff have no remaining next phase, next step,

@@ -2224,11 +2224,14 @@ def test_atomic_closeout_refreshes_current_intake_without_an_extra_turn(
         "--expected-intake-sha256",
         cast(str, initial_record["record_sha256"]),
     )
+    completion = json.loads(completed.stdout)
     final = read_plan_frontmatter(project, plan_id)
     current = intake_records_for_assertion(final)[-1]
     history = cast(dict[str, object], cast(dict[str, object], final["intake"])["history"])
 
-    assert "PLAN_COMPLETED revision=2" in completed.stdout
+    assert completion["status"] == "PLAN_COMPLETED"
+    assert completion["revision"] == 2
+    assert completion["route_finalized"] is True
     assert final["status"] == "complete"
     assert cast(dict[str, object], final["route"])["route_status"] == "terminal"
     assert current["request_ref"] == initial_record["request_ref"]

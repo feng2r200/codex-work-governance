@@ -398,6 +398,7 @@ def test_v5_closeout_and_complete_use_runtime_state(tmp_path: Path) -> None:
         "1",
         env=STRICT_CONTROLLER_ENV,
     )
+    completion = json.loads(completed.stdout)
     frontmatter, _body = read_plan_by_id(tmp_path, "PLAN-20260806-106")
     state_path = (
         tmp_path
@@ -416,7 +417,12 @@ def test_v5_closeout_and_complete_use_runtime_state(tmp_path: Path) -> None:
     assert ready_status["completion_claims"]["route_complete"] is False
     assert ready_status["completion_claims"]["no_required_next_step_allowed"] is False
     assert ready_status["completion_claims"]["level"] == "in_progress"
-    assert "PLAN_COMPLETED state_sequence=1 active_released=true" in completed.stdout
+    assert completion["status"] == "PLAN_COMPLETED"
+    assert completion["kind"] == "work-governance-plan-completion"
+    assert completion["plan_id"] == "PLAN-20260806-106"
+    assert completion["plan_schema_version"] == 5
+    assert completion["state_sequence"] == 1
+    assert completion["active_released"] is True
     assert frontmatter["status"] == "complete"
     assert frontmatter["completion"]["state_sequence"] == 1
     assert frontmatter["completion"]["evidence_ref"].startswith(

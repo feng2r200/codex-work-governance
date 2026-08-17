@@ -6812,9 +6812,12 @@ def test_closeout_requires_terminal_route_and_complete_work(tmp_path: Path) -> N
         "--expected-revision",
         "1",
     )
+    completion = json.loads(complete.stdout)
     frontmatter, _ = read_plan(tmp_path)
 
-    assert "PLAN_COMPLETED revision=2" in complete.stdout
+    assert completion["status"] == "PLAN_COMPLETED"
+    assert completion["revision"] == 2
+    assert completion["active_released"] is False
     assert frontmatter["status"] == "complete"
 
 
@@ -7248,9 +7251,12 @@ def test_activation_resolves_explicit_exclusion_and_atomic_closeout(
         "--expected-revision",
         "3",
     )
+    completion = json.loads(completed.stdout)
     final, _ = read_plan_by_id(tmp_path, plan_id)
 
-    assert "PLAN_COMPLETED revision=4" in completed.stdout
+    assert completion["status"] == "PLAN_COMPLETED"
+    assert completion["revision"] == 4
+    assert completion["route_finalized"] is True
     assert final["status"] == "complete"
     assert final["route"]["route_status"] == "terminal"
     assert final["route"]["confirmation_gate"] == "none"
