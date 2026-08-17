@@ -67,9 +67,9 @@ def test_build_work_status_exposes_non_activation_boundary() -> None:
         },
         plan=None,
         registered_workctl={"state": "ok", "path": "/tmp/workctl"},
-        plugin_version="1.4.0+codex.20260817000000",
+        plugin_version="1.4.1+codex.20260817090636",
         source_workctl_path="/tmp/candidate/workctl",
-        release_target_version="1.4.0",
+        release_target_version="1.4.1",
         full=False,
     )
 
@@ -77,9 +77,9 @@ def test_build_work_status_exposes_non_activation_boundary() -> None:
     assert payload["work_state"] == "NO_ACTIVE_PLAN"
     assert payload["next_suggestion"] == "Admit a Plan only when durable execution state is needed."
     assert boundary == {
-        "current_source_version": "1.4.0+codex.20260817000000",
+        "current_source_version": "1.4.1+codex.20260817090636",
         "source_workctl_path": "/tmp/candidate/workctl",
-        "release_target_version": "1.4.0",
+        "release_target_version": "1.4.1",
         "activation_state": "not_activated",
         "activation_requires_user_confirmation": True,
     }
@@ -101,9 +101,9 @@ def test_build_work_status_marks_registered_source_active() -> None:
             "path": "/Users/ld/.local/bin/workctl",
             "target_path": "/tmp/candidate/workctl",
         },
-        plugin_version="1.4.0+codex.20260817000000",
+        plugin_version="1.4.1+codex.20260817090636",
         source_workctl_path="/tmp/candidate/workctl",
-        release_target_version="1.4.0",
+        release_target_version="1.4.1",
         full=False,
     )
 
@@ -122,7 +122,7 @@ def test_work_status_command_is_read_only_without_active_plan(tmp_path: Path) ->
         "work",
         "status",
         "--release-target-version",
-        "1.4.0",
+        "1.4.1",
     )
 
     payload = cast(dict[str, object], json.loads(result.stdout))
@@ -131,7 +131,7 @@ def test_work_status_command_is_read_only_without_active_plan(tmp_path: Path) ->
     assert payload["status"] == "WORK_STATUS_READY"
     assert payload["work_state"] == "NO_ACTIVE_PLAN"
     assert payload["authority_state"] == "UNMANAGED_EMPTY"
-    assert boundary["release_target_version"] == "1.4.0"
+    assert boundary["release_target_version"] == "1.4.1"
     assert boundary["activation_state"] == "not_activated"
     assert "registered_workctl" in payload
     assert not (tmp_path / ".work-governance" / "_Plan").exists()
@@ -148,7 +148,7 @@ def test_work_status_command_projects_active_v5_plan(tmp_path: Path) -> None:
         "work",
         "status",
         "--release-target-version",
-        "1.4.0",
+        "1.4.1",
     )
 
     payload = cast(dict[str, object], json.loads(result.stdout))
