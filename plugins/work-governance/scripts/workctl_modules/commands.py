@@ -62,6 +62,16 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
         ],
         "note": "Gate writes are aliases over strict Plan confirmation transactions.",
     },
+    "frontier": {
+        "commands": [
+            "frontier draft --manifest PATH|--stdin",
+        ],
+        "note": (
+            "Build a read-only Socratic decision frontier with goal anchor, "
+            "agent-owned facts, path-changing user questions, recommended answers, "
+            "and blocked targets. It does not create Plan authority."
+        ),
+    },
     "truth": {
         "commands": ["truth list", "truth conflicts", "truth add --manifest PATH"],
         "note": "Truth writes are aliases over the confirmed contract revision path.",
@@ -84,11 +94,22 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
     "context": {
         "commands": [
             "context build --role implement|check|review|truth --manifest PATH|--stdin",
+            "context lint --manifest PATH|--stdin [--role ROLE]",
         ],
         "note": (
             "Build a bounded role-scoped context package from explicit project-local "
-            "files. This is read-only, hookless, and does not create or mutate Plan "
-            "authority."
+            "files, or lint the manifest without emitting source content. This is "
+            "read-only, hookless, and does not create or mutate Plan authority."
+        ),
+    },
+    "work": {
+        "commands": [
+            "work status [--full]",
+        ],
+        "note": (
+            "Aggregate layout, intake, active Plan queue, registered workctl shim, "
+            "and non-activation release boundary into one read-only model-facing "
+            "work surface."
         ),
     },
     "evidence": {

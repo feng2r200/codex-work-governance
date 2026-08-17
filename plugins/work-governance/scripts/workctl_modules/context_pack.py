@@ -276,6 +276,80 @@ def redact_context_content(text: str) -> tuple[str, bool]:
     return redacted, redacted != text
 
 
+def normalize_lint_roles(manifest: Mapping[str, object], roles: list[str] | None) -> list[str]:
+    """Return the role set to validate for a context manifest."""
+    manifest_role = manifest.get("role")
+    if roles:
+        normalized = [normalize_context_role(role) for role in roles]
+        if manifest_role is not None and normalize_context_role(manifest_role) not in normalized:
+            raise ContextPackageError("CONTEXT_MANIFEST_ROLE_MISMATCH")
+        return normalized
+    if manifest_role is not None:
+        return [normalize_context_role(manifest_role)]
+    return list(VALID_CONTEXT_ROLES)
+
+
+def lint_context_manifest(
+    root: Path,
+    manifest: Mapping[str, object],
+    *,
+    roles: list[str] | None,
+    manifest_sha256: str,
+) -> dict[str, object]:
+    """Validate context manifest paths and role visibility without emitting content."""
+    lint_roles = normalize_lint_roles(manifest, roles)
+    notes = string_list(manifest.get("notes"), field="CONTEXT_NOTES")
+    files: list[dict[str, object]] = []
+    skipped_entries = 0
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    for entry in manifest_entries(manifest):
+        if isinstance(entry, Mapping) and not entry_is_enabled(entry):
+            skipped_entries += 1
+            continue
+        matched_roles = [role for role in lint_roles if entry_matches_role(entry, role)]
+        if not matched_roles:
+            skipped_entries += 1
+            continue
+        raw_path, reason, label = normalize_entry(entry)
+        path = project_file_for_context(root, raw_path)
+        try:
+            relative_path = relative_project_path(root, path)
+        except FilesystemError as exc:
+            raise ContextPackageError(str(exc)) from exc
+        reason_name = secret_path_reason(relative_path)
+        if reason_name is not None:
+            raise ContextPackageError(
+                f"CONTEXT_SECRET_PATH_REJECTED: {relative_path} ({reason_name})"
+            )
+        key = (relative_path, tuple(matched_roles))
+        if key in seen:
+            skipped_entries += 1
+            continue
+        seen.add(key)
+        payload: dict[str, object] = {
+            "path": relative_path,
+            "roles": matched_roles,
+        }
+        if reason is not None:
+            payload["reason"] = reason
+        if label is not None:
+            payload["label"] = label
+        files.append(payload)
+    if not files and not notes:
+        raise ContextPackageError("CONTEXT_PACKAGE_EMPTY")
+    return {
+        "schema_version": 1,
+        "kind": "work-governance-context-manifest-lint",
+        "status": "CONTEXT_MANIFEST_VALID",
+        "roles": lint_roles,
+        "manifest_sha256": manifest_sha256,
+        "files": files,
+        "notes": notes,
+        "skipped_entries": skipped_entries,
+        "warnings": [],
+    }
+
+
 def trim_text_to_utf8_budget(text: str, byte_limit: int) -> tuple[str, int, bool]:
     """Return text trimmed to a UTF-8 byte budget and whether trimming happened."""
     raw = text.encode("utf-8")

@@ -317,6 +317,83 @@ def test_context_build_redacts_truncated_token_prefixes(tmp_path: Path) -> None:
     assert files[0]["redacted"] is True
 
 
+def test_context_lint_validates_manifest_without_emitting_content(tmp_path: Path) -> None:
+    """Lint checks paths and roles without reading package content into stdout."""
+    run_workctl(tmp_path, "layout", "migrate", env=STRICT_CONTROLLER_ENV)
+    (tmp_path / "settings.txt").write_text(
+        "API_TOKEN=super-secret-token-12345\nsafe_value=visible\n",
+        encoding="utf-8",
+    )
+    manifest_path = tmp_path / "context.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "files": [
+                    {
+                        "path": "settings.txt",
+                        "role": "implement",
+                        "reason": "Implementation input.",
+                    }
+                ],
+                "notes": ["Only validate the manifest shape."],
+            }
+        ),
+        encoding="utf-8",
+    )
+    before = file_tree_snapshot(tmp_path / ".work-governance")
+
+    result = run_without_receipt(
+        tmp_path,
+        "context",
+        "lint",
+        "--role",
+        "implement",
+        "--manifest",
+        manifest_path.as_posix(),
+    )
+
+    payload = load_json_output(result.stdout)
+    files = cast(list[dict[str, object]], payload["files"])
+    assert result.returncode == 0
+    assert payload["status"] == "CONTEXT_MANIFEST_VALID"
+    assert payload["roles"] == ["implement"]
+    assert files == [
+        {
+            "path": "settings.txt",
+            "roles": ["implement"],
+            "reason": "Implementation input.",
+        }
+    ]
+    assert "content" not in files[0]
+    assert "super-secret-token-12345" not in result.stdout
+    assert "safe_value=visible" not in result.stdout
+    assert result.stderr == ""
+    assert file_tree_snapshot(tmp_path / ".work-governance") == before
+
+
+def test_context_lint_rejects_known_secret_paths_without_leaking_values(
+    tmp_path: Path,
+) -> None:
+    """Lint rejects credential paths before emitting source content."""
+    run_workctl(tmp_path, "layout", "migrate", env=STRICT_CONTROLLER_ENV)
+    (tmp_path / ".env").write_text("API_TOKEN=super-secret-token\n", encoding="utf-8")
+    manifest_path = tmp_path / "context.json"
+    manifest_path.write_text(json.dumps({"files": [".env"]}), encoding="utf-8")
+
+    result = run_without_receipt(
+        tmp_path,
+        "context",
+        "lint",
+        "--manifest",
+        manifest_path.as_posix(),
+    )
+
+    assert result.returncode == 2
+    assert "CONTEXT_SECRET_PATH_REJECTED: .env" in result.stderr
+    assert "super-secret-token" not in result.stdout
+    assert "super-secret-token" not in result.stderr
+
+
 def test_context_package_streams_source_files_before_content_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -412,6 +489,7 @@ def test_context_help_exposes_the_role_scoped_read_only_surface(tmp_path: Path) 
     assert "context build --role implement|check|review|truth --manifest PATH|--stdin" in (
         context_help["commands"]
     )
+    assert "context lint --manifest PATH|--stdin [--role ROLE]" in context_help["commands"]
     assert "read-only" in cast(str, context_help["note"])
     assert parser_help.returncode == 0
     assert "--role {check,implement,review,truth}" in parser_help.stdout

@@ -20,10 +20,12 @@ Use role-specific packages:
 - `truth`: confirmed facts and authority locations that may deserve durable
   project documentation.
 
-Prefer `workctl context build --role implement|check|review|truth --manifest
-PATH|--stdin` for deterministic packages. It is read-only and may run before a
-Plan exists. If a Plan exists, the active Plan ID is metadata only; the command
-does not mutate the contract or runtime state.
+Prefer `workctl context lint --manifest PATH|--stdin [--role ROLE]` before
+handoff when you need a cheap manifest safety check without source content.
+Then use `workctl context build --role implement|check|review|truth --manifest
+PATH|--stdin` for deterministic packages. Both commands are read-only and may
+run before a Plan exists. If a Plan exists, the active Plan ID is metadata only;
+context governance does not mutate the contract or runtime state.
 
 Do not install automatic context-injection hooks by default. Hook-based
 injection is a separate high-impact route because it can change token cost,

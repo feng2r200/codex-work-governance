@@ -59,10 +59,12 @@ def _build_parser() -> argparse.ArgumentParser:
             "migrate",
             "migration",
             "goal",
+            "frontier",
             "gate",
             "truth",
             "review",
             "context",
+            "work",
             "risk",
             "worktree",
             "doctor",
@@ -222,6 +224,18 @@ def _build_parser() -> argparse.ArgumentParser:
     evidence_source.add_argument("--stdin", action="store_true")
     evidence_record.set_defaults(func=cmd_plan_evidence_record)
 
+    frontier_command = sub.add_parser("frontier")
+    frontier_sub = frontier_command.add_subparsers(dest="frontier_action", required=True)
+    frontier_draft = frontier_sub.add_parser("draft")
+    frontier_draft_source = frontier_draft.add_mutually_exclusive_group(required=True)
+    frontier_draft_source.add_argument("--manifest")
+    frontier_draft_source.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read a JSON/YAML frontier manifest from standard input.",
+    )
+    frontier_draft.set_defaults(func=cmd_frontier_draft)
+
     context_command = sub.add_parser("context")
     context_sub = context_command.add_subparsers(dest="context_action", required=True)
     context_build = context_sub.add_parser("build")
@@ -246,6 +260,23 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_TOTAL_BYTES,
     )
     context_build.set_defaults(func=cmd_context_build)
+    context_lint = context_sub.add_parser("lint")
+    context_lint_source = context_lint.add_mutually_exclusive_group(required=True)
+    context_lint_source.add_argument("--manifest")
+    context_lint_source.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read a JSON/YAML context manifest from standard input.",
+    )
+    context_lint.add_argument("--role", action="append", choices=sorted(CONTEXT_ROLES))
+    context_lint.set_defaults(func=cmd_context_lint)
+
+    work_command = sub.add_parser("work")
+    work_sub = work_command.add_subparsers(dest="work_action", required=True)
+    work_status = work_sub.add_parser("status")
+    work_status.add_argument("--full", action="store_true")
+    work_status.add_argument("--release-target-version")
+    work_status.set_defaults(func=cmd_work_status)
 
     risk = sub.add_parser("risk")
     risk_sub = risk.add_subparsers(dest="risk_action", required=True)
