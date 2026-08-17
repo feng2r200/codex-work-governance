@@ -62,6 +62,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "gate",
             "truth",
             "review",
+            "context",
             "risk",
             "worktree",
             "doctor",
@@ -220,6 +221,31 @@ def _build_parser() -> argparse.ArgumentParser:
     evidence_source.add_argument("--manifest")
     evidence_source.add_argument("--stdin", action="store_true")
     evidence_record.set_defaults(func=cmd_plan_evidence_record)
+
+    context_command = sub.add_parser("context")
+    context_sub = context_command.add_subparsers(dest="context_action", required=True)
+    context_build = context_sub.add_parser("build")
+    context_build.add_argument("--role", choices=sorted(CONTEXT_ROLES), required=True)
+    context_build_source = context_build.add_mutually_exclusive_group(required=True)
+    context_build_source.add_argument("--manifest")
+    context_build_source.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read a JSON/YAML context manifest from standard input.",
+    )
+    context_build.add_argument("--task")
+    context_build.add_argument("--summary")
+    context_build.add_argument(
+        "--max-file-bytes",
+        type=int,
+        default=DEFAULT_MAX_FILE_BYTES,
+    )
+    context_build.add_argument(
+        "--max-total-bytes",
+        type=int,
+        default=DEFAULT_MAX_TOTAL_BYTES,
+    )
+    context_build.set_defaults(func=cmd_context_build)
 
     risk = sub.add_parser("risk")
     risk_sub = risk.add_subparsers(dest="risk_action", required=True)

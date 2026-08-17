@@ -372,10 +372,11 @@ Allowed structural changes:
   journal and is guarded because it can replace Plan/runtime files.
 - `migrate rollback-info`: show archive, backup, staging, recovery command and
   manual rollback boundary without writing state.
-- `doctor`: report layout, authority, current-schema refresh journals, and generic
-  runtime transactions. `doctor --clean-stale-transactions` is guarded
-  and removes only stale generic transaction directories that have no journal;
-  it never deletes schema refresh journals, archives, or backup/staging bundles.
+- `doctor`: report layout, authority, the PATH-registered `workctl` shim,
+  current-schema refresh journals, and generic runtime transactions.
+  `doctor --clean-stale-transactions` is guarded and removes only stale generic
+  transaction directories that have no journal; it never deletes schema refresh
+  journals, archives, or backup/staging bundles.
 - `risk inspect`: return read-only action kind, target, reversibility, digest,
   and risk factors. The controller reports facts only; the model decides
   whether current authority is enough or a user confirmation is needed.

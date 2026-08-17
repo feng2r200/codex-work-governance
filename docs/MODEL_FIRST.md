@@ -7,7 +7,11 @@
 
 - 使用安装后可直接执行的 `workctl` 作为运行入口；普通 schema-v5 工作不依赖
   SessionStart 或 UserPromptSubmit Hook。Plan authority、旧 schema refresh、风险事实
-  和写入边界都以 controller 命令输出为准。
+  和写入边界都以 controller 命令输出为准。如果 `workctl` 在 controller 启动前
+  因旧插件缓存路径缺失而失败，先按 stale local installation shim 处理：用
+  `command -v workctl`、`codex plugin list --json` 和只读的当前源码或已启用缓存
+  `scripts/workctl doctor` 定位 mismatch；修复或重装注册入口前，不要用推导出的
+  source/cache 路径执行 Plan mutation。
 - 无 active Plan 且需要治理执行时，优先用
   `goal init --stdin|--from-file`。输入最小目标契约，controller 生成
   schema-v5 Plan、runtime state、event ledger 和 index。
@@ -39,6 +43,10 @@
   confirmation 或 evidence 当成当前 runtime state。
 - 判断高影响动作前，可用 `risk inspect --action-kind KIND --target-ref REF`
   获取风险事实。controller 不替模型决定是否必须向用户确认。
+- 需要把上下文交给实现、检查、评审或项目真理源角色时，用
+  `context build --role implement|check|review|truth --manifest PATH|--stdin`。
+  manifest 只列项目内显式文件；输出包含 SHA256、截断状态和 bounded content。
+  该命令只读、无 hook、不创建 Plan，也不改 runtime state。
 - 子 worktree 执行只记录
   `worktree begin|record|close`。`begin` 会记录父 Plan `fork_base`；`close`
   会输出带 fork 基线的 close summary。完成后先运行

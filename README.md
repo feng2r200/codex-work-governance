@@ -2,16 +2,17 @@
 
 Work Governance is a Codex plugin that helps Codex move from an idea or
 unclear request to exploration, goal clarification, an auditable plan,
-execution, correction, validation, and handoff. The 1.2.0 candidate keeps the
-plugin goal-driven: Plan, Skill, and direct script behavior support the user
-goal instead of turning every turn into a heavy governance ritual.
+execution, correction, validation, and handoff. The 1.3.0 candidate keeps the
+plugin goal-driven and lighter at the interaction boundary: Plan, Skill,
+context-package, and direct script behavior support the user goal instead of
+turning every turn into a heavy governance ritual.
 
 The repository-local marketplace is `.agents/plugins/marketplace.json` and the
 plugin source is `plugins/work-governance`.
 
-This repository can prepare a local 1.2.0 candidate, but candidate preparation
+This repository can prepare a local 1.3.0 candidate, but candidate preparation
 does not install, enable, or switch the user's live Codex plugin. Live
-activation remains blocked on `CONFIRM_ACTIVATE_WORK_GOVERNANCE_1_2_0`.
+activation remains blocked on `CONFIRM_ACTIVATE_WORK_GOVERNANCE_1_3_0`.
 The candidate implements the documented core control plane; it does not claim
 that every command named in the architecture draft is already present. Treat
 `workctl help <workflow>` and [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) as
@@ -26,6 +27,20 @@ the current executable surface.
   locations.
 - `work-governance:independent-validation` challenges plans, artifacts, and
   completion evidence.
+
+## 1.3.0 Context And Decision Frontier
+
+The 1.3.0 candidate adopts the useful part of lightweight Socratic planning:
+unclear requirements should become a small decision frontier, not a long essay.
+The model investigates agent-owned facts first, then asks one path-changing
+user-owned question with a recommended answer when a real decision blocks the
+next target.
+
+`workctl context build --role implement|check|review|truth --manifest PATH|--stdin`
+builds a bounded, deterministic context package from explicit project-local
+files. It is read-only, works before or during a Plan, records file hashes and
+truncation state, and does not install hooks, create Plan authority, or mutate
+runtime state.
 
 When Git isolation needs a new worktree, the default location is
 `<project-root>/.work-governance/worktrees/<task-or-branch-slug>`. Existing
@@ -136,6 +151,20 @@ codex plugin add work-governance@work-governance-local
 
 After installation, use the registered `workctl` executable directly. The
 runtime does not require Codex lifecycle hooks or a project-local UV cache.
+Verify the direct entrypoint before governed work:
+
+```sh
+command -v workctl
+workctl doctor
+```
+
+If `workctl` fails before the controller starts with `No such file or
+directory` for an old Plugin cache path, the local installation shim is stale.
+Use `codex plugin list --json` and, for read-only diagnosis from the candidate
+source or enabled cache, `plugins/work-governance/scripts/workctl doctor` to
+compare the enabled version with `registered_workctl`. Do not use a derived
+source or cache path for Plan mutations; repair or reinstall the registered
+executable first.
 The plugin source keeps only `hooks/hooks.json` as an empty registry; dormant
 Hook implementation scripts are not shipped.
 Plugin installation or enabling still does not perform a live activation switch;
@@ -227,7 +256,7 @@ truth references, task definitions, hard dependencies, and confirmation
 gates) from ignored runtime state (task status, dynamic priority, current task,
 state sequence, event ledger, and redacted evidence snapshots). Reads accept
 v1-v4 and v5; new writes use v5. `migrate inspect`, `migrate apply --dry-run`,
-`migrate rollback-info`, and default `doctor` are read-only. Durable
+`migrate rollback-info`, `context build`, and default `doctor` are read-only. Durable
 `migrate apply` requires the expected contract revision, archives the legacy
 Plan, replaces the active contract atomically, and stages recoverable runtime
 state and event bytes. It does not require a fixed migration confirmation and

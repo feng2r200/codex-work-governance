@@ -66,6 +66,10 @@ component, and the recovery condition.
   evidence-proven material direction change in L5, or authority outside the
   Agent's local boundary. Investigate agent-owned facts and diagnose ordinary
   execution failures without asking the user.
+- For ambiguous requirements, use a decision frontier before writing a long
+  Plan: group the next path-changing choices, recommend the default answer,
+  ask only the smallest blocking user-owned question, and continue exploring
+  agent-owned facts locally.
 - Treat local exploration, continuation requests, network recovery, and
   credential-ready notices as runtime signals by default. Do not create a
   speculative Plan unknown or revise the contract until evidence shows that
@@ -125,7 +129,9 @@ component, and the recovery condition.
   whether the task is No-Plan or Plan-controlled. For Plan-controlled work,
   discover user-designated, project-rule-designated, indexed, conventional,
   and lineage-recorded Plan candidates before execution. Read
-  `references/l0-intake.md` when the task is not clearly low-risk.
+  `references/l0-intake.md` when the task is not clearly low-risk; read
+  `references/l0-decision-frontier.md` when requirements are broad, ambiguous,
+  or likely to trigger user questions.
 - `L1 Demand Contract`: define obligations, acceptance, scope, no-go boundaries,
   and confirmation gates. Read `references/l1-demand-contract.md`.
 - `L2 Plan Control`: admit, validate, revise, confirm, or recover a Plan. Read
@@ -140,6 +146,10 @@ component, and the recovery condition.
   `references/l5-deviation-rollback.md`.
 - `L6 Closeout and Handoff`: report obligations, checks, evidence, changed files,
   residual risk, and the next step. Read `references/l6-closeout-handoff.md`.
+- `L7 Context Governance`: package only the role-relevant facts and artifacts
+  needed for SubAgents, reviewers, or handoff readers. Read
+  `references/l7-context-governance.md` before delegating or when conversation
+  context is large enough to risk drift.
 
 ## Plan Admission
 
@@ -184,6 +194,10 @@ The public command aliases are generated from the controller parser. Read
 option table in this Skill. Schema-v5 Plans keep the contract revision in the
 Plan and task, event, and evidence runtime state in the ignored bundle
 referenced by `state_ref`, `event_ref`, and `evidence_store_ref`.
+Use `workctl context build --role implement|check|review|truth
+--manifest PATH|--stdin` to produce role-scoped context packages from explicit
+project-local files. This is a bounded read-only packaging command; it does
+not create Plan authority, mutate runtime state, or install hooks.
 
 Never infer a second execution authority from a filename, Git history, a phase
 design, or text such as "next step" alone. A likely second authority requires
@@ -198,8 +212,15 @@ workctl intake status
 ```
 
 Do not derive a controller path from a stale Plugin cache or historical receipt
-unless the user is explicitly inspecting legacy state. All non-layout commands
-require `LAYOUT_READY`; run `workctl layout migrate` or
+unless the user is explicitly inspecting legacy state. If the registered
+executable fails before the controller starts because its shim points at a
+missing Plugin cache target, classify the cause as a stale local installation
+shim. Use `command -v workctl`, `codex plugin list --json`, and, only for
+read-only diagnostics, the current source or enabled-cache `scripts/workctl
+doctor` report to identify the mismatch. Do not use a derived cache/source path
+for Plan mutations; repair or reinstall the registered executable first, then
+rerun `workctl intake status`.
+All non-layout commands require `LAYOUT_READY`; run `workctl layout migrate` or
 `workctl layout recover` when layout status reports a recoverable state. The
 Plugin release declares one current active Plan schema. In this release that
 schema is v5. Any active V3/V4 or otherwise outdated Plan reports

@@ -2,6 +2,13 @@
 
 from .commands import WORKFLOW_HELP, WORKFLOW_HELP_ALIASES
 from .confirmation import accepted_confirmation, confirmation_from_manifest, manifest_input_path
+from .context_pack import (
+    DEFAULT_MAX_FILE_BYTES,
+    DEFAULT_MAX_TOTAL_BYTES,
+    VALID_CONTEXT_ROLES,
+    ContextPackageError,
+    build_context_package,
+)
 from .evidence import (
     append_capture_record,
     canonical_evidence_bytes,
@@ -41,12 +48,17 @@ from .storage import canonical_json_bytes
 __all__ = [
     "WORKFLOW_HELP",
     "WORKFLOW_HELP_ALIASES",
+    "DEFAULT_MAX_FILE_BYTES",
+    "DEFAULT_MAX_TOTAL_BYTES",
     "SchedulerStateError",
+    "VALID_CONTEXT_ROLES",
     "accepted_confirmation",
     "append_capture_record",
     "build_v5_contract",
+    "build_context_package",
     "build_v5_state",
     "canonical_evidence_bytes",
+    "ContextPackageError",
     "confirmation_from_manifest",
     "capture_record_id",
     "evidence_capture_blob_path",

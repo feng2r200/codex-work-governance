@@ -1359,6 +1359,7 @@ def test_public_help_matches_candidate_boundaries(tmp_path: Path) -> None:
     doctor_help = json.loads(run_workctl(tmp_path, "help", "doctor").stdout)
     action_help = json.loads(run_workctl(tmp_path, "help", "action").stdout)
     review_help = json.loads(run_workctl(tmp_path, "help", "review").stdout)
+    context_help = json.loads(run_workctl(tmp_path, "help", "context").stdout)
     gate_help = subprocess.run(
         [sys.executable, str(SCRIPT), "gate", "open", "--help"],
         cwd=tmp_path,
@@ -1371,11 +1372,16 @@ def test_public_help_matches_candidate_boundaries(tmp_path: Path) -> None:
     assert "migrate rollback-info" in migration_help["commands"]
     assert "doctor" in migration_help["commands"]
     assert doctor_help["commands"] == ["doctor", "doctor --clean-stale-transactions"]
+    assert "PATH-registered workctl shim" in doctor_help["note"]
     assert "action lease prepare" in action_help["commands"]
     assert "action lease authorize" in action_help["commands"]
     assert "confirmation judgment belongs to the model" in action_help["note"]
     assert "review acquisition check" in review_help["commands"]
     assert "review acquisition record-failure" in review_help["commands"]
+    assert "context build --role implement|check|review|truth --manifest PATH|--stdin" in (
+        context_help["commands"]
+    )
+    assert "does not create or mutate Plan authority" in context_help["note"]
     assert gate_help.returncode == 0
     assert "--status {pending,accepted}" not in gate_help.stdout
 
@@ -1646,6 +1652,36 @@ def test_doctor_reports_and_cleans_only_journalless_stale_transactions(
     assert not stale.exists()
     assert journaled.is_dir()
     assert migration_journal.is_file()
+
+
+def test_doctor_reports_stale_registered_workctl_shim(tmp_path: Path) -> None:
+    """Doctor surfaces a PATH workctl shim whose hard-coded cache target is gone."""
+    run_workctl(tmp_path, "layout", "migrate", env=STRICT_CONTROLLER_ENV)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    missing_target = tmp_path / "missing-cache" / "scripts" / "workctl"
+    shim = bin_dir / "workctl"
+    shim.write_text(f"#!/bin/sh\nexec {missing_target} \"$@\"\n", encoding="utf-8")
+    shim.chmod(0o755)
+
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "doctor"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    registered = json.loads(result.stdout)["registered_workctl"]
+    assert registered == {
+        "path": str(shim),
+        "reason": "WORKCTL_SHIM_TARGET_MISSING",
+        "state": "stale",
+        "target_exists": False,
+        "target_path": str(missing_target),
+    }
 
 
 def test_v5_runtime_transitions_keep_contract_bytes_and_redact_secrets(
