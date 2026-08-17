@@ -14,6 +14,15 @@ from typing import cast
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 CONTROLLER_PATH = REPOSITORY_ROOT / "plugins" / "work-governance" / "scripts" / "workctl.py"
 DEFAULT_OUTPUT = REPOSITORY_ROOT / "docs" / "CLI_REFERENCE.md"
+CLI_HELP_WIDTH = 80
+
+
+class StableHelpFormatter(argparse.HelpFormatter):
+    """Render argparse help with deterministic wrapping for checked-in docs."""
+
+    def __init__(self, prog: str) -> None:
+        """Initialize the formatter with a repository-stable help width."""
+        super().__init__(prog, width=CLI_HELP_WIDTH)
 
 
 def load_controller() -> ModuleType:
@@ -69,6 +78,13 @@ def leaf_parsers(
         yield from leaf_parsers(choices[name], (*path, name))
 
 
+def apply_stable_formatter(parser: argparse.ArgumentParser) -> None:
+    """Apply deterministic help formatting to every nested command parser."""
+    parser.formatter_class = StableHelpFormatter
+    for child in subcommand_choices(parser).values():
+        apply_stable_formatter(child)
+
+
 def workflow_section(workflows: Mapping[str, Mapping[str, object]]) -> str:
     """Render the short stable workflow aliases maintained by the command module."""
     sections: list[str] = ["## Stable workflow aliases", ""]
@@ -89,6 +105,7 @@ def render_reference(parser: argparse.ArgumentParser) -> str:
     """Render the complete nested argparse command surface as Markdown."""
     from workctl_modules.commands import WORKFLOW_HELP
 
+    apply_stable_formatter(parser)
     sections = [
         "# Work Governance CLI reference",
         "",

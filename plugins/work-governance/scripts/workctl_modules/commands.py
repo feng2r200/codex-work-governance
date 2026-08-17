@@ -9,6 +9,7 @@ WORKFLOW_HELP: Final[dict[str, dict[str, object]]] = {
         "commands": [
             "goal show",
             "goal init --stdin|--from-file",
+            "goal close",
         ],
         "note": (
             "Use goal init to admit the minimal model-facing schema-v5 contract; "
