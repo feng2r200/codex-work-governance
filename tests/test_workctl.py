@@ -3777,6 +3777,8 @@ def test_stable_help_and_scheduler_commands_keep_plan_revision_unchanged(
     help_payload = json.loads(help_result.stdout)
     assert "plan ready" in help_payload["commands"]
     assert "plan show [--full]" in help_payload["commands"]
+    goal_help = json.loads(run_workctl(tmp_path, "help", "goal").stdout)
+    assert "goal close" in goal_help["commands"]
 
     init_plan(tmp_path)
     frontmatter, body = read_plan(tmp_path)
