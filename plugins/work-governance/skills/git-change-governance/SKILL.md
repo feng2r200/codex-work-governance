@@ -1,65 +1,38 @@
 ---
 name: git-change-governance
-description: Govern Git branch/worktree choice, dirty-state protection, staging scope, commit grouping, local commit, push/MR boundaries, and rollback-safe handoff. Use whenever Codex will inspect or change Git state, stage files, commit, report commit readiness, or decide whether main/master may be used.
+description: Govern Git branch and worktree choice, dirty-state protection, staging scope, local commit grouping, push boundaries, and rollback-safe handoff.
 ---
 
 # Git Change Governance
 
-Load `work-governance:work-lifecycle` first. This skill handles only the Git
-boundary; evidence and Plan authority remain lifecycle responsibilities.
+Load `work-governance:work-lifecycle` first. This skill owns only the Git
+boundary; lifecycle owns the goal, authority, evidence, and final claim.
 
-## Rules
+## Isolation
 
-- Protect `main` and `master` by default. Prefer an existing isolated branch,
-  a new branch, or a worktree for substantive changes.
-- When a new worktree is needed, default to
-  `<project-root>/.work-governance/worktrees/<task-or-branch-slug>`. Resolve the project root
-  first. Derive the directory slug independently from the Git branch: map each
-  run outside `[A-Za-z0-9._-]` to `-`, trim leading and trailing `.`, `-`, and
-  `_`, and reject an empty slug, `.` or `..`. A slug must be one path component.
-  Do not default to a sibling directory, home directory, or system temporary
-  directory.
-- Before `git worktree add`, require `LAYOUT_READY`, verify that
-  `.work-governance/worktrees/` is ignored and that the
-  exact target neither exists, including as a dangling symlink, nor appears in
-  `git worktree list --porcelain`. Reject a symlinked governance or worktrees
-  path. Resolve the physical project and worktrees paths and prove the latter
-  remains under `.work-governance/` before appending the validated
-  one-component slug. The versioned `.work-governance/.gitignore` contract
-  already ignores `worktrees/`.
-- Worktree placement does not choose branch semantics. For an existing branch,
-  attach that exact branch. For a new branch, require an explicit, verified
-  start point; never silently default the start point to the current `HEAD`.
-  Use detached mode only when the task explicitly calls for it.
-- Before creation, resolve `git rev-parse --path-format=absolute
-  --git-common-dir` and evaluate both that common Git directory and the target
-  path against the current sandbox or permission boundary. A project-local
-  target reduces target-path boundary prompts but cannot guarantee that Git
-  metadata writes need no approval.
-- Use a worktree path outside the project root only when the user specifies it
-  or a verified technical constraint requires it. Report the reason, exact
-  path, sandbox/permission impact, and cleanup boundary before creation.
-- Already registered legacy `.worktree/<slug>` paths are never moved or
-  renamed. Continue to use their registered exact paths until removal or prune,
-  but never create new worktrees there.
-- Clean up only the exact registered target with `git worktree remove` after
-  checking its dirty, locked, and associated-branch state. Never recursively
-  delete either worktree root. Deleting the associated branch is a separate
-  destructive action and requires explicit authorization.
-- Direct local commit is allowed after authorized, validated work when the
-  boundary is clear and no unrelated changes are included.
-- Push, remote branches, MR/PR creation, and other remote-state changes require
-  explicit user initiation.
-- Never reset, checkout, clean, stash, delete, or overwrite user changes unless
-  the user explicitly authorizes that exact high-impact operation.
-- Stage by exact path unless the full dirty worktree has been proven to be the
-  same delivery boundary.
-- Exclude local config, caches, dependencies, build outputs, logs, generated
-  scratch files, and unrelated user edits.
+Protect `main` and `master` by default. Prefer an existing isolated branch or
+managed worktree for substantive changes. Use the current attached worktree
+when it is already isolated and the dirty state belongs to the same delivery
+boundary.
 
-## Required Checks
+When a new Codex-managed worktree is needed, choose the location in this order:
 
-Before Git action, inspect:
+1. current attached or already managed worktree;
+2. explicit user or project path;
+3. Codex configured `git-worktree-root`;
+4. Codex official default `$CODEX_HOME/worktrees`.
+
+Do not default to a project-local `.work-governance/worktrees` path. Historical
+registered worktrees may remain where Git already knows them, but new creation
+follows the priority above.
+
+Worktree placement does not choose branch semantics. Attach an existing branch
+only when that exact branch was selected. Create a branch only from an explicit
+and verified start point. Use detached mode only when the task calls for it.
+
+## Dirty State
+
+Before Git mutation, inspect the current state:
 
 ```bash
 git status --short --branch
@@ -67,33 +40,17 @@ git branch --show-current
 git worktree list --porcelain
 ```
 
-Before creating a project-local worktree, resolve and validate its location:
+Preserve unrelated changes. Never reset, clean, stash, checkout over, delete,
+or overwrite user or unrelated agent work unless the user explicitly authorized
+that exact operation.
 
-```bash
-repo_root=$(cd "$(git rev-parse --show-toplevel)" && pwd -P)
-common_git_dir=$(git rev-parse --path-format=absolute --git-common-dir)
-worktree_root="$repo_root/.work-governance/worktrees"
-git check-ignore -q "$repo_root/.work-governance/worktrees/"
-test ! -L "$worktree_root"
-mkdir -p "$worktree_root"
-worktree_root=$(cd "$worktree_root" && pwd -P)
-test "$(dirname "$worktree_root")" = "$repo_root/.work-governance"
-slug="<validated-one-component-slug>"
-target="$worktree_root/$slug"
-test ! -e "$target" && test ! -L "$target"
-git worktree list --porcelain
-```
+## Staging And Commit
 
-After checking the registered worktree paths and the permission boundary for
-both `$target` and `$common_git_dir`, choose the command that matches the
-already-decided branch semantics:
+Stage exact paths unless the entire dirty tree has been proven to be one
+delivery boundary. Exclude local config, caches, dependencies, build outputs,
+logs, scratch files, and unrelated edits.
 
-```bash
-git worktree add "$target" <existing-branch>
-git worktree add -b <new-branch> "$target" <verified-start-point>
-```
-
-Before commit, inspect:
+Before committing, inspect:
 
 ```bash
 git diff -- <path>
@@ -101,22 +58,19 @@ git diff --cached --name-status
 git diff --cached --check
 ```
 
-Run validation that matches the commit claim. A commit message must not claim
-more than the evidence proves.
+Local commit is allowed after authorized, validated work when the boundary is
+clear. Group commits by delivery boundary. Push, remote branches, pull or merge
+requests, release tags, and other remote state changes require explicit user
+initiation.
 
-## Commit Grouping
+## Cleanup
 
-Group by delivery boundary:
+Clean up only an exact registered worktree target after checking its dirty,
+locked, and branch state. Removing the associated branch is separate
+destructive work and needs explicit authority.
 
-- feature or fix plus direct tests;
-- governance rule or skill update;
-- documentation authority update;
-- generated artifacts only when they are intended deliverables.
+## Report
 
-If multiple boundaries exist, commit separately or leave later groups unstaged.
-
-## Reporting
-
-Report repository, branch, isolation choice, staged files, commit hash, validation
-commands with key output, excluded dirty files, and whether Push/MR remains a
-separate user-initiated step.
+Report repository, branch, isolation choice, staged files, commit hash when one
+was made, validation commands with key output, excluded dirty files, and
+whether push or other remote work remains separate.

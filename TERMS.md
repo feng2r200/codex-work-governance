@@ -8,8 +8,7 @@ The project does not provide a hosted service. Use of Codex, GitHub, or any othe
 tool or external service remains subject to that provider's terms and the user's
 own agreements.
 
-The bundled SessionStart hook requires Codex hook review and trust unless a
-managed policy supplies trust. Its local bootstrap may use UV to download the
-pinned controller dependency before readiness; subsequent controller checks
-are offline. Users remain responsible for reviewing the hook, project changes,
-and any applicable dependency-source terms.
+Work Governance expects users to review local project changes, WorkVCS
+configuration, Git operations, and any external tools they authorize Codex to
+use. Installing or enabling the plugin does not authorize push, deployment,
+release, production, destructive, or data-changing actions.
