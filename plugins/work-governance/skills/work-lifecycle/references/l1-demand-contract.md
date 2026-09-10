@@ -1,121 +1,13 @@
 # L1 Demand Contract
 
-Turn the request into an obligation set before implementation.
+Before non-trivial edits or WorkVCS mutation, state a compact contract:
 
-Define:
+- goal anchor;
+- included scope and explicit non-goals;
+- affected files, data, tools, or external surfaces;
+- acceptance anchors and validation commands;
+- unresolved user-owned choices, if any;
+- stop or revision triggers.
 
-- target result: the user-visible or handoff-visible end state;
-- included scope and explicit no-go boundaries;
-- required artifacts and affected authority locations;
-- obligations `O-###`;
-- task slices `T-###` that each have a verification point;
-- validations `V-###` that directly prove obligations;
-- artifacts `A-###` and their expected, suspect, quarantined, or final state;
-- durable confirmation gates only when the model judges the current
-  authorization, project rules, reversibility, risk, or evidence are
-  insufficient for a high-impact choice.
-
-Before implementation, derive a compact `Pre-Implementation Contract` from the
-obligation set. It is a reply-level execution contract, not a new schema
-requirement. It must name:
-
-- the goal anchor and the exact task or slice being advanced;
-- the evidence basis already inspected, including files, commands, runtime
-  observations, official sources, or user authority references;
-- evidence still required before or during the slice, with the expected result
-  that would change confidence;
-- unresolved user-owned uncertainty, its blocked targets, and the recommended
-  answer if a frontier is required;
-- exact files, data, commands, external surfaces, or documentation locations
-  intended to change;
-- validation anchors that will prove each must-have obligation touched by the
-  slice;
-- stop or revision triggers that would force L5, a new frontier, or a Plan
-  contract revision.
-
-For simple No-Plan work, the contract can be one sentence. For Plan-controlled
-work, it must be explicit before mutation. If the contract cannot tie a planned
-action to an obligation and validation anchor, do not execute that action; keep
-exploring, narrow the slice, or ask the blocking frontier question.
-
-Do not model conversation as a gate. A new confirmation must carry an
-`intervention` contract with:
-
-- `kind`: `plan_contract`, `external_authority`, or
-  `deviation_recovery`;
-- `blocks`: exact shared target references;
-- `basis_ref`: the typed contract, authority, or deviation evidence source;
-- `basis_sha256`: required for Plan contracts and deviation evidence so the
-  decision cannot drift.
-
-A requirement question stays a user-owned `U-NNN`; it is not duplicated as a
-confirmation. Generic "continue" gates and gates that block no exact target
-are invalid for new Plans, rollover, reconciliation, and contract revision.
-
-Give every planned validation a provenance class:
-
-- a confirmed obligation;
-- an observed failure;
-- a code invariant;
-- a supported integration boundary.
-
-Do not invent hypothetical use cases merely to increase case count. Coverage
-percentage, test count, and matrix size cannot substitute for the acceptance
-evidence named by the target result. Prefer the smallest validation set that
-can discriminate the important failure modes, then add cases only when new
-evidence exposes a real gap.
-
-Bind every must-have obligation to at least one acceptance anchor: an
-executable command, deterministic script, checklist item, current artifact
-digest, runtime observation, or contract-allowed user/manual signoff that can
-prove the exact obligation. High-impact or external claims cannot use manual or
-degraded evidence as the only anchor unless a separate risk-authority
-confirmation accepts that downgrade. A task without an anchor is not done;
-classify it as unscoped, deferred, or still blocked instead of letting nearby
-green tests certify it.
-
-Model weak-link work inside the same obligation set. Do not create a second
-parallel checklist system. When the route touches docs, templates, public help,
-plugin metadata, migrations, activation instructions, rollback information, or
-handoff wording, tag the relevant obligation/check as `weak-link` and state the
-artifact and freshness evidence it needs. Weak-link checks run at review or
-closeout boundaries; they do not create a Plan revision or runtime event for
-every ordinary note.
-
-Classify every scope exclusion. In schema-v4 Plans, use a structured
-`disposition`:
-
-- `not_required` or `forbidden` with the confirming authority reference;
-- `deferred` when it remains part of the future route;
-- `pending_confirmation` with a confirmation ID when the action lacks current
-  authority;
-- `transferred` with an owner, handoff reference, and the confirming resolution
-  reference.
-
-Do not turn missing authorization into a plain exclusion. When local delivery
-can finish before a runtime, production, publication, or live-plugin change,
-define delivery and activation separately and preserve the activation decision
-as a route-level gate.
-
-Define future gates against their exact targets without making them the current
-route state. A pending live authority may block `task:T-NNN`, `activation`, and
-`route` while all earlier local tasks remain active and dependency-ready.
-
-Bulk or blanket authorization can reduce repeated prompts only when the model
-judges it still covers the concrete repeated work; it does not waive acceptance
-evidence. When repeated work can amplify a shared defect, the pilot task and
-validation remain explicit dependencies of every downstream batch. The
-authorization cannot satisfy or bypass the pilot gate. Name the pilot evidence,
-the invariant checked at later batch boundaries, and the downstream freeze
-condition before bulk execution starts. `action lease` remains an advanced
-compatibility record for an explicitly bounded repeated external route, not a
-default controller rule for deciding whether to ask.
-
-Do not treat examples, candidate designs, logs, or memory as confirmed facts.
-If a future agent must obey the contract, write it into the Plan frontmatter.
-If the contract is still a proposal, keep it in the reply or logs and ask for
-confirmation before making it authority.
-
-Validation standard: every must-have obligation has at least one planned check,
-each check has a provenance class, and each high-impact action has either clear
-current authority or an explicit confirmation reference.
+The contract is an execution aid, not a second durable ledger. Persist it in
+WorkVCS only when Plan-controlled routing was selected.

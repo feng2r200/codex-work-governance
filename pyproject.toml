@@ -1,33 +1,21 @@
 [project]
 name = "work-governance"
 version = "1.4.1"
-description = "Local Codex work governance plugin controller and tests"
+description = "Local Codex governance policy plugin backed by WorkVCS durable state"
 requires-python = ">=3.12"
 license = "Apache-2.0"
-dependencies = [
-  "pyyaml==6.0.3",
-]
+dependencies = []
 
 [dependency-groups]
 dev = [
-  "mypy>=1.17.0",
+  "pyyaml>=6.0.3",
   "pytest>=8.4.0",
   "ruff>=0.12.0",
-  "types-PyYAML>=6.0.12.20250516",
 ]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["plugins/work-governance/scripts/vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
-
-[tool.mypy]
-python_version = "3.12"
-strict = true
-files = [
-  "plugins/work-governance/scripts/workctl.py",
-  "tests",
-]

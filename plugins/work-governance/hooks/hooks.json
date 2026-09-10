@@ -1,4 +1,0 @@
-{
-  "description": "Work Governance runs through the registered workctl executable; no Codex lifecycle hooks are registered.",
-  "hooks": {}
-}
