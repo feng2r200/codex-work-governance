@@ -131,9 +131,10 @@ def test_manifest_readme_and_project_metadata_match_architecture() -> None:
     project = tomllib.loads(read(ROOT / "pyproject.toml"))
     readme = normalized(ROOT / "README.md")
     assert manifest["interface"]["defaultPrompt"] == [
-        "Use $work-governance:work-lifecycle to preserve the user's goal, authority, "
-        "momentum, and evidence while loading only the governance modules this task needs."
+        "Use $work-governance:work-lifecycle to preserve goal, authority, momentum, "
+        "and evidence with only the needed modules."
     ]
+    assert all(len(prompt) <= 128 for prompt in manifest["interface"]["defaultPrompt"])
     assert "does not require one specific CLI" in readme
     assert "work-reporting" in readme
     assert project["project"]["version"] == "2.0.0"

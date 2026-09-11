@@ -1,6 +1,6 @@
 {
   "name": "work-governance",
-  "version": "2.0.0+codex.20260911142445",
+  "version": "2.0.0+codex.20260911144358",
   "description": "Composable, tool-neutral governance for goal discovery, planning, delegation, Git boundaries, validation, project truth, and reporting.",
   "author": {
     "name": "Work Governance Contributors"
@@ -34,7 +34,7 @@
       "Work reporting"
     ],
     "defaultPrompt": [
-      "Use $work-governance:work-lifecycle to preserve the user's goal, authority, momentum, and evidence while loading only the governance modules this task needs."
+      "Use $work-governance:work-lifecycle to preserve goal, authority, momentum, and evidence with only the needed modules."
     ]
   }
 }
