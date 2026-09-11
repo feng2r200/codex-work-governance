@@ -1,0 +1,4 @@
+interface:
+  display_name: "SubAgent Governance"
+  short_description: "Delegate with clear value and ownership"
+  default_prompt: "Use $work-governance:subagent-governance to choose useful delegation, adaptive contracts, non-overlapping ownership, and sound parent integration."

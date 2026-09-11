@@ -1,102 +1,87 @@
 # Work Governance Plugin
 
-Work Governance is a Codex policy plugin. It helps Codex decide the smallest
-useful governance level for a request, keep the user goal stable, ask only real
-path-changing questions, and validate completion claims. Durable Goals, Plans,
-Tasks, evidence, sessions, claims, handoffs, and historical recovery belong to
-WorkVCS.
+Work Governance is a tool-neutral Codex policy plugin. It helps Codex understand
+the real goal, choose only the coordination a task benefits from, maintain
+useful momentum, protect authority boundaries, and make completion claims that
+the evidence supports.
 
-The repository-local marketplace is `.agents/plugins/marketplace.json` and the
+The repository-local marketplace is `.agents/plugins/marketplace.json`; the
 plugin source is `plugins/work-governance`.
 
-## Architecture
+## Design
 
-Work Governance owns judgment:
+Each module owns one kind of judgment and remains useful by itself:
 
-- No-Plan versus Plan-controlled routing;
-- goal discovery and decision frontiers;
-- user authority and confirmation boundaries;
-- Git, remote, production, destructive, and data-risk boundaries;
-- validation strength and final completion wording.
+- `work-lifecycle`: small router and safety kernel;
+- `goal-discovery`: goal clarification and minimal decision frontiers;
+- `plan-governance`: Plan admission, No-Plan evolution, and material revision;
+- `subagent-governance`: useful delegation, ownership, and integration;
+- `git-change-governance`: branches, worktrees, commits, and remote boundaries;
+- `independent-validation`: proportional independent challenge;
+- `project-truth-governance`: truth-source selection and promotion;
+- `work-reporting`: progress, handoff, and completion communication.
 
-WorkVCS owns durable state:
+The plugin does not implement a state engine and does not require one specific
+CLI. Plan governance, retrospective learning, project truth, and persistence are
+separate concerns. When a compatible state or knowledge tool exists, its own
+Skill supplies the storage, recall, evidence, and recovery mechanics.
 
-- project binding and store discovery;
-- Goal, Plan, Task, acceptance, verification, and evidence records;
-- Codex Sessions, Claims, Handoffs, and compact resume context;
-- confirmation receipts as target-bound mechanical records;
-- closeout inspection, history, diffs, and recovery packets.
+## Core Behavior
 
-This plugin does not ship a durable-state CLI. It expects an installed
-`workvcs` command and uses only the high-level WorkVCS surfaces needed for
-governed work.
-
-## Operating Rules
-
-- No-Plan means zero WorkVCS calls and zero durable writes.
-- When a No-Plan task evolves into Plan-controlled work, the first WorkVCS
-  admission must carry the useful prior context: original request or digest,
-  confirmed facts, explored evidence, decisions, unresolved unknowns, why the
-  task escalated, acceptance anchors, stop triggers, and the next action.
-- WorkVCS records authorization receipts mechanically. The model still decides
-  whether user authority is sufficient before issuing or consuming a receipt.
-- `workvcs closeout inspect` supports completion claims; it does not make the
-  claim for the model.
-- Historical `.work-governance` data is read-only history unless the user asks
-  for historical audit or cleanup. New mutable authority is WorkVCS only.
+- Clear, actionable work proceeds without a forced Plan or discovery ceremony.
+- A Plan is introduced only when durable coordination, recovery, staged
+  dependencies, or a persistent contract adds value.
+- If No-Plan work grows into a Plan, the first recorded Plan carries forward
+  useful findings, decisions, unknowns, constraints, evidence, and the reason
+  for the evolution.
+- High-impact work needs exact authority and proportional evidence, but impact
+  alone does not require a Plan.
+- Knowledge, decisions, evidence, and retrospectives may exist independently of
+  a Plan when another capability records them.
+- Non-blocking discoveries do not interrupt ongoing work. Directional,
+  outcome-changing, authority-changing, or irreversible issues do.
+- Compatibility is introduced only after its necessity is established and the
+  user can see the decision and cost.
+- Completion reports explain the result, additions, modifications, deletions,
+  operations, validation boundary, unfinished work, risks, and useful next
+  action without a fixed response template.
 
 ## Worktree Policy
 
-New Git worktrees should follow Codex configuration. Use this priority:
+For a new Git worktree, use the current attached workspace first, then an
+explicit user or project path, then the root configured in the current Codex
+environment, and finally Codex's official default `$CODEX_HOME/worktrees`.
+Never create a project-local governance directory merely to hold worktrees.
 
-1. the current attached or already managed worktree;
-2. an explicit user or project path;
-3. the Codex `git-worktree-root` setting;
-4. Codex official default `$CODEX_HOME/worktrees`.
+## Install Or Update
 
-Do not create new project-local `.work-governance/worktrees` paths.
-
-## Install
-
-Install WorkVCS first and verify the direct CLI:
-
-```sh
-command -v workvcs
-workvcs --help
-```
-
-Then install or update the plugin from the local marketplace:
+Install or update the plugin from the local marketplace:
 
 ```sh
 codex plugin add work-governance@work-governance-local
 ```
 
-Existing threads may keep the old loaded skill context. Start a new Codex thread
-after reinstalling to verify the updated plugin behavior.
+An existing task can retain already-loaded Skill content. Validate an update in
+a fresh Codex process or task as well as checking registration and cached files.
 
 ## Validation
 
-Use the focused regression tests for plugin contract checks:
+Run the focused policy contract tests:
 
 ```sh
 uv run pytest
-uv run ruff check tests/test_workvcs_cutover_contract.py
+uv run ruff check tests/test_policy_contract.py
 ```
 
-For skill edits, also run the system validators. They import PyYAML, so run
-them with a temporary `uv --with pyyaml` environment instead of adding a plugin
-runtime dependency:
+For Skill and manifest edits, run the system validators without adding runtime
+dependencies to this plugin:
 
 ```sh
 SKILL_VALIDATOR="${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py"
 PLUGIN_VALIDATOR="${CODEX_HOME:-$HOME/.codex}/skills/.system/plugin-creator/scripts/validate_plugin.py"
 
-for skill in \
-  plugins/work-governance/skills/work-lifecycle \
-  plugins/work-governance/skills/git-change-governance \
-  plugins/work-governance/skills/independent-validation \
-  plugins/work-governance/skills/project-truth-governance
-do
+for skill in plugins/work-governance/skills/*; do
+  test -f "$skill/SKILL.md" || continue
   uv run --with pyyaml python "$SKILL_VALIDATOR" "$skill"
 done
 
@@ -104,5 +89,5 @@ uv run --with pyyaml python "$PLUGIN_VALIDATOR" plugins/work-governance
 git diff --check
 ```
 
-The tests protect current behavior only. They do not maintain old Plan-version
-compatibility matrices.
+Tests protect representative behavior and module boundaries. They do not
+preserve obsolete workflow versions or reproduce the Skill prose mechanically.

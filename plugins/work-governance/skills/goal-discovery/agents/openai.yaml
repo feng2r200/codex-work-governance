@@ -1,0 +1,4 @@
+interface:
+  display_name: "Goal Discovery"
+  short_description: "Clarify the real goal without blocking clear work"
+  default_prompt: "Use $work-governance:goal-discovery to discover the real goal, resolve cheap unknowns, and expose only decisions that can materially change the path."

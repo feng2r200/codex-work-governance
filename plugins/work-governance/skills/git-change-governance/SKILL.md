@@ -1,76 +1,61 @@
 ---
 name: git-change-governance
-description: Govern Git branch and worktree choice, dirty-state protection, staging scope, local commit grouping, push boundaries, and rollback-safe handoff.
+description: Use when choosing or changing Git branches and worktrees, protecting dirty state, staging or committing local work, deciding push boundaries, or cleaning up Git workspaces.
 ---
 
 # Git Change Governance
 
-Load `work-governance:work-lifecycle` first. This skill owns only the Git
-boundary; lifecycle owns the goal, authority, evidence, and final claim.
+This skill owns only the Git boundary. Use `work-governance:work-lifecycle` for
+the broader goal, authority, and completion claim.
 
 ## Isolation
 
-Protect `main` and `master` by default. Prefer an existing isolated branch or
-managed worktree for substantive changes. Use the current attached worktree
-when it is already isolated and the dirty state belongs to the same delivery
-boundary.
+Prefer an existing isolated branch or worktree for substantive changes. Use the
+current attached worktree when it is already isolated and its dirty state
+belongs to the same delivery boundary.
 
-When a new Codex-managed worktree is needed, choose the location in this order:
+When a new worktree is needed, choose its location in this order:
 
-1. current attached or already managed worktree;
-2. explicit user or project path;
-3. Codex configured `git-worktree-root`;
-4. Codex official default `$CODEX_HOME/worktrees`.
+1. the current attached or already managed worktree;
+2. an explicit user or project path;
+3. the worktree root configured by the current Codex environment;
+4. Codex's official default, `$CODEX_HOME/worktrees`.
 
-Do not default to a project-local `.work-governance/worktrees` path. Historical
-registered worktrees may remain where Git already knows them, but new creation
-follows the priority above.
+Do not create a project-local governance directory merely to hold worktrees.
+Placement does not choose branch semantics: verify the repository, start point,
+target path, and branch or detached mode independently.
 
-Worktree placement does not choose branch semantics. Attach an existing branch
-only when that exact branch was selected. Create a branch only from an explicit
-and verified start point. Use detached mode only when the task calls for it.
+Treat the project's current default branch and authoritative project guidance
+as the stable integration target. Do not assume it is named `main`.
 
 ## Dirty State
 
-Before Git mutation, inspect the current state:
-
-```bash
-git status --short --branch
-git branch --show-current
-git worktree list --porcelain
-```
-
-Preserve unrelated changes. Never reset, clean, stash, checkout over, delete,
-or overwrite user or unrelated agent work unless the user explicitly authorized
-that exact operation.
+Before Git mutation, inspect the current branch, status, and registered
+worktrees. Preserve unrelated changes. Do not reset, clean, stash, switch over,
+delete, or overwrite user or other-agent work unless the exact action and target
+are authorized.
 
 ## Staging And Commit
 
-Stage exact paths unless the entire dirty tree has been proven to be one
-delivery boundary. Exclude local config, caches, dependencies, build outputs,
+Stage exact paths unless the entire dirty tree is proven to be one delivery
+boundary. Exclude local configuration, caches, dependencies, build outputs,
 logs, scratch files, and unrelated edits.
 
-Before committing, inspect:
+Before committing, inspect the unstaged diff, staged name/status set, and staged
+whitespace checks. Local commits are allowed only when the work and commit are
+authorized, the boundary is coherent, and the claimed validation passed.
+Group commits by repository and independently meaningful delivery boundary.
 
-```bash
-git diff -- <path>
-git diff --cached --name-status
-git diff --cached --check
-```
+Push, remote branch changes, pull or merge requests, release tags, and other
+remote state changes are separate actions. A local commit does not authorize
+them.
 
-Local commit is allowed after authorized, validated work when the boundary is
-clear. Group commits by delivery boundary. Push, remote branches, pull or merge
-requests, release tags, and other remote state changes require explicit user
-initiation.
+## Cleanup And Handoff
 
-## Cleanup
+Clean up only an exact registered worktree after checking its dirty, locked,
+and branch state. Removing a worktree, removing its branch, and deleting
+untracked data are separate decisions.
 
-Clean up only an exact registered worktree target after checking its dirty,
-locked, and branch state. Removing the associated branch is separate
-destructive work and needs explicit authority.
-
-## Report
-
-Report repository, branch, isolation choice, staged files, commit hash when one
-was made, validation commands with key output, excluded dirty files, and
-whether push or other remote work remains separate.
+Report the repository, branch or detached state, isolation choice, committed
+boundary and hash when applicable, validation evidence, excluded dirty files,
+cleanup performed, and remote work that remains outside the current authority.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Work Reporting"
+  short_description: "Report progress, changes, gaps, and next work"
+  default_prompt: "Use $work-governance:work-reporting to give proportionate progress updates, durable handoffs, and a complete semantic completion report."

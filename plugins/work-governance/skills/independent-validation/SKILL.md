@@ -1,61 +1,48 @@
 ---
 name: independent-validation
-description: Challenge plans, artifacts, evidence, testing strategy, and completion claims only when independent review adds real confidence.
+description: Use when a plan, artifact, causal diagnosis, evidence set, activation, or completion claim has enough risk or self-certification uncertainty that an independent challenge would materially increase confidence.
 ---
 
 # Independent Validation
 
-Load `work-governance:work-lifecycle` first unless the user explicitly asked for
-a standalone review. Validation challenges claims; it does not own the parent
-Plan, WorkVCS records, or final wording.
+Validation challenges a claim; it does not own the parent goal, plan,
+authorization, persistence records, or final wording.
 
-## When To Use
+## Use It Selectively
 
-Use independent validation when at least one of these is true:
+Independent review is useful when:
 
-- high-impact, destructive, remote, production, data, or security-sensitive
-  work is in scope;
-- the implementer is also judging a completion claim;
-- a contract, testing strategy, state transition, release, activation, or rollback
-  claim can fail in subtle ways;
-- evidence is indirect, degraded, stale, or easy to overstate;
-- the user or parent agent asked for a challenge pass.
+- consequential, destructive, remote, production, data, security, migration,
+  activation, or rollback work is being claimed complete;
+- the implementer is also the only judge of a subtle contract or causal claim;
+- evidence is indirect, degraded, stale, sampled, or easy to overstate;
+- a test strategy or state transition can pass while the user goal still fails;
+- the user or governing task explicitly requests independent review.
 
-Do not run validation as a default tax on every No-Plan answer or routine
-reversible local edit.
+Do not impose independent review on a routine reversible edit when a direct,
+meaningful check proves the claim. Do not repeat broader tests after relevant
+checks pass unless new edits, failures, or unresolved risks justify it.
 
-## Modes
+## Challenge Modes
 
-- `plan-challenge`: obligations, scope, gates, dependencies, stop conditions,
+- **Plan challenge:** missing obligations, dependencies, gates, stop conditions,
   and acceptance evidence.
-- `artifact-review`: diff, generated output, docs, schema, UI, or data artifact
-  against the demand contract.
-- `evidence-audit`: whether commands, tests, logs, samples, screenshots, or
-  WorkVCS closeout output prove the exact claim.
-- `causal-challenge`: whether a stated root cause is falsifiable and the fix
-  removes the cause instead of hiding a symptom.
-- `rollback-review`: whether suspect artifacts are identified and a proposed
-  rollback, quarantine, or compensation is safe to recommend.
+- **Artifact review:** diff, generated artifact, schema, UI, or data result
+  against the actual contract.
+- **Evidence audit:** whether tests, logs, samples, screenshots, or records prove
+  the exact stated boundary.
+- **Causal challenge:** whether a diagnosis distinguishes plausible causes and
+  whether the correction removes the cause instead of hiding the symptom.
+- **Rollback review:** whether affected artifacts are known and containment,
+  compensation, or rollback is safe.
 
-## Independence
+## Independence And Output
 
-Prefer a separate context when available and useful. Give validators the demand
-contract and raw artifacts, not the implementer's intended answer. Treat
-validator output as evidence input; the parent decides any WorkVCS update,
-confirmation gate, and final claim.
+Prefer a separate context only when independence adds value. Give the reviewer
+the goal, contract, and raw artifacts rather than the implementer's intended
+answer. Treat its result as evidence for the owning agent to judge.
 
-If independence is unavailable, say so plainly. For ordinary reversible local
-work, a deterministic self-challenge may still be useful. For high-impact
-completion, activation, route closeout, or external actions, unavailable
-validation remains a gap unless the user accepts that risk.
-
-## Output
-
-Lead with findings ordered by severity:
-
-- finding;
-- evidence location or command output;
-- affected obligation;
-- required correction, validation, or confirmation gate.
-
-If no issues are found, state what was checked and what residual risk remains.
+Lead with actionable findings ordered by consequence. For each, identify the
+evidence, affected obligation, and required correction or missing validation.
+If no issue is found, state what was examined and the residual risk; absence of
+a finding is not proof outside the reviewed boundary.

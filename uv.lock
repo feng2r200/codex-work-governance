@@ -140,7 +140,7 @@ wheels = [
 
 [[package]]
 name = "work-governance"
-version = "1.4.1"
+version = "2.0.0"
 source = { virtual = "." }
 
 [package.dev-dependencies]

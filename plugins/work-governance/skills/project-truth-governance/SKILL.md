@@ -1,59 +1,61 @@
 ---
 name: project-truth-governance
-description: Discover, rank, and maintain long-term project truth sources without confusing active WorkVCS state, history, memory, and confirmed project authority.
+description: Use when deciding which source currently governs a project fact, whether a finding should become long-term authority, where to place it, or how to resolve conflicts among live evidence, work records, history, and memory.
 ---
 
 # Project Truth Governance
 
-Load `work-governance:work-lifecycle` first when this is part of a broader task.
+This skill decides meaning and authority. A persistence-tool Skill, when
+available, owns the mechanics of reading or recording state.
 
-## Truth Source Order
+## Rank Sources By Claim
 
-Prefer current, explicit, and executable authorities:
+Start with the source that can authoritatively answer the specific claim:
 
-1. current user instruction for this task;
-2. current project `AGENTS.md`, then `CLAUDE.md`;
-3. current code, configuration, data, logs, tests, and runtime evidence;
-4. active WorkVCS Goal, Plan, Task, session, receipt, and closeout records for
-   mechanical work state and recovery;
-5. confirmed project docs, product contracts, architecture docs, schemas, or
-   maintained notes;
-6. tracked `.work-governance` history as historical audit only;
-7. memory and old session summaries as leads only.
+1. the user's current instruction for this task;
+2. current project instructions and explicit product or data contracts;
+3. current code, configuration, schemas, runtime, data, and fresh validation;
+4. confirmed project-native architecture, decision, operations, or domain docs;
+5. active work-state, decision, finding, knowledge, evidence, and handoff
+   records from an available persistence system;
+6. historical plans, logs, prior conversations, and memory as leads.
 
-WorkVCS is the activity state layer. It is not the project authority for product
-facts, architectural decisions, business rules, or enduring user preferences
-unless the same fact is promoted into the project-native authority.
+The order is not mechanical. Code does not override an explicit intended
+contract merely because it is current, and a recorded decision is not project
+truth merely because it is durable. Name the type and scope of the claim before
+choosing its authority.
 
-When sources conflict, use current evidence by default. If the conflict changes
-goal, behavior, cost, data safety, irreversibility, or delivery shape, stop at a
-real confirmation gate.
-
-## Placement
-
-Enhance the existing authority when it can carry the fact. Add an adjacent
-section or helper inside the same boundary when the original authority should
-stay lean. Create a new authority only when lifecycle, audience, compatibility,
-or ownership requires it.
-
-Do not scan, migrate, or rewrite tracked `.work-governance` history by default.
-Read it only when historical audit or user-specified recovery is in scope.
+When sources conflict, investigate cheap current evidence first. Ask the user
+only when the unresolved conflict changes intended behavior, cost, data safety,
+delivery form, or another material outcome.
 
 ## Promotion
 
-Discussion, logs, candidate plans, WorkVCS records, and memory do not become
-project truth merely by existing. To promote a fact:
+Promote a finding only when future work benefits from treating it as stable:
 
-- state the exact fact or rule;
-- name the evidence and source file;
-- explain the effect on future work;
-- obtain confirmation when promotion changes future execution.
+- state the exact fact, decision, constraint, or practice;
+- distinguish observation, inference, assumption, and confirmed conclusion;
+- identify supporting evidence and known scope limits;
+- check for an existing authority that should be updated instead of duplicated;
+- choose a location with the right audience, owner, and lifecycle;
+- obtain confirmation when promotion changes future execution or policy.
 
-Keep symptoms, hypotheses, probes, and confirmed causes distinct. A passing test
-or successful workaround does not promote a root-cause hypothesis unless the
-evidence discriminates it from materially plausible alternatives.
+Use an available persistence-tool Skill for record lookup, semantic links,
+knowledge promotion, and evidence storage. Use project-native documents for
+facts that must govern people or tools that do not share that persistence
+system. Link the two when each serves a different audience; do not create two
+mutable authorities for the same contract.
 
-## Report
+## Keep Categories Distinct
 
-Report the selected authority, why alternatives were rejected, what remains
-unconfirmed, and how the placement can be verified later.
+- Goal, Plan, and Task records describe intended or active work.
+- Decisions describe choices and tradeoffs.
+- Findings describe what evidence established.
+- Assumptions and Questions preserve uncertainty.
+- Attempts preserve tried paths and outcomes.
+- Knowledge is a reusable conclusion with provenance and scope.
+- Project authority is the source future contributors are expected to obey.
+
+Report the selected authority, why it fits the claim, conflicts or uncertainty,
+what was promoted or deliberately left provisional, and how future work can
+verify it.

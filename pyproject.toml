@@ -1,7 +1,7 @@
 [project]
 name = "work-governance"
-version = "1.4.1"
-description = "Local Codex governance policy plugin backed by WorkVCS durable state"
+version = "2.0.0"
+description = "Composable, tool-neutral governance policy for Codex work"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = []

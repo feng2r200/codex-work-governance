@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan Governance"
+  short_description: "Admit and revise Plans only when valuable"
+  default_prompt: "Use $work-governance:plan-governance to decide whether a Plan adds value and to govern its admission, evolution, and closeout independently of storage tools."

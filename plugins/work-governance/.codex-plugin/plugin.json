@@ -1,7 +1,7 @@
 {
   "name": "work-governance",
-  "version": "1.4.1+codex.20260910175725",
-  "description": "Govern goal-driven Codex work with minimal policy, WorkVCS-backed durable state, Git boundaries, and validation.",
+  "version": "2.0.0+codex.20260911142445",
+  "description": "Composable, tool-neutral governance for goal discovery, planning, delegation, Git boundaries, validation, project truth, and reporting.",
   "author": {
     "name": "Work Governance Contributors"
   },
@@ -11,27 +11,30 @@
     "governance",
     "planning",
     "validation",
-    "workvcs"
+    "delegation"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Work Governance",
-    "shortDescription": "Govern goal-driven work with WorkVCS-backed state.",
-    "longDescription": "Work Governance provides the policy layer for Codex work: No-Plan versus Plan-controlled routing, goal discovery, confirmation boundaries, Git and external-risk rules, validation strength, and completion claims. Durable project state is recorded through WorkVCS high-level commands instead of a plugin-local durable-state engine.",
+    "shortDescription": "Composable, tool-neutral governance for Codex work.",
+    "longDescription": "Work Governance helps Codex discover the real goal, use Plans and SubAgents only when valuable, protect Git and authority boundaries, promote project truth deliberately, validate proportionally, and report work completely. Each policy module remains independent of storage and tool choices.",
     "developerName": "Work Governance Contributors",
     "category": "Productivity",
     "websiteURL": "https://github.com/feng2r200/codex-work-governance",
     "privacyPolicyURL": "https://github.com/feng2r200/codex-work-governance/blob/main/PRIVACY.md",
     "termsOfServiceURL": "https://github.com/feng2r200/codex-work-governance/blob/main/TERMS.md",
     "capabilities": [
+      "Goal discovery",
       "Planning",
+      "SubAgent governance",
       "Validation",
       "Governance",
       "Git boundaries",
-      "WorkVCS coordination"
+      "Project truth",
+      "Work reporting"
     ],
     "defaultPrompt": [
-      "Use $work-governance:work-lifecycle to apply the minimum governance level needed for this task."
+      "Use $work-governance:work-lifecycle to preserve the user's goal, authority, momentum, and evidence while loading only the governance modules this task needs."
     ]
   }
 }

@@ -1,4 +1,4 @@
 interface:
   display_name: "Independent Validation"
-  short_description: "Challenge plans, artifacts, and evidence"
-  default_prompt: "Use $work-governance:independent-validation to audit this plan, artifact, or completion claim."
+  short_description: "Challenge consequential claims when useful"
+  default_prompt: "Use $work-governance:independent-validation to independently challenge this plan, artifact, diagnosis, evidence set, or completion claim."
