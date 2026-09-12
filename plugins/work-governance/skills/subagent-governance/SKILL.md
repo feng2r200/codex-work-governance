@@ -35,6 +35,11 @@ Add non-goals, allowed or forbidden actions, dependencies, evidence, validation,
 and output structure only when the risk or ambiguity requires them. Do not make
 a long checklist the price of a tiny delegation.
 
+If the delegated result depends on a predecessor's exact terminal outcome,
+provide a stable Task, artifact, evidence, or handoff reference. Do not expect a
+generic bounded project summary to contain arbitrary completed history, and do
+not ask the receiving Agent to infer completion from adjacent current state.
+
 When a shared persistence capability is available, use its own Skill so agents
 can retrieve the same project reasoning, decisions, and active state. Multiple
 agents may read; assign one record owner or clearly partition writes to prevent

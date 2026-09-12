@@ -1,6 +1,6 @@
 {
   "name": "work-governance",
-  "version": "2.0.0+codex.20260911144358",
+  "version": "2.0.0+codex.20260912143629",
   "description": "Composable, tool-neutral governance for goal discovery, planning, delegation, Git boundaries, validation, project truth, and reporting.",
   "author": {
     "name": "Work Governance Contributors"
