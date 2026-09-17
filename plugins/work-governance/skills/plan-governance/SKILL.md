@@ -9,6 +9,12 @@ A Plan governs an evolving route to a goal. It remains usable without any
 particular persistence tool; when a Plan-recording tool is available, use that
 tool's own Skill for storage and recovery mechanics.
 
+Persistence readiness does not decide whether a Plan is warranted. Admit or
+promote based on coordination value even when the active persistence provider
+is temporarily unavailable; keep a bounded working Plan contract and carry it
+forward when the provider recovers. Conversely, provider availability never
+forces a Plan.
+
 ## Plan Admission
 
 Create a Plan only when it adds durable coordination value, such as:
