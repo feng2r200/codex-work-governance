@@ -16,6 +16,7 @@ SKILL_NAMES = {
     "git-change-governance",
     "independent-validation",
     "project-truth-governance",
+    "project-archive-curation",
     "work-reporting",
 }
 
@@ -126,6 +127,46 @@ def test_validation_truth_and_reporting_boundaries() -> None:
     assert "Do not claim that nothing remains" in reporting
 
 
+def test_work_governance_archive_scenario_reuses_existing_coverage() -> None:
+    curation = normalized(SKILLS / "project-archive-curation" / "SKILL.md")
+    lifecycle = read(SKILLS / "work-lifecycle" / "SKILL.md")
+
+    assert "Reuse existing durable records and authoritative documents" in curation
+    assert "shared context as a thin projection" in curation
+    assert "must not become competing mutable authorities" in curation
+    assert "Exclude the current curation work" in curation
+    assert "project-archive-curation" not in lifecycle
+
+
+def test_dianjin_archive_scenario_preserves_unbound_and_mixed_history() -> None:
+    curation = normalized(SKILLS / "project-archive-curation" / "SKILL.md")
+
+    assert "its absence does not prove that the project or its history is empty" in curation
+    assert "Do not infer archive readiness from a title or UI status alone" in curation
+    assert "Keep different item kinds separate" in curation
+    assert "must not initialize persistence" in curation
+    assert "bind an ambient mirror" in curation
+    assert (
+        "Historical work that predates durable capture may need one bounded curation pass"
+        in curation
+    )
+
+
+def test_archive_curation_keeps_mutation_gates_ordered_and_independent() -> None:
+    curation = read(SKILLS / "project-archive-curation" / "SKILL.md")
+    ordered = [
+        "persist durable cognition or draft shared context",
+        "publish or import the shared context",
+        "read back and verify the published result",
+        "archive the exact approved items",
+    ]
+    positions = [curation.index(item) for item in ordered]
+
+    assert positions == sorted(positions)
+    assert "Authority for one does not grant the next" in curation
+    assert "Archive readiness is not a completion claim" in curation
+
+
 def test_manifest_readme_and_project_metadata_match_architecture() -> None:
     manifest = json.loads(read(PLUGIN / ".codex-plugin" / "plugin.json"))
     project = tomllib.loads(read(ROOT / "pyproject.toml"))
@@ -136,6 +177,8 @@ def test_manifest_readme_and_project_metadata_match_architecture() -> None:
     ]
     assert all(len(prompt) <= 128 for prompt in manifest["interface"]["defaultPrompt"])
     assert "does not require one specific CLI" in readme
+    assert "project-archive-curation" in readme
     assert "work-reporting" in readme
+    assert "Project archive curation" in manifest["interface"]["capabilities"]
     assert project["project"]["version"] == "2.0.0"
     assert project["project"]["dependencies"] == []

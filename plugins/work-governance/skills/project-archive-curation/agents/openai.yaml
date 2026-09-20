@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Archive Curation"
+  short_description: "Retain project knowledge before archiving work"
+  default_prompt: "Use $work-governance:project-archive-curation to review completed project work, retain durable knowledge in the right layer, and identify exact archive-ready items."

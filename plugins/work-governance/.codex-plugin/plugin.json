@@ -1,7 +1,7 @@
 {
   "name": "work-governance",
-  "version": "2.0.0+codex.20260917045056",
-  "description": "Composable, tool-neutral governance for goal discovery, planning, delegation, Git boundaries, validation, project truth, and reporting.",
+  "version": "2.0.0+codex.20260920051539",
+  "description": "Composable, tool-neutral governance for goal discovery, planning, delegation, Git boundaries, validation, project truth, archive curation, and reporting.",
   "author": {
     "name": "Work Governance Contributors"
   },
@@ -17,7 +17,7 @@
   "interface": {
     "displayName": "Work Governance",
     "shortDescription": "Composable, tool-neutral governance for Codex work.",
-    "longDescription": "Work Governance helps Codex discover the real goal, use Plans and SubAgents only when valuable, protect Git and authority boundaries, promote project truth deliberately, validate proportionally, and report work completely. Each policy module remains independent of storage and tool choices.",
+    "longDescription": "Work Governance helps Codex discover the real goal, use Plans and SubAgents only when valuable, protect Git and authority boundaries, promote project truth deliberately, curate completed project work before archival, validate proportionally, and report work completely. Each policy module remains independent of storage and tool choices.",
     "developerName": "Work Governance Contributors",
     "category": "Productivity",
     "websiteURL": "https://github.com/feng2r200/codex-work-governance",
@@ -31,6 +31,7 @@
       "Governance",
       "Git boundaries",
       "Project truth",
+      "Project archive curation",
       "Work reporting"
     ],
     "defaultPrompt": [

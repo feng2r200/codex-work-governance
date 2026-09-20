@@ -19,6 +19,7 @@ Each module owns one kind of judgment and remains useful by itself:
 - `git-change-governance`: branches, worktrees, commits, and remote boundaries;
 - `independent-validation`: proportional independent challenge;
 - `project-truth-governance`: truth-source selection and promotion;
+- `project-archive-curation`: retention placement and archive readiness;
 - `work-reporting`: progress, handoff, and completion communication.
 
 The plugin does not implement a state engine and does not require one specific
@@ -38,6 +39,8 @@ Skill supplies the storage, recall, evidence, and recovery mechanics.
   alone does not require a Plan.
 - Knowledge, decisions, evidence, and retrospectives may exist independently of
   a Plan when another capability records them.
+- Completed project work is archived only after valuable knowledge, current
+  authority, open obligations, and provenance have a durable destination.
 - Non-blocking discoveries do not interrupt ongoing work. Directional,
   outcome-changing, authority-changing, or irreversible issues do.
 - Compatibility is introduced only after its necessity is established and the
