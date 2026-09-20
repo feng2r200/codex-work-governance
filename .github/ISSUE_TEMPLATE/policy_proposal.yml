@@ -1,0 +1,32 @@
+name: Policy proposal
+description: Propose a focused governance behavior change.
+title: "[Policy]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: failure
+    attributes:
+      label: User-visible failure mode
+      description: Describe the concrete behavior that the current policy gets wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and scope
+      description: Explain where this happens and where the conclusion should not be generalized.
+    validations:
+      required: true
+  - type: textarea
+    id: change
+    attributes:
+      label: Smallest useful policy change
+    validations:
+      required: true
+  - type: textarea
+    id: cost
+    attributes:
+      label: Added ceremony, tool calls, or compatibility cost
+    validations:
+      required: true

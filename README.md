@@ -1,83 +1,129 @@
-# Work Governance Plugin
+# Work Governance
 
-Work Governance is a tool-neutral Codex policy plugin. It helps Codex understand
-the real goal, choose only the coordination a task benefits from, maintain
-useful momentum, protect authority boundaries, and make completion claims that
-the evidence supports.
+**A composable governance layer for Codex that adds judgment without adding ceremony.**
 
-The repository-local marketplace is `.agents/plugins/marketplace.json`; the
-plugin source is `plugins/work-governance`.
+Work Governance helps an Agent discover the real goal, choose only the
+coordination a task benefits from, protect authority boundaries, and make
+completion claims that the evidence supports. Clear work keeps moving; Plans,
+SubAgents, independent review, and durable state enter only when they add value.
 
-## Design
+Created and maintained by [feng2r200](https://github.com/feng2r200).
 
-Each module owns one kind of judgment and remains useful by itself:
+## Why It Exists
 
-- `work-lifecycle`: small router and safety kernel;
-- `goal-discovery`: goal clarification and minimal decision frontiers;
-- `plan-governance`: Plan admission, No-Plan evolution, and material revision;
-- `subagent-governance`: useful delegation, ownership, and integration;
-- `git-change-governance`: branches, worktrees, commits, and remote boundaries;
-- `independent-validation`: proportional independent challenge;
-- `project-truth-governance`: truth-source selection and promotion;
-- `project-archive-curation`: retention placement and archive readiness;
-- `work-reporting`: progress, handoff, and completion communication.
+Capable Agents usually do not fail because they lack another mandatory
+workflow. They fail when they:
 
-The plugin does not implement a state engine and does not require one specific
-CLI. Plan governance, retrospective learning, project truth, and persistence are
-separate concerns. When a compatible state or knowledge tool exists, its own
-Skill supplies the storage, recall, evidence, and recovery mechanics.
+- solve the proposed implementation instead of the underlying goal;
+- turn every task into a Plan or delegation tree;
+- confuse available credentials with authority to push, release, or deploy;
+- interrupt useful execution for non-blocking discoveries;
+- promote historical notes into project truth without checking current evidence;
+- or report completion more broadly than validation supports.
 
-## Core Behavior
+Work Governance addresses those failures as independent policy modules rather
+than a monolithic process engine.
 
-- Clear, actionable work proceeds without a forced Plan or discovery ceremony.
-- A Plan is introduced only when durable coordination, recovery, staged
-  dependencies, or a persistent contract adds value.
-- If No-Plan work grows into a Plan, the first recorded Plan carries forward
-  useful findings, decisions, unknowns, constraints, evidence, and the reason
-  for the evolution.
-- High-impact work needs exact authority and proportional evidence, but impact
-  alone does not require a Plan.
-- Knowledge, decisions, evidence, and retrospectives may exist independently of
-  a Plan when another capability records them.
-- Completed project work is archived only after valuable knowledge, current
-  authority, open obligations, and provenance have a durable destination.
-- Non-blocking discoveries do not interrupt ongoing work. Directional,
-  outcome-changing, authority-changing, or irreversible issues do.
-- Compatibility is introduced only after its necessity is established and the
-  user can see the decision and cost.
-- Completion reports explain the result, additions, modifications, deletions,
-  operations, validation boundary, unfinished work, risks, and useful next
-  action without a fixed response template.
+## What Makes It Different
 
-## Worktree Policy
+- **Value-driven:** no Plan, SubAgent, tool call, or review is mandatory merely
+  because a task is large or important.
+- **Tool-neutral:** the plugin does not contain a state engine, does not require
+  one specific CLI, and leaves persistence providers as separate capabilities.
+- **Authority-aware:** local changes, commits, pushes, releases, deployments,
+  production actions, and destructive cleanup remain distinct boundaries.
+- **Evidence-calibrated:** validation expands with the claim and risk instead of
+  becoming a fixed test ritual.
+- **Composable:** each Skill owns one judgment and remains useful on its own.
 
-For a new Git worktree, use the current attached workspace first, then an
-explicit user or project path, then the root configured in the current Codex
-environment, and finally Codex's official default `$CODEX_HOME/worktrees`.
-Never create a project-local governance directory merely to hold worktrees.
+```text
+User goal and authority
+          |
+          v
+  work-lifecycle router
+          |
+          +-- goal discovery
+          +-- Plan governance
+          +-- SubAgent governance
+          +-- Git boundaries
+          +-- independent validation
+          +-- project truth
+          +-- archive curation
+          +-- work reporting
+          |
+          v
+Existing tools and project-specific Skills
+```
 
-## Install Or Update
+## Modules
 
-Install or update the plugin from the local marketplace:
+| Skill | Owns |
+| --- | --- |
+| `work-lifecycle` | Small router and safety kernel |
+| `goal-discovery` | Goal clarification and minimal decision frontiers |
+| `plan-governance` | Plan admission, No-Plan evolution, and material revision |
+| `subagent-governance` | Delegation value, ownership, and integration |
+| `git-change-governance` | Branches, worktrees, commits, and remote boundaries |
+| `independent-validation` | Proportional independent challenge |
+| `project-truth-governance` | Truth-source selection and deliberate promotion |
+| `project-archive-curation` | Retention placement and archive readiness |
+| `work-reporting` | Progress, handoff, and completion communication |
+
+## Install
+
+Add the GitHub repository as a Codex plugin marketplace, then install the
+plugin:
 
 ```sh
+codex plugin marketplace add feng2r200/codex-work-governance
 codex plugin add work-governance@work-governance-local
 ```
 
-An existing task can retain already-loaded Skill content. Validate an update in
-a fresh Codex process or task as well as checking registration and cached files.
+For local development from this checkout:
+
+```sh
+codex plugin marketplace add .
+codex plugin add work-governance@work-governance-local
+```
+
+Open a new Codex task after installing or updating. Existing tasks can retain
+the Skill content that was loaded when they started.
+
+## Example Behavior
+
+For an actionable bug fix, Work Governance should let the Agent inspect,
+implement, and run focused tests without first creating a Plan. If the same
+task later grows into dependent stages that must survive a handoff, the Agent
+can admit a Plan once and carry forward the useful findings, constraints, and
+evidence already discovered.
+
+If the repository is dirty, the Git module protects unrelated work. If local
+validation passes but push was not authorized, the reporting module describes
+the verified local result and leaves the remote untouched.
+
+## Package Layout
+
+The distributable plugin lives in `plugins/work-governance` and uses:
+
+- `plugin.json` as the portable Agent Plugins manifest;
+- `.codex-plugin/plugin.json` as the Codex compatibility fallback;
+- `skills/` for the nine independent policy modules; and
+- `.agents/plugins/marketplace.json` as the repository marketplace.
+
+The portable manifest is the forward-looking package authority. Tests keep its
+identity and OpenAI interface metadata aligned with the compatibility manifest.
 
 ## Validation
 
-Run the focused policy contract tests:
+Install development dependencies and run the policy contracts:
 
 ```sh
+uv sync --locked --all-groups
 uv run pytest
 uv run ruff check tests/test_policy_contract.py
 ```
 
-For Skill and manifest edits, run the system validators without adding runtime
-dependencies to this plugin:
+When the bundled Codex validators are available locally, also run:
 
 ```sh
 SKILL_VALIDATOR="${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py"
@@ -92,5 +138,16 @@ uv run --with pyyaml python "$PLUGIN_VALIDATOR" plugins/work-governance
 git diff --check
 ```
 
-Tests protect representative behavior and module boundaries. They do not
-preserve obsolete workflow versions or reproduce the Skill prose mechanically.
+The current suite protects representative policy boundaries and packaging
+consistency. It is not yet a published behavioral benchmark of Agent outcomes;
+that distinction is intentional and documented rather than hidden.
+
+## Contributing And Security
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing a policy change. Report
+security concerns through [SECURITY.md](SECURITY.md), and use
+[SUPPORT.md](SUPPORT.md) to choose the right support channel.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).

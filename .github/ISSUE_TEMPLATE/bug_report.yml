@@ -1,0 +1,44 @@
+name: Bug report
+description: Report reproducible policy or packaging behavior.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: Do not include credentials, private project data, or full transcripts.
+  - type: input
+    id: version
+    attributes:
+      label: Plugin version
+      placeholder: 2.0.0+codex.YYYYMMDDHHMMSS
+    validations:
+      required: true
+  - type: input
+    id: skill
+    attributes:
+      label: Affected Skill or package surface
+    validations:
+      required: true
+  - type: textarea
+    id: scenario
+    attributes:
+      label: Minimal sanitized scenario
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation already performed

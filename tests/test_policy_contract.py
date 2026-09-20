@@ -58,14 +58,17 @@ def test_skill_links_resolve() -> None:
 
 
 def test_public_plugin_is_tool_neutral_and_has_no_state_engine() -> None:
+    """Verify that packaging does not smuggle in a state or execution engine."""
     text = live_text().lower()
     for forbidden in ["workctl", "workvcs", "sessionstart", "userpromptsubmit", "action lease"]:
         assert forbidden not in text
 
     manifest = json.loads(read(PLUGIN / ".codex-plugin" / "plugin.json"))
+    portable = json.loads(read(PLUGIN / "plugin.json"))
     assert "hooks" not in manifest
     assert "mcpServers" not in manifest
     assert "scripts" not in manifest
+    assert "mcp.json" not in portable
     assert not (PLUGIN / "hooks").exists()
     assert not (PLUGIN / "scripts").exists()
 
@@ -168,7 +171,10 @@ def test_archive_curation_keeps_mutation_gates_ordered_and_independent() -> None
 
 
 def test_manifest_readme_and_project_metadata_match_architecture() -> None:
+    """Keep portable, compatibility, project, and README metadata aligned."""
     manifest = json.loads(read(PLUGIN / ".codex-plugin" / "plugin.json"))
+    portable = json.loads(read(PLUGIN / "plugin.json"))
+    portable_interface = portable["extensions"]["com.openai"]["interface"]
     project = tomllib.loads(read(ROOT / "pyproject.toml"))
     readme = normalized(ROOT / "README.md")
     assert manifest["interface"]["defaultPrompt"] == [
@@ -180,5 +186,13 @@ def test_manifest_readme_and_project_metadata_match_architecture() -> None:
     assert "project-archive-curation" in readme
     assert "work-reporting" in readme
     assert "Project archive curation" in manifest["interface"]["capabilities"]
+    assert portable["$schema"] == "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+    assert portable["name"] == manifest["name"] == project["project"]["name"]
+    assert portable["version"] == manifest["version"]
+    assert portable["description"] == manifest["description"]
+    assert portable["author"]["name"] == manifest["author"]["name"] == "feng2r200"
+    assert portable["license"] == manifest["license"] == project["project"]["license"]
+    assert portable_interface == manifest["interface"]
     assert project["project"]["version"] == "2.0.0"
     assert project["project"]["dependencies"] == []
+    assert "/.work-governance/" in read(ROOT / ".gitignore").splitlines()

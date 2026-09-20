@@ -1,0 +1,48 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "work-governance",
+  "version": "2.0.0+codex.20260920055006",
+  "description": "Composable, tool-neutral governance for goal discovery, planning, delegation, Git boundaries, validation, project truth, archive curation, and reporting.",
+  "author": {
+    "name": "feng2r200",
+    "url": "https://github.com/feng2r200"
+  },
+  "homepage": "https://github.com/feng2r200/codex-work-governance",
+  "repository": "https://github.com/feng2r200/codex-work-governance",
+  "license": "Apache-2.0",
+  "keywords": [
+    "agent-governance",
+    "codex",
+    "delegation",
+    "planning",
+    "validation"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Work Governance",
+        "shortDescription": "Composable, tool-neutral governance for Codex work.",
+        "longDescription": "Work Governance helps Codex discover the real goal, use Plans and SubAgents only when valuable, protect Git and authority boundaries, promote project truth deliberately, curate completed project work before archival, validate proportionally, and report work completely. Each policy module remains independent of storage and tool choices.",
+        "developerName": "feng2r200",
+        "category": "Productivity",
+        "websiteURL": "https://github.com/feng2r200/codex-work-governance",
+        "privacyPolicyURL": "https://github.com/feng2r200/codex-work-governance/blob/main/PRIVACY.md",
+        "termsOfServiceURL": "https://github.com/feng2r200/codex-work-governance/blob/main/TERMS.md",
+        "capabilities": [
+          "Goal discovery",
+          "Planning",
+          "SubAgent governance",
+          "Validation",
+          "Governance",
+          "Git boundaries",
+          "Project truth",
+          "Project archive curation",
+          "Work reporting"
+        ],
+        "defaultPrompt": [
+          "Use $work-governance:work-lifecycle to preserve goal, authority, momentum, and evidence with only the needed modules."
+        ]
+      }
+    }
+  }
+}
