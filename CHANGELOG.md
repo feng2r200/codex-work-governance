@@ -7,6 +7,7 @@ All notable changes to Work Governance are documented here. The project follows
 
 ### Added
 
+- A complete Simplified Chinese README with bidirectional language navigation.
 - Portable Agent Plugins manifest alongside the Codex compatibility manifest.
 - Public installation, contribution, security, support, and community guidance.
 - Continuous integration for policy contracts and lint checks.

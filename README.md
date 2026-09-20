@@ -1,5 +1,7 @@
 # Work Governance
 
+**English** | [简体中文](README.zh-CN.md)
+
 **A composable governance layer for Codex that adds judgment without adding ceremony.**
 
 Work Governance helps an Agent discover the real goal, choose only the
