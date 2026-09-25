@@ -11,6 +11,9 @@ All notable changes to Work Governance are documented here. The project follows
 - Portable Agent Plugins manifest alongside the Codex compatibility manifest.
 - Public installation, contribution, security, support, and community guidance.
 - Continuous integration for policy contracts and lint checks.
+- Project development governance for enrolled long-running work, including a
+  small project entry, bounded startup recovery, one mutable execution-state
+  provider, and material closeout reconciliation.
 
 ### Changed
 

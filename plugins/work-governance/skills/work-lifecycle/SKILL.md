@@ -44,6 +44,9 @@ workflow on every request and does not own durable state.
   commit, push, or Git cleanup decisions.
 - Load `work-governance:independent-validation` only when a separate challenge
   adds meaningful confidence.
+- Load `work-governance:project-development-governance` when an explicitly
+  enrolled project or ongoing development across tasks, sessions, or phases
+  needs a durable entry contract, bounded recovery, or closeout reconciliation.
 - Load `work-governance:project-truth-governance` when deciding whether and
   where a finding should become durable project authority.
 - Load `work-governance:work-reporting` for sustained progress reporting,

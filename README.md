@@ -6,8 +6,10 @@
 
 Work Governance helps an Agent discover the real goal, choose only the
 coordination a task benefits from, protect authority boundaries, and make
-completion claims that the evidence supports. Clear work keeps moving; Plans,
-SubAgents, independent review, and durable state enter only when they add value.
+completion claims that the evidence supports. It also keeps enrolled,
+long-running project development recoverable without imposing that machinery on
+one-off work. Clear work keeps moving; Plans, SubAgents, independent review,
+and durable state enter only when they add value.
 
 Created and maintained by [feng2r200](https://github.com/feng2r200).
 
@@ -49,6 +51,7 @@ User goal and authority
           +-- SubAgent governance
           +-- Git boundaries
           +-- independent validation
+          +-- project development continuity
           +-- project truth
           +-- archive curation
           +-- work reporting
@@ -67,6 +70,7 @@ Existing tools and project-specific Skills
 | `subagent-governance` | Delegation value, ownership, and integration |
 | `git-change-governance` | Branches, worktrees, commits, and remote boundaries |
 | `independent-validation` | Proportional independent challenge |
+| `project-development-governance` | Long-running project entry, recovery, and state reconciliation |
 | `project-truth-governance` | Truth-source selection and deliberate promotion |
 | `project-archive-curation` | Retention placement and archive readiness |
 | `work-reporting` | Progress, handoff, and completion communication |
@@ -103,13 +107,20 @@ If the repository is dirty, the Git module protects unrelated work. If local
 validation passes but push was not authorized, the reporting module describes
 the verified local result and leaves the remote untouched.
 
+For an enrolled long-running project, the project development module reads a
+small routing entry and only the bounded state and authority relevant to the
+task. At closeout it reconciles material progress, priority, decision, risk,
+and evidence changes into exactly one mutable execution-state provider. Goals,
+architecture, constraints, and acceptance remain in project-native authority,
+and the project contract does not force a task Plan.
+
 ## Package Layout
 
 The distributable plugin lives in `plugins/work-governance` and uses:
 
 - `plugin.json` as the portable Agent Plugins manifest;
 - `.codex-plugin/plugin.json` as the Codex compatibility fallback;
-- `skills/` for the nine independent policy modules; and
+- `skills/` for the ten independent policy modules; and
 - `.agents/plugins/marketplace.json` as the repository marketplace.
 
 The portable manifest is the forward-looking package authority. Tests keep its

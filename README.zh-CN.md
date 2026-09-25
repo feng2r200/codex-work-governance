@@ -4,7 +4,7 @@
 
 **为 Codex 提供可组合的治理层：增加判断力，而不增加形式主义。**
 
-Work Governance 帮助 Agent 发现真实目标，只引入任务确实需要的协调机制，保护授权边界，并让完成声明与证据强度相匹配。清晰的工作应当持续推进；Plan、SubAgent、独立审查和持久化状态只在能够创造价值时才加入。
+Work Governance 帮助 Agent 发现真实目标，只引入任务确实需要的协调机制，保护授权边界，并让完成声明与证据强度相匹配。它也让已经加入治理的长期项目开发保持可恢复，而不会把这套机制强加给一次性工作。清晰的工作应当持续推进；Plan、SubAgent、独立审查和持久化状态只在能够创造价值时才加入。
 
 由 [feng2r200](https://github.com/feng2r200) 创建并维护。
 
@@ -40,6 +40,7 @@ work-lifecycle 路由器
       +-- SubAgent 治理
       +-- Git 边界
       +-- 独立验证
+      +-- 项目开发连续性
       +-- 项目事实
       +-- 归档整理
       +-- 工作汇报
@@ -58,6 +59,7 @@ work-lifecycle 路由器
 | `subagent-governance` | 委派价值、所有权和整合 |
 | `git-change-governance` | 分支、worktree、commit 和远端边界 |
 | `independent-validation` | 与风险相匹配的独立质疑 |
+| `project-development-governance` | 长期项目入口、恢复与状态对账 |
 | `project-truth-governance` | 事实来源选择与审慎提升 |
 | `project-archive-curation` | 保留位置与归档就绪判断 |
 | `work-reporting` | 进度、交接和完成汇报 |
@@ -86,13 +88,15 @@ codex plugin add work-governance@work-governance-local
 
 如果仓库存在未提交改动，Git 模块会保护无关工作。如果本地验证已经通过，但 push 尚未获得授权，汇报模块会说明本地已验证的结果，并保持远端不变。
 
+对于已经加入治理的长期项目，项目开发模块会先读取一个小型路由入口，再只读取当前任务需要的有限状态和权威内容。任务收尾时，它会把有实质变化的进展、优先级、决策、风险和验收证据对账到唯一一个可变执行状态提供方。目标、架构、约束和验收仍由项目原生权威承载，项目契约也不会强制创建任务 Plan。
+
 ## 包结构
 
 可分发 Plugin 位于 `plugins/work-governance`，其中使用：
 
 - `plugin.json` 作为可移植的 Agent Plugins manifest；
 - `.codex-plugin/plugin.json` 作为 Codex 兼容性后备 manifest；
-- `skills/` 存放九个相互独立的政策模块；
+- `skills/` 存放十个相互独立的政策模块；
 - `.agents/plugins/marketplace.json` 作为仓库 marketplace。
 
 可移植 manifest 是面向未来的包权威来源。测试会确保它的身份信息和 OpenAI 接口元数据与兼容性 manifest 保持一致。
