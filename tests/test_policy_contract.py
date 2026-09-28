@@ -58,6 +58,21 @@ def test_skill_links_resolve() -> None:
                 assert (skill_file.parent / target).exists(), f"{skill_file}: {target}"
 
 
+def test_workflows_pin_external_actions_by_commit_sha() -> None:
+    """Keep reusable workflow dependencies immutable and reviewable."""
+    workflows = ROOT / ".github" / "workflows"
+    for workflow in workflows.glob("*.y*ml"):
+        uses_values = re.findall(r"^\s*uses:\s*([^\s#]+)", read(workflow), re.MULTILINE)
+        for uses_value in uses_values:
+            if uses_value.startswith("./"):
+                continue
+            action, separator, revision = uses_value.rpartition("@")
+            assert action and separator, f"{workflow}: invalid uses value {uses_value}"
+            assert re.fullmatch(r"[0-9a-f]{40}", revision), (
+                f"{workflow}: {uses_value} must use a full commit SHA"
+            )
+
+
 def test_public_plugin_is_tool_neutral_and_has_no_state_engine() -> None:
     """Verify that packaging does not smuggle in a state or execution engine."""
     text = live_text().lower()
@@ -147,10 +162,7 @@ def test_project_development_trigger_and_anti_trigger_are_explicit() -> None:
 def test_project_development_separates_authority_and_mutable_state() -> None:
     skill = normalized(SKILLS / "project-development-governance" / "SKILL.md")
     contract = normalized(
-        SKILLS
-        / "project-development-governance"
-        / "references"
-        / "project-contract.md"
+        SKILLS / "project-development-governance" / "references" / "project-contract.md"
     )
 
     assert "exactly one mutable execution-state provider" in skill
@@ -166,14 +178,9 @@ def test_project_development_separates_authority_and_mutable_state() -> None:
 
 def test_project_development_startup_and_closeout_are_bounded() -> None:
     skill = read(SKILLS / "project-development-governance" / "SKILL.md")
-    skill_normalized = normalized(
-        SKILLS / "project-development-governance" / "SKILL.md"
-    )
+    skill_normalized = normalized(SKILLS / "project-development-governance" / "SKILL.md")
     contract = normalized(
-        SKILLS
-        / "project-development-governance"
-        / "references"
-        / "project-contract.md"
+        SKILLS / "project-development-governance" / "references" / "project-contract.md"
     )
     startup = [
         "Read the project entry first",
@@ -198,10 +205,7 @@ def test_project_development_startup_and_closeout_are_bounded() -> None:
 
 def test_project_development_handles_provider_modes_and_ambiguity() -> None:
     contract = normalized(
-        SKILLS
-        / "project-development-governance"
-        / "references"
-        / "project-contract.md"
+        SKILLS / "project-development-governance" / "references" / "project-contract.md"
     )
 
     assert "External durable-state provider" in contract
@@ -215,10 +219,7 @@ def test_project_development_handles_provider_modes_and_ambiguity() -> None:
 
 def test_project_development_scenario_matrix_covers_activation_boundaries() -> None:
     contract = normalized(
-        SKILLS
-        / "project-development-governance"
-        / "references"
-        / "project-contract.md"
+        SKILLS / "project-development-governance" / "references" / "project-contract.md"
     )
 
     for scenario in [

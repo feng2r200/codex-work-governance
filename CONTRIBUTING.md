@@ -25,6 +25,7 @@ Requirements: Python 3.12 or newer and `uv`.
 uv sync --locked --all-groups
 uv run pytest
 uv run ruff check tests/test_policy_contract.py
+uv run ruff format --check tests/test_policy_contract.py
 ```
 
 Run the Codex Skill and plugin validators when they are available, using the

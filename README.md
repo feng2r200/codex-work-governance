@@ -134,6 +134,7 @@ Install development dependencies and run the policy contracts:
 uv sync --locked --all-groups
 uv run pytest
 uv run ruff check tests/test_policy_contract.py
+uv run ruff format --check tests/test_policy_contract.py
 ```
 
 When the bundled Codex validators are available locally, also run:

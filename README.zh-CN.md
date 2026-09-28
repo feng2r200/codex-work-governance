@@ -109,6 +109,7 @@ codex plugin add work-governance@work-governance-local
 uv sync --locked --all-groups
 uv run pytest
 uv run ruff check tests/test_policy_contract.py
+uv run ruff format --check tests/test_policy_contract.py
 ```
 
 如果本地可以使用 Codex 自带的验证器，还应运行：

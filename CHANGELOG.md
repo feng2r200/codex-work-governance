@@ -20,6 +20,8 @@ All notable changes to Work Governance are documented here. The project follows
 - Publisher metadata now credits `feng2r200` explicitly.
 - Repository history no longer carries project-local governance runtime data or
   personal absolute paths on the rewritten `main` lineage.
+- Continuous-integration Actions are pinned to verified full commit SHAs, with
+  a policy contract that prevents mutable tags from being reintroduced.
 
 ## 2.0.0 release candidate
 
