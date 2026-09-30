@@ -17,6 +17,10 @@ workflow on every request and does not own durable state.
 - Use the least governance that materially improves correctness, recovery, or
   coordination. Do not make process setup a prerequisite for already-actionable
   work.
+- When a higher-priority policy requires a durable state provider, select that
+  provider at task start and keep its participation independent from Plan
+  admission, documentation cadence, and the ambient working directory. Route
+  storage mechanics to the provider's own Skill.
 - Keep goal, scope, evidence, and authority distinct. A tool record, old plan,
   memory, test result, or reviewer opinion is evidence; none silently expands
   the user's authority or replaces current project truth.
@@ -46,7 +50,8 @@ workflow on every request and does not own durable state.
   adds meaningful confidence.
 - Load `work-governance:project-development-governance` when an explicitly
   enrolled project or ongoing development across tasks, sessions, or phases
-  needs a durable entry contract, bounded recovery, or closeout reconciliation.
+  needs a durable entry contract, bounded recovery, live-state reconciliation,
+  or stage-baseline cadence.
 - Load `work-governance:project-truth-governance` when deciding whether and
   where a finding should become durable project authority.
 - Load `work-governance:work-reporting` for sustained progress reporting,

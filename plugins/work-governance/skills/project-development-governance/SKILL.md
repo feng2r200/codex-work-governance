@@ -47,6 +47,13 @@ ledger, never both. Provider records may point to project authority but do not
 silently replace it. Route any proposed promotion into project authority
 through `work-governance:project-truth-governance`.
 
+A stage baseline is a project-native accepted snapshot, not a second mutable
+execution-state provider. Between stage boundaries, the selected provider owns
+live work state and receives narrow semantic deltas. Update the stage baseline
+only at the project-defined stage boundary after the required acceptance
+evidence exists, unless the user explicitly asks for an earlier update or a
+current authority error must be corrected.
+
 ## Recover At Task Start
 
 For enrolled work, do this before material implementation. If work becomes
@@ -59,6 +66,11 @@ eligible during a task, do it when the continuity need becomes clear:
    single state-provider locator still resolve.
 3. Load the configured persistence-provider Skill. For a project-local ledger,
    read its bounded current-state, queue, decision, risk, and evidence records.
+   When project policy requires that provider and an accepted stage baseline
+   exists but no relevant provider state exists, reconstruct the minimum
+   supported state from the baseline with explicit source and as-of provenance,
+   then read it back. Do not fabricate historical events or treat stale baseline
+   text as current fact.
 4. Recover a bounded current-state packet: current objective, relevant scope
    and constraints, present status, prioritized next work, pending decisions,
    open risks, and acceptance evidence needed for this task.
@@ -78,9 +90,12 @@ delivery route independently benefits from a Plan. A small task inside an
 enrolled project may remain No-Plan while still honoring startup recovery and
 closeout reconciliation.
 
-During execution, keep material deltas available for closeout. Put accepted,
+During execution, write evidenced state changes to the selected provider at
+narrow semantic checkpoints instead of collecting all state until closeout.
+Coalesce mechanical operations that do not change meaning. Put accepted,
 long-lived architecture or contract changes in project authority; keep
-temporary execution state and pending choices in the selected provider.
+temporary execution state and pending choices in the selected provider. Do not
+roll the stage baseline forward during ordinary in-stage work.
 
 ## Reconcile Before Closeout
 
@@ -91,8 +106,10 @@ After validating the work and before making the final continuity claim:
    priority, material decisions and reasons, open risks and boundary cases, and
    acceptance evidence in the single state provider.
 3. Update project-native authority only when the task actually changed it and
-   the change is within scope; link provider state to that authority instead of
-   copying it.
+   the change is within scope. Update a stage baseline only when the declared
+   stage is complete and accepted; build it from the verified artifacts,
+   conversation, and provider state, then link the resulting snapshot back to
+   the provider instead of maintaining two live copies.
 4. Read back or otherwise verify the exact state changes using the provider's
    own mechanics.
 5. Report the technical result and the durable continuity result separately.

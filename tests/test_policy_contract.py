@@ -90,9 +90,10 @@ def test_public_plugin_is_tool_neutral_and_has_no_state_engine() -> None:
 
 
 def test_clear_work_and_goal_discovery_do_not_force_ceremony() -> None:
-    lifecycle = read(SKILLS / "work-lifecycle" / "SKILL.md")
+    lifecycle = normalized(SKILLS / "work-lifecycle" / "SKILL.md")
     discovery = normalized(SKILLS / "goal-discovery" / "SKILL.md")
     assert "already-actionable" in lifecycle
+    assert "keep its participation independent from Plan admission" in lifecycle
     assert "If a proposed technical solution already determines" in discovery
     assert "Investigate cheap, in-scope facts before asking the user" in discovery
     assert "non-blocking" in discovery.lower()
@@ -156,7 +157,7 @@ def test_project_development_trigger_and_anti_trigger_are_explicit() -> None:
     assert "multiple tasks, sessions, or phases" in description
     assert "Do not use for isolated edits or one-off investigations" in description
     assert "project-development-governance" in lifecycle
-    assert "bounded recovery, or closeout reconciliation" in lifecycle
+    assert "bounded recovery, live-state reconciliation, or stage-baseline cadence" in lifecycle
 
 
 def test_project_development_separates_authority_and_mutable_state() -> None:
@@ -174,6 +175,8 @@ def test_project_development_separates_authority_and_mutable_state() -> None:
     assert "Acceptance methods and criteria" in contract
     assert "Durable risks and boundary conditions" in contract
     assert "Do not leave two independently mutable copies" in contract
+    assert "stage baseline is a project-native accepted snapshot" in skill
+    assert "provider is authoritative for live execution state" in contract
 
 
 def test_project_development_startup_and_closeout_are_bounded() -> None:
@@ -201,6 +204,8 @@ def test_project_development_startup_and_closeout_are_bounded() -> None:
     assert "No material delta means no state churn" in skill_normalized
     assert "durable handoff is incomplete" in skill_normalized
     assert "entry, selected provider, task-relevant authority, then live evidence" in contract
+    assert "no relevant provider state exists" in skill_normalized
+    assert "Task closeout and stage closeout are different" in contract
 
 
 def test_project_development_handles_provider_modes_and_ambiguity() -> None:

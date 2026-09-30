@@ -17,6 +17,7 @@ underlying content:
 - Project roots: <one or more authoritative roots>
 - Execution-state provider: external | project-local
 - Provider locator: <stable provider identifiers or local ledger path>
+- Stage baseline: <authoritative snapshot paths and update boundary>
 - Routing last checked: <date or revision>
 - Known routing drift: <none or a bounded description>
 
@@ -41,6 +42,11 @@ The project entry must not become a second status report. Current progress,
 next work, priorities, open execution risks, pending decisions, and task
 evidence belong to the selected mutable provider.
 
+The stage baseline is also not a live status report. It captures the accepted
+project state at a declared stage boundary and remains unchanged during normal
+in-stage execution. The provider may point to that snapshot while continuing
+to record later live state.
+
 ## Authority And State Ownership
 
 Use project-native authority for content that future contributors and tools are
@@ -63,6 +69,14 @@ state. Typical ownership is:
 When a pending decision becomes durable project authority, promote it once and
 replace provider detail with a pointer plus any still-live execution impact.
 Do not leave two independently mutable copies.
+
+If the project opens with an accepted stage baseline but no relevant state in
+its required provider, reconstruct only the state the baseline supports. Record
+the exact source, revision or digest when available, and as-of boundary; mark
+historical or unresolved statements honestly and verify the created state by
+reading it back. After that bootstrap, the provider is authoritative for live
+execution state. The baseline remains the prior stage snapshot until the next
+accepted stage boundary.
 
 ## Provider Modes
 
@@ -128,6 +142,12 @@ Reconcile only state made stale by the task:
 No material delta means no write. If the provider update or readback fails,
 keep this list as one bounded pending-reconciliation packet rather than
 scattering provisional state across comments, files, and competing tools.
+
+Task closeout and stage closeout are different. Reconcile live provider state
+at every meaningful task or handoff closeout. Rewrite the stage baseline only
+after stage completion and acceptance, using verified artifacts, relevant
+conversation decisions, and provider records; then preserve a provider-side
+reference or evidence pointer to that snapshot.
 
 ## Trigger And Anti-Trigger Scenarios
 
