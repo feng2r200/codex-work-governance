@@ -23,6 +23,26 @@ Do not impose independent review on a routine reversible edit when a direct,
 meaningful check proves the claim. Do not repeat broader tests after relevant
 checks pass unless new edits, failures, or unresolved risks justify it.
 
+## Keep The Proof Applicable
+
+Tie a validation result to its claim, input revision, evidence, and scope.
+Reuse it while that basis remains applicable; a changed input requires checking
+the affected obligations, not automatically restarting every review.
+
+Choose the smallest observation that proves the claim. Source text containing a
+read or write does not prove that execution reached it, and a successful
+synthetic probe does not prove actual adoption or task quality. Use an isolated
+behavioral probe or direct observation when static inspection cannot establish
+the behavior; preserve the project's actual acceptance criteria.
+
+Separate a product failure from a faulty acceptance method. Preserve the exact
+counterexample before another fix. When the same cause recurs or the chosen
+method is repeatedly falsified, reassess its fitness and the agreed resource
+budget before expanding it. Pause only the affected claim or path, keep safe
+independent work moving, and return material changes to the parent decision.
+A demonstrated invalid claim needs correction immediately; a retry budget is
+an upper bound, not permission to keep relying on disproven evidence.
+
 ## Challenge Modes
 
 - **Plan challenge:** missing obligations, dependencies, gates, stop conditions,

@@ -45,6 +45,25 @@ can retrieve the same project reasoning, decisions, and active state. Multiple
 agents may read; assign one record owner or clearly partition writes to prevent
 conflicting narrative state.
 
+## Coordinate By Evidence Change
+
+Keep the continuation packet small: goal and authority references, owned input
+revision, current result, open issue, and next condition that needs attention.
+Pass exact artifacts on demand rather than replaying the conversation. A new
+owner must still receive enough context to act without inventing missing facts.
+
+Prefer event-driven or bounded blocking waits when available. Retain the latest
+progress cursor or equivalent evidence identity; after an unchanged result,
+back off or do independent work instead of repeatedly reading full history.
+Missing or uncertain status is not an unchanged result. A new external fact,
+deadline, blocker, or ownership risk can justify a fresh targeted check.
+
+Give each issue one actionable feedback package: affected input, evidence,
+impact, requested correction, and acceptance. Update it when evidence or the
+decision changes. Do not resend it, commission another review, or launch a
+replacement owner merely because the same issue remains open. Retry after a
+bounded failure diagnosis or a changed input, with a concrete consumer.
+
 ## Discovery Channels
 
 - **Blocking discovery:** direction is wrong, the final result would change,

@@ -23,6 +23,12 @@ Do not emit a complete closeout after each mechanical slice. Non-blocking
 improvements and lessons may wait for the next useful checkpoint or final
 report.
 
+While waiting, avoid repeating an unchanged status unless the user requested
+periodic reports or a deadline or risk makes it useful. Reuse exact evidence
+references; do not make each update replay the whole coordination history.
+When reporting efficiency, distinguish fewer repeated operations from measured
+resource savings, and source validation from installed or observed behavior.
+
 ## Completion Report
 
 At task completion, give a complete account in natural language. It must make

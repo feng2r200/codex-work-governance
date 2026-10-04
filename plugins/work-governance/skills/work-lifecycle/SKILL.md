@@ -21,6 +21,9 @@ workflow on every request and does not own durable state.
 - Use the least governance that materially improves correctness, recovery, or
   coordination. Do not make process setup a prerequisite for already-actionable
   work.
+- In sustained coordination, let new evidence or a changed obligation trigger
+  another full read, review, delegation, or durable update. An unchanged status
+  alone is not a reason to repeat them; unknown status still needs resolution.
 - When a higher-priority policy requires a durable state provider, select that
   provider at task start and keep its participation independent from Plan
   admission, documentation cadence, and the ambient working directory. Route
