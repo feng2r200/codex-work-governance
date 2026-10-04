@@ -120,7 +120,8 @@ Recover only what controls the current task:
 - current status and last verified milestone;
 - prioritized next work and dependencies;
 - material constraints and prohibited actions;
-- pending decisions, open questions, risks, and boundary cases; and
+- pending decisions, including any material solution or feasibility choice,
+  plus open questions, risks, and boundary cases;
 - applicable acceptance criteria and existing evidence.
 
 The read order is entry, selected provider, task-relevant authority, then live
@@ -156,6 +157,8 @@ reference or evidence pointer to that snapshot.
 | Continue an explicitly enrolled project, even for a small slice | Apply; read the entry and bounded state |
 | Resume the next priority after a prior task or long pause | Apply; recover before material work |
 | Start a delivery that will span dependent phases or handoffs | Apply once continuity becomes valuable |
+| The next stage depends on a material solution choice that remains unresolved | Keep the strategy pending and confirm it before dependent design, delegation, or mutation |
+| Project authority explicitly selects the material approach | Preserve that choice and perform only bounded feasibility checks needed for the next slice |
 | Fix an isolated typo in a project with no enrollment | Skip; use the ordinary lifecycle |
 | Perform a one-off investigation with no durable continuation | Skip unless the result later creates a continuity need |
 | External provider is unresolved but an authorized local ledger is selected | Apply using only the local provider |

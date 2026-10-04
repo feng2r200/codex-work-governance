@@ -18,6 +18,9 @@ All notable changes to Work Governance are documented here. The project follows
 ### Changed
 
 - Publisher metadata now credits `feng2r200` explicitly.
+- Goal discovery and Plan stage gates now expose unresolved material solution
+  and feasibility choices before dependent design or implementation instead of
+  deferring them until an assumed path fails.
 - Repository history no longer carries project-local governance runtime data or
   personal absolute paths on the rewritten `main` lineage.
 - Continuous-integration Actions are pinned to verified full commit SHAs, with

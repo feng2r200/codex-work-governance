@@ -107,6 +107,13 @@ If the repository is dirty, the Git module protects unrelated work. If local
 validation passes but push was not authorized, the reporting module describes
 the verified local result and leaves the remote untouched.
 
+If the same outcome can be delivered through materially different approaches,
+goal discovery exposes that direction choice before a stage Plan hard-codes one
+path. It may inspect prerequisites and constraints to recommend a route, but it
+does not wait for an assumed approach to fail before asking the question. An
+explicit choice proceeds with only the bounded feasibility checks the next
+slice needs.
+
 For an enrolled long-running project, the project development module reads a
 small routing entry and only the bounded state and authority relevant to the
 task. At closeout it reconciles material progress, priority, decision, risk,

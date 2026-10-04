@@ -14,6 +14,10 @@ workflow on every request and does not own durable state.
 - Infer routine details from available context and continue while the goal and
   safe next action are clear. Ask only when a user-owned answer can change the
   direction, final result, authority boundary, or an irreversible action.
+- Before a stage proposal, delegation, or mutation commits to a material
+  solution assumption, separate the requested outcome from the proposed means.
+  Inspect cheap facts, then route unresolved user-owned choices to goal
+  discovery; do not bury them in later feasibility or implementation checks.
 - Use the least governance that materially improves correctness, recovery, or
   coordination. Do not make process setup a prerequisite for already-actionable
   work.
@@ -39,7 +43,8 @@ workflow on every request and does not own durable state.
 ## Route Only When Needed
 
 - Load `work-governance:goal-discovery` when the stated solution may hide an
-  unresolved goal, data strategy, delivery form, or acceptance choice.
+  unresolved goal, data strategy, delivery form, material solution strategy,
+  or acceptance choice.
 - Load `work-governance:plan-governance` when deciding whether a Plan adds
   value, admitting one, or materially revising one.
 - Load `work-governance:subagent-governance` before multi-agent delegation or
@@ -65,5 +70,5 @@ If evidence shows the current route no longer serves the goal, contain only the
 affected work, distinguish the observed failure from its possible causes, and
 choose the smallest causal correction. Return to the user only for a material
 change to an agreed goal or contract, data strategy, delivery form, authority,
-or irreversible outcome. Ordinary implementation structure changes remain an
-execution decision.
+solution strategy, feasibility boundary, or irreversible outcome. Ordinary
+implementation structure changes remain an execution decision.

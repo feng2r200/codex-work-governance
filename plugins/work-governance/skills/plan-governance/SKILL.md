@@ -38,11 +38,30 @@ Capture only what controls execution and review:
 
 - the goal and meaningful non-goals;
 - current evidence, assumptions, constraints, and unresolved questions;
+- material solution strategies and feasibility assumptions, each marked as
+  confirmed, evidenced, or gated;
 - stages, dependencies, ownership, and the next executable action;
 - acceptance evidence, confirmation gates, and stop or revision conditions.
 
 Depth should match uncertainty and consequence. Do not manufacture phases,
 task hierarchies, roles, or test matrices to make the Plan look complete.
+
+## Executable Stage Gate
+
+Before presenting or delegating a stage as executable, distinguish confirmed
+user choices from implementation assumptions. If a proposed approach or
+critical feasibility assumption materially changes the outcome, architecture,
+data or authority boundary, cost, risk, or acceptance, the Plan must either:
+
+- use an explicit confirmed choice with bounded feasibility evidence; or
+- keep the choice pending and place a confirmation gate before the first
+  dependent design, delegation, or mutation.
+
+Do not hard-code one approach into a stage definition or acceptance criteria
+and then ask only about its prerequisites. Feasibility discovery supports a
+recommendation; it does not make a user-owned direction choice. Ordinary
+reversible implementation details remain agent-owned and must not create a
+confirmation ceremony.
 
 ## No-Plan To Plan
 
@@ -61,9 +80,10 @@ Do this once. Do not backfill noise or recreate every conversational step.
 ## Revision
 
 Revise the Plan when evidence changes the confirmed goal, Plan contract, data
-strategy, delivery form, acceptance boundary, stage dependency, or another
-choice that invalidates the active route. Record the cause, prior route, new
-route, affected work, and revalidation needed through the available Plan tool.
+strategy, delivery form, material solution strategy, feasibility boundary,
+acceptance, stage dependency, or another choice that invalidates the active
+route. Record the cause, prior route, new route, affected work, and revalidation
+needed through the available Plan tool.
 
 Ordinary code structure changes, local implementation choices, and corrected
 estimates do not require a user confirmation gate unless they materially alter

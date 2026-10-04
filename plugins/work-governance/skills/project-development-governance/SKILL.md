@@ -97,6 +97,15 @@ long-lived architecture or contract changes in project authority; keep
 temporary execution state and pending choices in the selected provider. Do not
 roll the stage baseline forward during ordinary in-stage work.
 
+At a stage boundary, do not turn an unconfirmed material solution assumption
+into the next stage's definition merely to make the work concrete. An approach
+or feasibility boundary that can change the outcome, architecture, data,
+authority, cost, risk, or acceptance must be routed through
+`work-governance:goal-discovery` and `work-governance:plan-governance`. Carry it
+as a pending decision in the selected state provider until confirmed. Bounded
+feasibility checks may support a recommendation, but they do not select the
+path.
+
 ## Reconcile Before Closeout
 
 After validating the work and before making the final continuity claim:

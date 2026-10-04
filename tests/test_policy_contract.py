@@ -99,6 +99,30 @@ def test_clear_work_and_goal_discovery_do_not_force_ceremony() -> None:
     assert "non-blocking" in discovery.lower()
 
 
+def test_material_solution_strategy_is_confirmed_before_dependent_work() -> None:
+    """Keep material solution choices ahead of dependent stage work."""
+    lifecycle = normalized(SKILLS / "work-lifecycle" / "SKILL.md")
+    discovery = normalized(SKILLS / "goal-discovery" / "SKILL.md")
+    plan = normalized(SKILLS / "plan-governance" / "SKILL.md")
+    project = normalized(SKILLS / "project-development-governance" / "SKILL.md")
+    contract = normalized(
+        SKILLS / "project-development-governance" / "references" / "project-contract.md"
+    )
+
+    assert "material solution strategy" in lifecycle
+    assert "requested outcome from the proposed means" in lifecycle
+    assert "materially different approaches" in discovery
+    assert "most visible artifact" in discovery
+    assert "one assumed path fails" in discovery
+    assert "before the first design, delegation, or mutation" in discovery
+    assert "explicitly selected a material approach" in discovery
+    assert "interchangeable, reversible implementation detail" in discovery
+    assert "Do not hard-code one approach into a stage definition" in plan
+    assert "Feasibility discovery supports a recommendation" in plan
+    assert "do not turn an unconfirmed material solution assumption" in project
+    assert "material solution choice that remains unresolved" in contract
+
+
 def test_plan_is_independent_and_no_plan_can_evolve() -> None:
     plan = normalized(SKILLS / "plan-governance" / "SKILL.md")
     assert "without any particular persistence tool" in plan
