@@ -246,6 +246,38 @@ def test_project_development_handles_provider_modes_and_ambiguity() -> None:
     assert "authorized local ledger is selected" in contract
 
 
+def test_provider_state_isolation_and_snapshot_invalidation_are_explicit() -> None:
+    lifecycle = normalized(SKILLS / "work-lifecycle" / "SKILL.md")
+    project = normalized(SKILLS / "project-development-governance" / "SKILL.md")
+    contract = normalized(
+        SKILLS / "project-development-governance" / "references" / "project-contract.md"
+    )
+    validation = normalized(ROOT / "docs" / "validation" / "provider-state-efficiency-v1.md")
+
+    assert "stable locator proves where to look" in project
+    assert "state-isolation boundary" in project
+    assert "shared provider state with no enforced partition" in project
+    assert "treat reads as candidate context and fail closed on provider writes" in project
+    assert "Provider isolation" in contract
+    assert "Prove logical ownership and provider-state isolation separately" in contract
+    assert "Do not copy ambiguous history" in contract
+    for trigger in [
+        "logical owner or route changes",
+        "provider revision, head, or cursor advances",
+        "task scope changes",
+        "external writer is observed",
+        "relevant evidence identity changes",
+        "status becomes unknown",
+        "mutation receipt and exact target readback disagree",
+    ]:
+        assert trigger in project
+    assert "precise typed receipt plus direct readback" in project
+    assert "do not immediately repeat a broad recovery read" in lifecycle
+    assert "reopen the affected target or dependency first" in project
+    assert "No material semantic delta still means no provider write" in validation
+    assert "does not claim a fixed token, latency, or monetary saving" in validation
+
+
 def test_project_development_scenario_matrix_covers_activation_boundaries() -> None:
     contract = normalized(
         SKILLS / "project-development-governance" / "references" / "project-contract.md"
@@ -259,6 +291,15 @@ def test_project_development_scenario_matrix_covers_activation_boundaries() -> N
         "Perform a one-off investigation with no durable continuation",
         "External provider is unresolved but an authorized local ledger is selected",
         "Shared storage contains several possible logical projects",
+        (
+            "A stable project locator resolves, but several projects expose the same "
+            "unpartitioned mutable state"
+        ),
+        "A precise mutation receipt and exact target readback match the recovered snapshot",
+        (
+            "Provider owner, route, revision, head, scope, external-write state, or "
+            "evidence identity changes"
+        ),
     ]:
         assert scenario in contract
 

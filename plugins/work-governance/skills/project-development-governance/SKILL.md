@@ -62,8 +62,12 @@ eligible during a task, do it when the continuity need becomes clear:
 1. Identify the logical project from explicit project authority, the primary
    artifact, and the relevant repository roots. Do not let an ambient working
    directory or shared backend choose it implicitly.
-2. Read the project entry first and verify that its authority locations and
-   single state-provider locator still resolve.
+2. Read the project entry first and verify that its authority locations,
+   single state-provider locator, and state-isolation boundary still resolve.
+   A stable locator proves where to look, not that the returned state belongs
+   only to this logical project. If several projects use shared provider state with
+   no enforced partition, treat reads as candidate context and fail closed on
+   provider writes until a dedicated target or verified partition is restored.
 3. Load the configured persistence-provider Skill. For a project-local ledger,
    read its bounded current-state, queue, decision, risk, and evidence records.
    When project policy requires that provider and an accepted stage baseline
@@ -71,9 +75,11 @@ eligible during a task, do it when the continuity need becomes clear:
    supported state from the baseline with explicit source and as-of provenance,
    then read it back. Do not fabricate historical events or treat stale baseline
    text as current fact.
-4. Recover a bounded current-state packet: current objective, relevant scope
-   and constraints, present status, prioritized next work, pending decisions,
-   open risks, and acceptance evidence needed for this task.
+4. Recover a bounded current-state packet once, identified by the provider's
+   current revision, head, cursor, or equivalent snapshot identity: current
+   objective, relevant scope and constraints, present status, prioritized next
+   work, pending decisions, open risks, and acceptance evidence needed for
+   this task.
 5. Read only the task-relevant authority documents named by the entry, then
    compare important claims with current artifacts or runtime evidence.
 
@@ -96,6 +102,16 @@ Coalesce mechanical operations that do not change meaning. Put accepted,
 long-lived architecture or contract changes in project authority; keep
 temporary execution state and pending choices in the selected provider. Do not
 roll the stage baseline forward during ordinary in-stage work.
+
+Reuse the recovered provider snapshot until an explicit invalidation trigger:
+logical owner or route changes; provider revision, head, or cursor advances;
+task scope changes; an external writer is observed; relevant evidence identity
+changes; status becomes unknown; or a mutation receipt and exact target
+readback disagree. After a provider mutation, a precise typed receipt plus
+direct readback of the changed target updates the packet without an immediate
+broad recovery read. On mismatch, reopen the affected target or dependency
+first; broaden recovery only when the changed head, route, scope, or evidence
+cannot be bounded.
 
 At a stage boundary, do not turn an unconfirmed material solution assumption
 into the next stage's definition merely to make the work concrete. An approach
@@ -120,7 +136,8 @@ After validating the work and before making the final continuity claim:
    conversation, and provider state, then link the resulting snapshot back to
    the provider instead of maintaining two live copies.
 4. Read back or otherwise verify the exact state changes using the provider's
-   own mechanics.
+   own mechanics. Prefer the mutation receipt and exact target readback; do not
+   reload unrelated provider state merely to reconfirm an unchanged snapshot.
 5. Report the technical result and the durable continuity result separately.
 
 No material delta means no state churn. If persistence or readback fails,

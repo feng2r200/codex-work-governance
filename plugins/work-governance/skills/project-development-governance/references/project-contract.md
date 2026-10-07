@@ -17,6 +17,7 @@ underlying content:
 - Project roots: <one or more authoritative roots>
 - Execution-state provider: external | project-local
 - Provider locator: <stable provider identifiers or local ledger path>
+- Provider isolation: dedicated target | enforced project partition and key | unresolved
 - Stage baseline: <authoritative snapshot paths and update boundary>
 - Routing last checked: <date or revision>
 - Known routing drift: <none or a bounded description>
@@ -36,7 +37,8 @@ underlying content:
 The entry may name a provider-specific Skill and stable project, workspace,
 branch, session, or record identifiers when the provider requires them. A
 display name, current directory, or shared storage location alone is not a
-stable locator.
+stable locator. A stable locator answers where to query; it does not prove that
+the selected state is isolated to this logical project.
 
 The project entry must not become a second status report. Current progress,
 next work, priorities, open execution risks, pending decisions, and task
@@ -112,6 +114,16 @@ an ambient mirror merely to make persistence available. Safe implementation
 may continue only when it cannot write or report against the wrong project; the
 durable handoff remains incomplete until the locator is resolved.
 
+Prove logical ownership and provider-state isolation separately. A shared
+backend is acceptable only when a dedicated target or enforced partition key
+keeps current state, mutations, and receipts attributable to one logical
+project. If distinct projects expose the same unpartitioned mutable state, its
+contents are candidate context rather than current project authority. Fail
+closed on writes, retain one bounded pending-reconciliation packet, and use the
+provider's separately authorized repair path. Do not copy ambiguous history
+into a new target. After isolation or partition repair, recover one fresh
+bounded snapshot before reconstruction or mutation.
+
 ## Bounded Startup Packet
 
 Recover only what controls the current task:
@@ -127,6 +139,13 @@ Recover only what controls the current task:
 The read order is entry, selected provider, task-relevant authority, then live
 evidence. Historical transcripts and broad repository scans are escalation
 paths, not the default startup routine.
+
+Keep the recovered provider revision, head, cursor, or equivalent snapshot
+identity with the packet. Reuse it while logical owner, route, scope, relevant
+evidence identity, and observed external-write state are unchanged. Invalidate
+only the affected path when one changes or becomes unknown. A precise mutation
+receipt plus exact readback of the changed target advances the packet without a
+second broad read; a mismatch reopens the affected target first.
 
 ## Material Closeout Delta
 
@@ -163,3 +182,6 @@ reference or evidence pointer to that snapshot.
 | Perform a one-off investigation with no durable continuation | Skip unless the result later creates a continuity need |
 | External provider is unresolved but an authorized local ledger is selected | Apply using only the local provider |
 | Shared storage contains several possible logical projects | Stop before state writes until the stable locator resolves |
+| A stable project locator resolves, but several projects expose the same unpartitioned mutable state | Treat reads as candidate context and fail closed on provider writes until dedicated or partitioned state is verified |
+| A precise mutation receipt and exact target readback match the recovered snapshot | Advance the bounded packet; do not repeat broad recovery |
+| Provider owner, route, revision, head, scope, external-write state, or evidence identity changes | Invalidate and reread the affected path; broaden only when the change cannot be bounded |

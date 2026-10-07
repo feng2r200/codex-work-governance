@@ -25,6 +25,11 @@ All notable changes to Work Governance are documented here. The project follows
   personal absolute paths on the rewritten `main` lineage.
 - Continuous-integration Actions are pinned to verified full commit SHAs, with
   a policy contract that prevents mutable tags from being reintroduced.
+- Project continuity now separates a stable provider locator from verified
+  logical-project state isolation, fails closed on shared unpartitioned state,
+  reuses one bounded provider snapshot until explicit invalidation, and accepts
+  a precise mutation receipt plus exact target readback instead of requiring an
+  immediate broad reread.
 
 ## 2.0.0 release candidate
 

@@ -121,6 +121,14 @@ and evidence changes into exactly one mutable execution-state provider. Goals,
 architecture, constraints, and acceptance remain in project-native authority,
 and the project contract does not force a task Plan.
 
+A stable provider locator is not treated as proof that state is isolated to
+one logical project. Shared unpartitioned state remains candidate context and
+blocks provider writes until isolation is verified. Once one bounded snapshot
+is recovered, unchanged work reuses it; precise mutation receipts and exact
+target readback replace an immediate broad reread, while owner, route, head,
+scope, evidence, external-write, or mismatch changes reopen only the affected
+path first.
+
 ## Package Layout
 
 The distributable plugin lives in `plugins/work-governance` and uses:

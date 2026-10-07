@@ -24,6 +24,13 @@ workflow on every request and does not own durable state.
 - In sustained coordination, let new evidence or a changed obligation trigger
   another full read, review, delegation, or durable update. An unchanged status
   alone is not a reason to repeat them; unknown status still needs resolution.
+- Reuse one verified, bounded provider snapshot while its logical owner,
+  provider revision or head, task scope, and relevant evidence identity remain
+  unchanged. Invalidate only the affected path after an owner or route change,
+  provider advance, external write, scope change, evidence change, uncertain
+  status, or mutation/readback mismatch. A precise mutation receipt plus exact
+  target readback satisfies that checkpoint; do not immediately repeat a broad
+  recovery read when they agree.
 - When a higher-priority policy requires a durable state provider, select that
   provider at task start and keep its participation independent from Plan
   admission, documentation cadence, and the ambient working directory. Route
