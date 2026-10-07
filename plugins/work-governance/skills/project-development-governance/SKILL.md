@@ -68,13 +68,18 @@ eligible during a task, do it when the continuity need becomes clear:
    only to this logical project. If several projects use shared provider state with
    no enforced partition, treat reads as candidate context and fail closed on
    provider writes until a dedicated target or verified partition is restored.
-3. Load the configured persistence-provider Skill. For a project-local ledger,
-   read its bounded current-state, queue, decision, risk, and evidence records.
-   When project policy requires that provider and an accepted stage baseline
-   exists but no relevant provider state exists, reconstruct the minimum
-   supported state from the baseline with explicit source and as-of provenance,
-   then read it back. Do not fabricate historical events or treat stale baseline
-   text as current fact.
+3. Load the configured persistence-provider Skill. When it exposes a read-only
+   aggregate health or readiness snapshot that covers the required route,
+   binding, isolation, capability, and integrity obligations, inspect that
+   snapshot once. Do not repeat equivalent focused status reads; expand only
+   for a reported gap, an uncovered claim, or an exact guard required by an
+   authorized mutation. For a project-local ledger, read its bounded
+   current-state, queue, decision, risk, and evidence records. When project
+   policy requires that provider and an accepted stage baseline exists but no
+   relevant provider state exists, reconstruct the minimum supported state
+   from the baseline with explicit source and as-of provenance, then read it
+   back. Do not fabricate historical events or treat stale baseline text as
+   current fact.
 4. Recover a bounded current-state packet once, identified by the provider's
    current revision, head, cursor, or equivalent snapshot identity: current
    objective, relevant scope and constraints, present status, prioritized next
@@ -85,8 +90,17 @@ eligible during a task, do it when the continuity need becomes clear:
 
 Do not scan all project history at every start. Do not initialize a provider,
 bind an ambient workspace, or repair continuity records unless that mutation is
-within the current authority. If continuity is missing or stale, continue only
-with a slice that remains safe without it and report the degraded boundary.
+within the current authority. If required continuity is cleanly missing,
+continue only with a slice that remains safe without it and report the degraded
+boundary.
+
+A cleanly inactive route or missing capability is a degraded authority
+boundary: preserve the exact missing operation, continue independent work when
+safe, and do not activate it implicitly. Stale, malformed, ambiguous, or
+integrity-failed control state is blocked for the affected provider path: fail
+closed on dependent claims and mutations while safe unrelated work continues.
+Use the provider Skill for focused diagnosis or separately authorized repair;
+neither state expands authority.
 
 ## Keep The Task Contract Independent
 

@@ -31,6 +31,16 @@ workflow on every request and does not own durable state.
   status, or mutation/readback mismatch. A precise mutation receipt plus exact
   target readback satisfies that checkpoint; do not immediately repeat a broad
   recovery read when they agree.
+- When a provider offers one read-only aggregate health or readiness snapshot
+  that covers the required control-plane obligations, prefer it over repeating
+  equivalent focused status reads. Expand only when the aggregate reports a
+  gap, does not cover the claim being made, or an authorized mutation requires
+  an exact fresh guard.
+- Treat a cleanly inactive or missing capability as a degraded authority
+  boundary, not proof that the provider is invalid. Treat stale, malformed,
+  ambiguous, or integrity-failed control state as blocked for the affected
+  path. Neither classification authorizes activation, repair, or another
+  control-plane mutation.
 - When a higher-priority policy requires a durable state provider, select that
   provider at task start and keep its participation independent from Plan
   admission, documentation cadence, and the ambient working directory. Route

@@ -124,6 +124,29 @@ provider's separately authorized repair path. Do not copy ambiguous history
 into a new target. After isolation or partition repair, recover one fresh
 bounded snapshot before reconstruction or mutation.
 
+## Provider Control-Plane Readiness
+
+When the selected provider offers one read-only aggregate health or readiness
+snapshot, use it once for the control-plane obligations it actually covers.
+Do not repeat separate route, binding, isolation, capability, or integrity
+status reads merely to reproduce the same evidence. Open a focused status only
+when the aggregate reports a gap, the current claim falls outside its coverage,
+or an authorized mutation requires an exact fresh guard.
+
+Keep the issue class precise:
+
+- a cleanly inactive route or missing capability is **degraded** for the named
+  operation; preserve the missing authority and continue independent work when
+  safe, without activating or repairing it implicitly;
+- stale, malformed, ambiguous, or integrity-failed control state is **blocked**
+  for the affected provider path; fail closed on dependent claims and writes
+  while safe unrelated work continues; and
+- either class requires provider-specific evidence and separate authority
+  before any control-plane mutation.
+
+A healthy aggregate is bounded evidence, not universal proof. Retain its
+provider snapshot identity and declared coverage with the startup packet.
+
 ## Bounded Startup Packet
 
 Recover only what controls the current task:
@@ -183,5 +206,8 @@ reference or evidence pointer to that snapshot.
 | External provider is unresolved but an authorized local ledger is selected | Apply using only the local provider |
 | Shared storage contains several possible logical projects | Stop before state writes until the stable locator resolves |
 | A stable project locator resolves, but several projects expose the same unpartitioned mutable state | Treat reads as candidate context and fail closed on provider writes until dedicated or partitioned state is verified |
+| One aggregate provider snapshot proves the required route, binding, isolation, capability, and integrity obligations | Reuse it; do not repeat equivalent focused status reads |
+| A route is cleanly inactive or a required capability is absent | Mark the named operation degraded, continue only independent work, and do not activate implicitly |
+| Provider control state is stale, malformed, ambiguous, or integrity-failed | Block the affected provider path and use focused diagnosis before any separately authorized repair |
 | A precise mutation receipt and exact target readback match the recovered snapshot | Advance the bounded packet; do not repeat broad recovery |
 | Provider owner, route, revision, head, scope, external-write state, or evidence identity changes | Invalidate and reread the affected path; broaden only when the change cannot be bounded |

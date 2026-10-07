@@ -129,6 +129,16 @@ target readback replace an immediate broad reread, while owner, route, head,
 scope, evidence, external-write, or mismatch changes reopen only the affected
 path first.
 
+When the provider exposes an aggregate read-only health or readiness view, the
+governance layer prefers that single bounded snapshot over repeating equivalent
+focused status checks. A cleanly inactive route or missing capability is
+degraded only for the named operation; stale, malformed, ambiguous, or
+integrity-failed control state blocks the affected provider path. Neither state
+silently authorizes activation or repair.
+
+The exact source and installed-adoption evidence is recorded in
+[Provider Control-Plane Efficiency Synchronization Evidence](docs/validation/provider-control-plane-efficiency-v1.md).
+
 ## Package Layout
 
 The distributable plugin lives in `plugins/work-governance` and uses:

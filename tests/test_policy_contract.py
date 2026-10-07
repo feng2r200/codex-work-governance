@@ -278,6 +278,36 @@ def test_provider_state_isolation_and_snapshot_invalidation_are_explicit() -> No
     assert "does not claim a fixed token, latency, or monetary saving" in validation
 
 
+def test_provider_control_plane_health_and_issue_classes_are_bounded() -> None:
+    """Keep aggregate health reuse and degraded/blocked handling tool-neutral."""
+    lifecycle = normalized(SKILLS / "work-lifecycle" / "SKILL.md")
+    project = normalized(SKILLS / "project-development-governance" / "SKILL.md")
+    contract = normalized(
+        SKILLS / "project-development-governance" / "references" / "project-contract.md"
+    )
+
+    assert "read-only aggregate health or readiness snapshot" in lifecycle
+    assert "equivalent focused status reads" in lifecycle
+    assert "cleanly inactive or missing capability" in lifecycle
+    assert "degraded authority boundary" in lifecycle
+    assert "stale, malformed, ambiguous, or integrity-failed" in lifecycle
+    assert "blocked for the affected path" in lifecycle
+    assert "does not cover the claim" in lifecycle
+    assert "authorized mutation requires an exact fresh guard" in lifecycle
+
+    assert "route, binding, isolation, capability, and integrity obligations" in project
+    assert "continue independent work when safe" in project
+    assert "fail closed on dependent claims and mutations" in project
+    assert "neither state expands authority" in project
+    assert "If continuity is missing or stale" not in project
+
+    assert "Provider Control-Plane Readiness" in contract
+    assert "A healthy aggregate is bounded evidence, not universal proof" in contract
+    assert "do not repeat equivalent focused status reads" in contract
+    assert "do not activate implicitly" in contract
+    assert "before any separately authorized repair" in contract
+
+
 def test_project_development_scenario_matrix_covers_activation_boundaries() -> None:
     contract = normalized(
         SKILLS / "project-development-governance" / "references" / "project-contract.md"
@@ -295,6 +325,12 @@ def test_project_development_scenario_matrix_covers_activation_boundaries() -> N
             "A stable project locator resolves, but several projects expose the same "
             "unpartitioned mutable state"
         ),
+        (
+            "One aggregate provider snapshot proves the required route, binding, isolation, "
+            "capability, and integrity obligations"
+        ),
+        "A route is cleanly inactive or a required capability is absent",
+        "Provider control state is stale, malformed, ambiguous, or integrity-failed",
         "A precise mutation receipt and exact target readback match the recovered snapshot",
         (
             "Provider owner, route, revision, head, scope, external-write state, or "

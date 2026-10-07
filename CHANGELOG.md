@@ -30,6 +30,10 @@ All notable changes to Work Governance are documented here. The project follows
   reuses one bounded provider snapshot until explicit invalidation, and accepts
   a precise mutation receipt plus exact target readback instead of requiring an
   immediate broad reread.
+- Provider continuity now prefers one aggregate read-only health or readiness
+  snapshot over repeated equivalent status calls, treats cleanly missing
+  authority as degraded, and blocks only the affected path for invalid control
+  state without silently authorizing activation or repair.
 
 ## 2.0.0 release candidate
 

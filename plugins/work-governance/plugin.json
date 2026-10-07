@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "work-governance",
-  "version": "2.0.0+codex.20261007002945",
+  "version": "2.0.0+codex.20261007080310",
   "description": "Composable, tool-neutral governance for goals, planning, delegation, Git, validation, long-running project continuity, project truth, archive curation, and reporting.",
   "author": {
     "name": "feng2r200",
