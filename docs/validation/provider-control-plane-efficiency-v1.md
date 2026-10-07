@@ -1,6 +1,6 @@
 # Provider Control-Plane Efficiency Synchronization Evidence
 
-Status: Local source validation and installed-plugin adoption complete; Push not authorized
+Status: Remote source delivery and installed-plugin adoption complete
 Date: 2026-10-07
 
 ## Why this policy changed
@@ -64,6 +64,17 @@ installation, so no claim is made for that unavailable check. Manifest
 alignment remains covered by the policy-contract suite, and the formal plugin
 manager accepted, installed, enabled, and read back the candidate.
 
+## Remote delivery
+
+Source commit `5fae19d18ceb6c776229b3407510f4665b76762a` was delivered
+to `origin/main` by ordinary fast-forward Push. Post-Push readback confirmed
+that local `HEAD`, the tracking ref, and remote `refs/heads/main` all resolved
+to that exact commit.
+
+GitHub Actions [CI run 37600634326](https://github.com/feng2r200/codex-work-governance/actions/runs/37600634326)
+completed successfully for the exact source commit. Its `policy-contracts` job
+passed lint, format checking, and the policy-contract test suite.
+
 ## Installed adoption and rollback boundary
 
 The enabled local installation is
@@ -81,7 +92,7 @@ New tasks load the installed version above.
 
 ## Boundaries
 
-This synchronization changes local source policy and the local installed
-plugin only. It does not Push, release, deploy, modify the provider registry or
-activation markers, deliver another durable operation, or weaken provider
-integrity checks.
+This synchronization changes source policy and the local installed plugin. The
+source commit was pushed and its exact CI succeeded. It does not create a tag
+or release, deploy, modify the provider registry or activation markers, or
+weaken provider integrity checks.
