@@ -57,7 +57,7 @@ Skills in an isolated `uv` environment.
 | Gate | Exact evidence |
 | --- | --- |
 | Source delivery | Commit `e178ee1c219430a8af00e9fac1260d5b28f51c55` was pushed normally to the repository's default branch. |
-| Remote verification | Exact [CI run 37553940420](https://github.com/feng2r200/work-governance/actions/runs/37553940420) succeeded. |
+| Remote verification | Exact [CI run 37553940420](https://github.com/feng2r200/codex-work-governance/actions/runs/37553940420) succeeded. |
 | Installed plugin | Version `2.0.0+codex.20261007002945` is installed and enabled from `/Users/ld/.codex/plugins/cache/work-governance-local/work-governance/2.0.0+codex.20261007002945`; the installed tree matches the delivered source exactly. |
 | Provider isolation | ProjectRef `01a0e2e6-f2e6-77a2-b858-7690808a81a7` now resolves to dedicated Store `/Users/ld/.codex/workvcs/stores/projects/work-governance-76995749aeb47b240ac15702cf64bbbe1f3dd4bc74ee571b703ab53a4f3d69fd.sqlite`, Store `01a113dd-b621-77b9-8034-f838133213d5`, Workspace `01a113dd-b62a-750c-8d02-1beada96c911`, and Branch `01a113dd-b62a-750c-8d02-1bedd4a7728c`. |
 | Durable use | Journal capture `01a113df-4b8a-75f8-9abc-b48956997039` admitted a typed Plan into that dedicated Store and returned a durable receipt, proving the isolated route is active and writable. |
