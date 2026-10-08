@@ -176,6 +176,14 @@ and evidence changes into exactly one mutable execution-state provider. Goals,
 architecture, constraints, and acceptance remain in project-native authority,
 and the project contract does not force a task Plan.
 
+The task that starts a durable provider operation also owns its ordinary
+same-target completion and exact readback when existing authority already
+covers them; the user is not expected to monitor routine pending receipts.
+Historical open inventories are classified against current project truth and
+the effect of acting now before any recovery. They are never treated as batch
+queues, because replaying a superseded or terminal operation can make durable
+state less accurate rather than more complete.
+
 A stable provider locator is not treated as proof that state is isolated to
 one logical project. Shared unpartitioned state remains candidate context and
 blocks provider writes until isolation is verified. Once one bounded snapshot

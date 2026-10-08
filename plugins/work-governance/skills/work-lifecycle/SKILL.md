@@ -106,6 +106,19 @@ step-by-step chain of thought.
   provider at task start and keep its participation independent from Plan
   admission, documentation cadence, and the ambient working directory. Route
   storage mechanics to the provider's own Skill.
+- When the selected provider admits or starts a durable operation for the
+  current task, the responsible task owns that operation through bounded
+  delivery and exact readback whenever current authority already covers the
+  operation and target. Do not turn routine provider polling, receipt repair,
+  or same-target completion into a user monitoring job. Escalate only when
+  completion needs new authority, a material currentness decision, a changed
+  owner or target, or another separately guarded provider mutation.
+- Inspect the current task's known operation identifiers before opening a
+  provider-wide backlog. Treat a historical open inventory as classification
+  evidence, never as a batch work queue. Before replaying an older operation,
+  compare its semantic intent and counterfactual effect with verified current
+  state. An open-looking status alone does not justify replaying already
+  delivered, superseded, replacement, or terminal-failure semantics.
 - Keep goal, scope, evidence, and authority distinct. A tool record, old plan,
   memory, test result, or reviewer opinion is evidence; none silently expands
   the user's authority or replaces current project truth.

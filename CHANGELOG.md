@@ -47,6 +47,10 @@ All notable changes to Work Governance are documented here. The project follows
   one bounded decision-authority contract: delegated judgment can adapt the
   route without unnecessary stops, but cannot expand scope, action authority,
   evidence, or completion claims.
+- Durable provider operations are now owned through ordinary same-target
+  delivery and readback by the task that created them, while historical open
+  inventories require semantic-currentness and counterfactual-effect
+  classification instead of user monitoring or batch replay.
 
 ## 2.0.0 release candidate
 

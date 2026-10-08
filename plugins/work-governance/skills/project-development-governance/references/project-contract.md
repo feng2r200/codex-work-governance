@@ -171,6 +171,26 @@ Keep the issue class precise:
 A healthy aggregate is bounded evidence, not universal proof. Retain its
 provider snapshot identity and declared coverage with the startup packet.
 
+## Provider Operation Ownership
+
+A durable operation admitted or started by the current task remains owned by
+that task until bounded delivery and exact readback complete, provided existing
+authority still covers the same operation and target. Ordinary provider
+polling, receipt repair, and same-target completion are Agent responsibilities,
+not work the user must notice and resume manually. Stop only when the next step
+needs new authority, changes the owner or target, requires a material
+currentness decision, or crosses another guarded provider boundary.
+
+Begin reconciliation with the current task's known operation identifiers. A
+provider-wide historical inventory is classification evidence, not a batch
+queue. Before acting on an older entry, compare its semantic intent with
+verified current state and state the counterfactual effect of acting now.
+Separate at least: delivery already completed but control-plane evidence is
+stale; deterministic terminal failure; admitted but never delivered intent
+that later evidence superseded; and immutable target change. An effective
+status that merely looks open cannot by itself authorize replay or prove that
+the payload remains current.
+
 ## Bounded Startup Packet
 
 Recover only what controls the current task:
@@ -236,5 +256,8 @@ reference or evidence pointer to that snapshot.
 | One aggregate provider snapshot proves the required route, binding, isolation, capability, and integrity obligations | Reuse it; do not repeat equivalent focused status reads |
 | A route is cleanly inactive or a required capability is absent | Mark the named operation degraded, continue only independent work, and do not activate implicitly |
 | Provider control state is stale, malformed, ambiguous, or integrity-failed | Block the affected provider path and use focused diagnosis before any separately authorized repair |
+| A current-task operation is awaiting ordinary same-target delivery or receipt work already covered by authority | The responsible task completes and reads it back; do not assign monitoring to the user |
+| A historical provider inventory contains open-looking operations | Classify currentness and the effect of acting now; do not batch-replay the inventory |
+| An older operation is already delivered, terminal, replaced, or semantically superseded | Preserve that distinction and do not replay it merely to clear an open status |
 | A precise mutation receipt and exact target readback match the recovered snapshot | Advance the bounded packet; do not repeat broad recovery |
 | Provider owner, route, revision, head, scope, external-write state, or evidence identity changes | Invalidate and reread the affected path; broaden only when the change cannot be bounded |

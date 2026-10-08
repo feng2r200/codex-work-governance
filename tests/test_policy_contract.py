@@ -449,6 +449,34 @@ def test_provider_control_plane_health_and_issue_classes_are_bounded() -> None:
     assert "before any separately authorized repair" in contract
 
 
+def test_provider_operations_remain_task_owned_and_history_is_classified() -> None:
+    """Keep routine delivery with the responsible task and historical replay bounded."""
+    lifecycle = normalized(SKILLS / "work-lifecycle" / "SKILL.md")
+    project = normalized(SKILLS / "project-development-governance" / "SKILL.md")
+    contract = normalized(
+        SKILLS / "project-development-governance" / "references" / "project-contract.md"
+    )
+
+    assert "the responsible task owns that operation" in lifecycle
+    assert "user monitoring job" in lifecycle
+    assert "current task's known operation identifiers" in lifecycle
+    assert "historical open inventory as classification evidence" in lifecycle
+    assert "counterfactual effect" in lifecycle
+    assert "open-looking status alone does not justify replaying" in lifecycle
+
+    assert "The responsible task, not the user, monitors" in project
+    assert "classify each candidate's present semantic value" in project
+    assert "effect of acting now" in project
+    assert "already-delivered operations" in project
+    assert "superseded undelivered intent" in project
+
+    assert "Provider Operation Ownership" in contract
+    assert "not work the user must notice and resume manually" in contract
+    assert "provider-wide historical inventory is classification evidence" in contract
+    assert "deterministic terminal failure" in contract
+    assert "An effective status that merely looks open" in contract
+
+
 def test_project_development_scenario_matrix_covers_activation_boundaries() -> None:
     contract = normalized(
         SKILLS / "project-development-governance" / "references" / "project-contract.md"
@@ -472,6 +500,12 @@ def test_project_development_scenario_matrix_covers_activation_boundaries() -> N
         ),
         "A route is cleanly inactive or a required capability is absent",
         "Provider control state is stale, malformed, ambiguous, or integrity-failed",
+        (
+            "A current-task operation is awaiting ordinary same-target delivery or receipt "
+            "work already covered by authority"
+        ),
+        "A historical provider inventory contains open-looking operations",
+        ("An older operation is already delivered, terminal, replaced, or semantically superseded"),
         "A precise mutation receipt and exact target readback match the recovered snapshot",
         (
             "Provider owner, route, revision, head, scope, external-write state, or "

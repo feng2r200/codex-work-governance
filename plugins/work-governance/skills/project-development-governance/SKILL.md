@@ -162,15 +162,28 @@ After validating the work and before making the final continuity claim:
    acceptance evidence in the single state provider. Include any material
    delegated decision or changed decision-authority envelope; omit routine
    choices and unchanged review outcomes.
-3. Update project-native authority only when the task actually changed it and
+3. Reconcile every durable operation created by the current task through the
+   provider's bounded delivery and exact readback when existing authority
+   already covers that operation and target. The responsible task, not the
+   user, monitors ordinary same-target completion. A need for new authority,
+   target or owner change, semantic-currentness judgment, or another guarded
+   provider mutation remains an explicit boundary.
+4. If a historical open inventory becomes relevant, classify each candidate's
+   present semantic value and the effect of acting now before any recovery.
+   Do not batch-replay it or treat an open-looking control-plane status as
+   evidence that old content is still current. Distinguish already-delivered
+   operations, deterministic failures, superseded undelivered intent, and
+   immutable target changes, then act only within the current task's scope and
+   authority.
+5. Update project-native authority only when the task actually changed it and
    the change is within scope. Update a stage baseline only when the declared
    stage is complete and accepted; build it from the verified artifacts,
    conversation, and provider state, then link the resulting snapshot back to
    the provider instead of maintaining two live copies.
-4. Read back or otherwise verify the exact state changes using the provider's
+6. Read back or otherwise verify the exact state changes using the provider's
    own mechanics. Prefer the mutation receipt and exact target readback; do not
    reload unrelated provider state merely to reconfirm an unchanged snapshot.
-5. Report the technical result and the durable continuity result separately.
+7. Report the technical result and the durable continuity result separately.
 
 No material delta means no state churn. If persistence or readback fails,
 retain one bounded pending-reconciliation packet in the handoff, identify the
