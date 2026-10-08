@@ -1,6 +1,6 @@
 # Code Intelligence Adapter Adoption Evidence
 
-Status: Plan B source and local-adoption checkpoint verified
+Status: Plan B source, combined integration, and current local activation verified
 Date: 2026-10-08
 
 ## Why the ownership changed
@@ -69,8 +69,10 @@ The validated source boundary is commit
 - all 23 policy-contract tests passed;
 - Ruff lint and formatting checks passed;
 - all 11 packaged Skills passed the bundled Skill structural validator;
-- the independent `cli-command-reference` Skill passed its validator after
-  CodeGraph-specific ownership was removed from it;
+- a fresh pre-merge check of the independent `cli-command-reference` Skill
+  exposed one unsupported legacy `compatibility` frontmatter field; removing
+  only that field preserved the native-command routing and made the official
+  Skill validator pass;
 - the source and formally installed plugin each contained 26 files and shared
   aggregate tree SHA-256
   `60827995b6b1f97e5a0e4a4b1488ea12099007a813fa4bef255174ef8e0abe8c`;
@@ -83,19 +85,38 @@ The package manifests, lifecycle route, README files, contributor and privacy
 guidance, operations reference, and policy contracts were reviewed as one
 coherent source boundary.
 
-## Installation and concurrency boundary
+## Combined integration and current activation
 
-The verified local-adoption checkpoint used plugin version
+The original verified local-adoption checkpoint used plugin version
 `2.0.0+codex.20261008141523`. It proves that the Plan B source could be
 formally installed and loaded from an identical package tree at that point in
 time. It is not a timeless claim about whichever local candidate is installed
 later.
 
 A separately owned concurrent worktree subsequently installed its own
-adaptive-loop candidate. This delivery deliberately does not overwrite that
-installation or modify the concurrent worktree. A future combined local
-installation must start from an integrated, revalidated source revision and
-remains a separate operation.
+adaptive-loop candidate. Both histories were independently revalidated before
+integration, then combined without rewriting either line at merge commit
+`af937f82d2e3801b181816e82836e4e2f55b6d1a`.
+
+The final `work-governance-local` marketplace now points to the integrated
+`main` worktree. Plugin version `2.0.0+codex.20261008145343` is installed and
+enabled from that source. Source and installed plugin inventories each contain
+26 files, recursive comparison reports no difference, and both relative-path
+aggregates equal SHA-256
+`ad5b931da0189bba51f84030be49717825ee9ab9947ce7f33c223cfe0447ff35`.
+All 11 installed Skills validate, and installed `work-lifecycle` contains both
+the adaptive decision/review contract and the `code-intelligence` route.
+
+The combined source passes 26 policy-contract tests and Ruff checks. After an
+incremental refresh, CodeGraph 1.6.2 reports a complete exact-checkout index
+with 17 files, 39 nodes, 135 edges, no pending changes, no worktree mismatch,
+no extraction-version mismatch, and no reindex recommendation. A focused
+structural MCP exploration returned the current CodeGraph, adaptive-loop, and
+manifest-contract test symbols from the combined tree.
+
+The isolated adaptive-loop worktree and branch remain preserved; the combined
+installation changed the active marketplace and Plugin, not that historical
+candidate.
 
 ## Delivery boundary
 

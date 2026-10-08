@@ -143,13 +143,42 @@ candidate commit `b8831dacd2add84fa0ab162e953800a0bd123597` and limited its
 PASS claim to the installed candidate rather than the divergent primary
 worktree.
 
-## Delivery Status
+## Original Local Adoption Checkpoint
 
 Source validation, the candidate commit, formal local installation, exact
 package parity, and all three fresh-task adoption probes are complete. No
 candidate defect was found, so no correction commit was needed.
 
-The delivery now stops at the local adoption confirmation gate. The installed
-Plugin and local marketplace point to the isolated candidate worktree. The
-dirty primary worktree remains untouched, and the candidate has not been
-integrated into its `main`, pushed, tagged, released, published, or deployed.
+That task stopped at its local adoption confirmation gate. At that checkpoint,
+the installed Plugin and local marketplace pointed to the isolated candidate
+worktree; the primary worktree was untouched and no Push, tag, release,
+publication, or deployment occurred.
+
+## Combined Integration And Current Activation
+
+After the separate code-intelligence work and this adaptive candidate both
+passed independent pre-merge review, merge commit
+`af937f82d2e3801b181816e82836e4e2f55b6d1a` combined them without rewriting
+either history. Conflict resolution retained both lifecycle routes, both
+manifest capabilities, both README contracts and evidence links, and both
+policy-test groups.
+
+The exact combined source passes 26 policy-contract tests, Ruff lint and format
+checks, all 11 packaged Skill validators, JSON and whitespace checks, and a
+focused CodeGraph structural exploration of the combined test symbols. The
+three original fresh-task adoption records were read back directly and remain
+consistent with their recorded default-confirmation, delegated-correction, and
+guarded-action-boundary outcomes.
+
+The local `work-governance-local` marketplace now points to the integrated
+`main` worktree. Plugin version `2.0.0+codex.20261008145343` is installed and
+enabled; its 26-file tree is byte-equivalent to the source plugin, and both
+relative-path aggregates equal SHA-256
+`ad5b931da0189bba51f84030be49717825ee9ab9947ce7f33c223cfe0447ff35`.
+The installed lifecycle contains Explicit Decision Delegation, Semantic Review
+And Correction, and the optional code-intelligence route.
+
+Remote branch delivery and exact-commit CI remain independently verified Git
+claims rather than implications of local installation. This combined adoption
+does not create a tag or release, publish, deploy, or change a production or
+data environment.
