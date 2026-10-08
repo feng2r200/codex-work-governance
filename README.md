@@ -198,6 +198,8 @@ adoption boundary are recorded in
 [Code Intelligence Adapter Adoption Evidence](docs/validation/code-intelligence-adoption-v1.md).
 The adaptive decision-delegation and semantic-review contract is recorded in
 [Adaptive Decision and Review Loop Evidence](docs/validation/adaptive-decision-and-review-loop-v1.md).
+The combined source, current local activation, and remote delivery are recorded
+in [Integrated Code Intelligence And Adaptive Governance Delivery Evidence](docs/validation/integrated-code-intelligence-adaptive-delivery-v1.md).
 
 ## Package Layout
 

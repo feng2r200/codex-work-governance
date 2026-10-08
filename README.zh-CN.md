@@ -125,7 +125,7 @@ codex plugin add work-governance@work-governance-local
 
 当提供方具备只读的综合健康或就绪视图时，治理层优先复用这一个有界快照，而不重复执行等价的细分状态检查。路由干净未激活或能力缺失，只让对应操作处于降级状态；陈旧、损坏、歧义或完整性失败的控制状态会阻断受影响的提供方路径。两者都不会自动授予激活或修复权限。
 
-提供方状态证据记录在 [提供方控制面效率同步证据](docs/validation/provider-control-plane-efficiency-v1.md) 中。CodeGraph 的职责归属、就绪条件、验证范围与采纳边界记录在 [代码智能适配模块采纳证据](docs/validation/code-intelligence-adoption-v1.md) 中。自适应决策委托与语义回看合同记录在 [自适应决策与回看闭环证据](docs/validation/adaptive-decision-and-review-loop-v1.md) 中。
+提供方状态证据记录在 [提供方控制面效率同步证据](docs/validation/provider-control-plane-efficiency-v1.md) 中。CodeGraph 的职责归属、就绪条件、验证范围与采纳边界记录在 [代码智能适配模块采纳证据](docs/validation/code-intelligence-adoption-v1.md) 中。自适应决策委托与语义回看合同记录在 [自适应决策与回看闭环证据](docs/validation/adaptive-decision-and-review-loop-v1.md) 中。组合源码、当前本机生效状态与远端交付记录在 [代码智能与自适应治理组合交付证据](docs/validation/integrated-code-intelligence-adaptive-delivery-v1.md) 中。
 
 ## 包结构
 
