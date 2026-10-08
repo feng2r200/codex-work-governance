@@ -14,6 +14,9 @@ All notable changes to Work Governance are documented here. The project follows
 - Project development governance for enrolled long-running work, including a
   small project entry, bounded startup recovery, one mutable execution-state
   provider, and material closeout reconciliation.
+- An adaptive pre-alignment and execution-feedback loop with default user
+  confirmation, task- or stage-scoped explicit decision delegation, and
+  semantic-event-driven correction.
 
 ### Changed
 
@@ -34,6 +37,10 @@ All notable changes to Work Governance are documented here. The project follows
   snapshot over repeated equivalent status calls, treats cleanly missing
   authority as degraded, and blocks only the affected path for invalid control
   state without silently authorizing activation or repair.
+- Goal discovery, Plan governance, project continuity, and reporting now share
+  one bounded decision-authority contract: delegated judgment can adapt the
+  route without unnecessary stops, but cannot expand scope, action authority,
+  evidence, or completion claims.
 
 ## 2.0.0 release candidate
 

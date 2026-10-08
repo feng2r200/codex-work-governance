@@ -24,6 +24,20 @@ Investigate cheap, in-scope facts before asking the user. If a proposed
 technical solution already determines a correct, reversible path and the goal
 is clear, proceed.
 
+## Establish Decision Authority
+
+Material choices are user-owned by default. Explicit decision delegation lets
+Codex own only the choices inside a stated task or stage envelope. It must come
+from the user's direct instruction and must not be inferred from silence,
+urgency, available credentials, or authority from another task or stage.
+
+When delegation is active, compare the same material effects required for a
+recommendation, choose the evidence-backed route, record the decision and its
+impact when continuity requires it, and proceed. Reopen the frontier only if
+the choice would change the goal, exceed the delegated scope or decision
+classes, enter an unauthorized environment, or require an unlisted guarded
+action. A later user instruction may narrow or revoke the delegation.
+
 ## Separate Outcome From Proposed Means
 
 When the same outcome can be delivered through materially different
@@ -39,10 +53,12 @@ Before a stage or implementation contract fixes one path:
 3. Compare only material effects: outcome, architecture, data handling, cost,
    operational and authority boundaries, reversibility, risk, and acceptance
    evidence.
-4. If the choice remains unresolved and those effects matter, keep it as a
-   user-owned decision and place confirmation before the first design,
-   delegation, or mutation that commits to one path. Continue work that is
-   genuinely independent of the choice.
+4. If the choice remains unresolved and those effects matter, route it through
+   its current owner. In the default mode, keep it as a user-owned decision and
+   place confirmation before the first design, agent delegation, or mutation
+   that commits to one path. Under explicit decision delegation, select and
+   proceed when the choice is inside the active envelope. Continue work that is
+   genuinely independent of any still-gated choice.
 
 Do not infer a material choice from labels, the most visible artifact, the
 incumbent environment, or the easiest path to start. Do not postpone an
@@ -62,6 +78,7 @@ State:
 - the decision;
 - the viable paths and their material effects;
 - the evidence-backed recommendation;
+- the current decision owner and any active delegation boundary; and
 - what work is actually blocked.
 
 Do not ask for preferences that can be deferred without affecting the current
@@ -74,7 +91,9 @@ Representative routes:
 | --- | --- |
 | The user explicitly selected a material approach | Preserve it and verify only the prerequisites needed for the current slice |
 | The outcome is clear, but materially different approaches remain viable | Compare their effects and ask the direction question before dependent work commits to one |
+| The user explicitly delegated this material choice for the current task or stage | Compare the material effects, choose the evidence-backed route, record its impact, and proceed |
 | Evidence invalidates a confirmed approach | Contain the affected work and reopen the choice only when the replacement changes a user-owned boundary |
+| Evidence invalidates a delegated approach but the replacement remains inside the envelope | Reassess and choose the correction without automatically interrupting the user |
 | The choice is an interchangeable, reversible implementation detail | Proceed without a confirmation gate |
 
 ## Finish Discovery

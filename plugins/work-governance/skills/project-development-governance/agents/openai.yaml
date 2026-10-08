@@ -1,4 +1,4 @@
 interface:
   display_name: "Project Development Governance"
   short_description: "Keep long-running project state recoverable"
-  default_prompt: "Use $work-governance:project-development-governance to recover and reconcile an enrolled long-running project's authority and execution state without forcing a Plan."
+  default_prompt: "Use $work-governance:project-development-governance to keep authority, delegated decisions, and semantic corrections in one execution-state provider."

@@ -114,13 +114,121 @@ def test_material_solution_strategy_is_confirmed_before_dependent_work() -> None
     assert "materially different approaches" in discovery
     assert "most visible artifact" in discovery
     assert "one assumed path fails" in discovery
-    assert "before the first design, delegation, or mutation" in discovery
+    assert "before the first design, agent delegation, or mutation" in discovery
     assert "explicitly selected a material approach" in discovery
     assert "interchangeable, reversible implementation detail" in discovery
     assert "Do not hard-code one approach into a stage definition" in plan
     assert "Feasibility discovery supports a recommendation" in plan
     assert "do not turn an unconfirmed material solution assumption" in project
     assert "material solution choice that remains unresolved" in contract
+
+
+def test_adaptive_loop_routes_decisions_through_current_authority() -> None:
+    """Keep default confirmation and explicit delegation distinct and bounded."""
+    lifecycle = normalized(SKILLS / "work-lifecycle" / "SKILL.md")
+    discovery = normalized(SKILLS / "goal-discovery" / "SKILL.md")
+    plan = normalized(SKILLS / "plan-governance" / "SKILL.md")
+
+    assert "investigate an in-scope fact" in lifecycle
+    assert "interchangeable, reversible implementation detail" in lifecycle
+    assert "material user-owned route or contract change" in lifecycle
+    assert "explicit decision delegation covers that choice" in lifecycle
+    assert "never infer it from silence, urgency" in lifecycle
+    assert "available credentials" in lifecycle
+    assert "another task or stage" in lifecycle
+    assert "current task or named stage" in lifecycle
+    assert "latest instruction can narrow or revoke" in lifecycle
+
+    assert "Material choices are user-owned by default" in discovery
+    assert "choose the evidence-backed route" in discovery
+    assert "inside the active envelope" in discovery
+    assert "Reassess and choose the correction" in discovery
+
+    assert "current decision owner" in plan
+    assert "decision-authority envelope" in plan
+    assert "Decision delegation does not require a Plan" in plan
+    assert "same authority envelope and semantic-review rules apply to No-Plan work" in plan
+    assert "delegation that expires, is narrowed, or is revoked" in plan
+
+
+def test_semantic_review_corrects_in_scope_and_reopens_only_at_boundaries() -> None:
+    """Require bounded autonomous correction without weakening evidence or authority."""
+    lifecycle = normalized(SKILLS / "work-lifecycle" / "SKILL.md")
+    project = normalized(SKILLS / "project-development-governance" / "SKILL.md")
+    contract = normalized(
+        SKILLS / "project-development-governance" / "references" / "project-contract.md"
+    )
+    reporting = normalized(SKILLS / "work-reporting" / "SKILL.md")
+
+    for event in [
+        "new evidence",
+        "failed material assumption",
+        "validation failure",
+        "milestone completion",
+        "scope or relevant external-state change",
+        "mismatch between a receipt and observed state",
+    ]:
+        assert event in lifecycle
+
+    for correction in [
+        "continue",
+        "repair",
+        "roll back",
+        "replace the approach",
+        "reorder work",
+        "revise a Plan",
+        "expand validation",
+    ]:
+        assert correction in lifecycle
+
+    assert "exceed the delegated scope or decision classes" in lifecycle
+    assert "enter an unauthorized environment" in lifecycle
+    assert "perform an unlisted guarded action" in lifecycle
+    assert "never permits ignoring evidence" in lifecycle
+    assert "never widens a claim beyond the validation performed" in lifecycle
+    assert "Do not repeat broad reads" in lifecycle
+
+    assert "active task or stage decision-authority envelope" in project
+    assert "Do not create a parallel permissions ledger" in project
+    assert "Record activation, revocation, scope changes" in project
+    assert "omit routine choices and unchanged review outcomes" in project
+    assert "single execution-state provider" in contract
+    assert (
+        "No semantic change means no repeated read, review, report, or provider write" in contract
+    )
+
+    assert "Do not narrate every ordinary judgment" in reporting
+    assert "changed evidence, its effect, the bounded action taken" in reporting
+    assert "does not expose hidden reasoning" in reporting
+    assert "exceeds the decision-authority envelope" in reporting
+
+
+def test_decision_delegation_does_not_expand_guarded_action_authority() -> None:
+    lifecycle = normalized(SKILLS / "work-lifecycle" / "SKILL.md")
+    discovery = normalized(SKILLS / "goal-discovery" / "SKILL.md")
+    validation_record = normalized(
+        ROOT / "docs" / "validation" / "adaptive-decision-and-review-loop-v1.md"
+    )
+
+    assert "does not expand the goal, scope, target, environment" in lifecycle
+    for guarded in [
+        "Push",
+        "release",
+        "deployment",
+        "production or data changes",
+        "credential use",
+        "destructive cleanup",
+    ]:
+        assert guarded in lifecycle
+    assert "exact action and target in the same authorization contract" in lifecycle
+    assert "resolve the exact target and obtain the fresh guard evidence" in lifecycle
+    assert "Do not add another policy-only confirmation" in lifecycle
+    assert "stop at the confirmation frontier" in lifecycle
+    assert "Do not mutate files, create or update durable provider state or a Plan" in lifecycle
+    assert "unlisted guarded action" in discovery
+    assert "judgment delegation is not action authorization" in validation_record
+    assert "guarded action is explicitly listed with an exact target" in validation_record
+    assert "confirmation-only proposal" in validation_record
 
 
 def test_plan_is_independent_and_no_plan_can_evolve() -> None:
@@ -396,8 +504,8 @@ def test_manifest_readme_and_project_metadata_match_architecture() -> None:
     project = tomllib.loads(read(ROOT / "pyproject.toml"))
     readme = normalized(ROOT / "README.md")
     assert manifest["interface"]["defaultPrompt"] == [
-        "Use $work-governance:work-lifecycle to preserve goal, authority, momentum, "
-        "and evidence with only the needed modules."
+        "Use $work-governance:work-lifecycle to align evidence and authority, then adapt "
+        "execution at meaningful change."
     ]
     assert all(len(prompt) <= 128 for prompt in manifest["interface"]["defaultPrompt"])
     assert "does not require one specific CLI" in readme
@@ -405,6 +513,7 @@ def test_manifest_readme_and_project_metadata_match_architecture() -> None:
     assert "project-development-governance" in readme
     assert "work-reporting" in readme
     assert "Project development continuity" in manifest["interface"]["capabilities"]
+    assert "Adaptive decision and review" in manifest["interface"]["capabilities"]
     assert "Project archive curation" in manifest["interface"]["capabilities"]
     assert portable["$schema"] == "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
     assert portable["name"] == manifest["name"] == project["project"]["name"]

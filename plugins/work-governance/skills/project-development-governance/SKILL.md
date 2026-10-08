@@ -47,6 +47,14 @@ ledger, never both. Provider records may point to project authority but do not
 silently replace it. Route any proposed promotion into project authority
 through `work-governance:project-truth-governance`.
 
+The same provider also carries the active task or stage decision-authority
+envelope when the user explicitly delegates judgment. Record activation,
+revocation, scope changes, and material delegated route decisions as narrow
+semantic checkpoints. Do not create a parallel permissions ledger: long-lived
+authority remains in project-native contracts, while the provider records only
+the current execution effect and evidence. An unchanged envelope or review
+outcome does not justify another provider read, report, or write.
+
 A stage baseline is a project-native accepted snapshot, not a second mutable
 execution-state provider. Between stage boundaries, the selected provider owns
 live work state and receives narrow semantic deltas. Update the stage baseline
@@ -83,8 +91,8 @@ eligible during a task, do it when the continuity need becomes clear:
 4. Recover a bounded current-state packet once, identified by the provider's
    current revision, head, cursor, or equivalent snapshot identity: current
    objective, relevant scope and constraints, present status, prioritized next
-   work, pending decisions, open risks, and acceptance evidence needed for
-   this task.
+   work, pending decisions, any active task or stage decision-authority
+   envelope, open risks, and acceptance evidence needed for this task.
 5. Read only the task-relevant authority documents named by the entry, then
    compare important claims with current artifacts or runtime evidence.
 
@@ -117,6 +125,14 @@ long-lived architecture or contract changes in project authority; keep
 temporary execution state and pending choices in the selected provider. Do not
 roll the stage baseline forward during ordinary in-stage work.
 
+Semantic events include new evidence, a failed material assumption, validation
+failure, milestone completion, scope or relevant external-state change, and a
+receipt mismatch. Under explicit decision delegation, record only material
+autonomous corrections such as a changed route, priority, Plan, validation
+boundary, or delivery claim. The user regains the confirmation gate when the
+delegation expires, is narrowed or revoked, or the correction would exceed its
+scope, environment, decision classes, or action permissions.
+
 Reuse the recovered provider snapshot until an explicit invalidation trigger:
 logical owner or route changes; provider revision, head, or cursor advances;
 task scope changes; an external writer is observed; relevant evidence identity
@@ -143,7 +159,9 @@ After validating the work and before making the final continuity claim:
 1. Compare the recovered packet with the verified end state.
 2. Reconcile material changes to progress and status, remaining work and
    priority, material decisions and reasons, open risks and boundary cases, and
-   acceptance evidence in the single state provider.
+   acceptance evidence in the single state provider. Include any material
+   delegated decision or changed decision-authority envelope; omit routine
+   choices and unchanged review outcomes.
 3. Update project-native authority only when the task actually changed it and
    the change is within scope. Update a stage baseline only when the declared
    stage is complete and accepted; build it from the verified artifacts,

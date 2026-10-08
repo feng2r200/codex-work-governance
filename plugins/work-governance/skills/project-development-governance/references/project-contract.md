@@ -61,6 +61,7 @@ state. Typical ownership is:
 | Architecture, modules, interfaces | Project-native authority |
 | Accepted durable decision and rationale | Project-native ADR or decision log |
 | Pending execution choice and rationale | Execution-state provider |
+| Active task or stage decision-authority envelope | Execution-state provider |
 | Current progress and status | Execution-state provider |
 | Remaining work and priority | Execution-state provider |
 | Open execution risk or question | Execution-state provider |
@@ -71,6 +72,29 @@ state. Typical ownership is:
 When a pending decision becomes durable project authority, promote it once and
 replace provider detail with a pointer plus any still-live execution impact.
 Do not leave two independently mutable copies.
+
+## Decision Authority And Semantic Review
+
+Material choices remain user-owned unless the user explicitly delegates named
+judgment for the current task or stage. Keep durable action permissions and
+long-lived project boundaries in project-native authority. Keep the active
+decision-authority envelope and its current execution effects in the single
+execution-state provider; do not establish a second permission ledger.
+
+At minimum, a delegated envelope identifies the authorized goal and scope,
+applicable target and environment, decision classes Codex may own, any guarded
+actions explicitly included, and its task or stage expiry. Never infer it from
+silence, urgency, credentials, or an older task. The latest user instruction
+may narrow or revoke it.
+
+Activation, revocation, scope change, and a material autonomous route change
+are semantic checkpoints. Record the decision, evidence, reason, and execution
+impact, not hidden reasoning or a step-by-step chain of thought. New evidence,
+a failed material assumption, validation failure, milestone completion, scope
+or relevant external-state change, and a receipt mismatch trigger only the
+bounded review their impact warrants. With active delegation, Codex may correct
+or replan inside the envelope; beyond it, restore the confirmation gate. No
+semantic change means no repeated read, review, report, or provider write.
 
 If the project opens with an accepted stage baseline but no relevant state in
 its required provider, reconstruct only the state the baseline supports. Record
@@ -156,7 +180,8 @@ Recover only what controls the current task:
 - prioritized next work and dependencies;
 - material constraints and prohibited actions;
 - pending decisions, including any material solution or feasibility choice,
-  plus open questions, risks, and boundary cases;
+  any active task or stage decision-authority envelope, plus open questions,
+  risks, and boundary cases;
 - applicable acceptance criteria and existing evidence.
 
 The read order is entry, selected provider, task-relevant authority, then live
@@ -177,6 +202,8 @@ Reconcile only state made stale by the task:
 - what became complete, partial, blocked, superseded, or newly active;
 - what remains, in what order, with which dependency or owner;
 - material decisions made and why;
+- explicit decision-delegation activation, revocation, scope change, or
+  material autonomous correction;
 - new, changed, retired, or realized risks and boundary conditions;
 - acceptance checks performed, their exact result, and evidence locations;
 - authority documents changed or still awaiting promotion; and

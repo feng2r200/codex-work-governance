@@ -1,6 +1,6 @@
 {
   "name": "work-governance",
-  "version": "2.0.0+codex.20261007080310",
+  "version": "2.0.0+codex.20261008143309",
   "description": "Composable, tool-neutral governance for goals, planning, delegation, Git, validation, long-running project continuity, project truth, archive curation, and reporting.",
   "author": {
     "name": "feng2r200"
@@ -17,7 +17,7 @@
   "interface": {
     "displayName": "Work Governance",
     "shortDescription": "Composable, tool-neutral governance for Codex work.",
-    "longDescription": "Work Governance helps Codex discover the real goal, use Plans and SubAgents only when valuable, protect Git and authority boundaries, keep long-running project development recoverable, promote project truth deliberately, curate completed work before archival, validate proportionally, and report work completely. Each policy module remains independent of storage and tool choices.",
+    "longDescription": "Work Governance helps Codex align goals, evidence, decisions, and authority before acting; adapt execution when semantic events change the route; use Plans and SubAgents only when valuable; protect Git and action boundaries; keep long-running project development recoverable; validate proportionally; and report work completely. Explicit decision delegation transfers bounded judgment without expanding scope or action authority, and every module remains independent of storage and tool choices.",
     "developerName": "feng2r200",
     "category": "Productivity",
     "websiteURL": "https://github.com/feng2r200/codex-work-governance",
@@ -25,6 +25,7 @@
     "termsOfServiceURL": "https://github.com/feng2r200/codex-work-governance/blob/main/TERMS.md",
     "capabilities": [
       "Goal discovery",
+      "Adaptive decision and review",
       "Planning",
       "SubAgent governance",
       "Validation",
@@ -36,7 +37,7 @@
       "Work reporting"
     ],
     "defaultPrompt": [
-      "Use $work-governance:work-lifecycle to preserve goal, authority, momentum, and evidence with only the needed modules."
+      "Use $work-governance:work-lifecycle to align evidence and authority, then adapt execution at meaningful change."
     ]
   }
 }

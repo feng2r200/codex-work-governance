@@ -1,4 +1,4 @@
 interface:
   display_name: "Work Lifecycle"
-  short_description: "Route only the governance this work needs"
-  default_prompt: "Use $work-governance:work-lifecycle to preserve the goal, authority, momentum, and evidence while routing only relevant governance modules."
+  short_description: "Align authority and adapt execution"
+  default_prompt: "Use $work-governance:work-lifecycle to align evidence, decisions, and authority before acting, then adapt at semantic events."

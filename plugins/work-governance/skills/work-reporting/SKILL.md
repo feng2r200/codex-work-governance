@@ -23,6 +23,18 @@ Do not emit a complete closeout after each mechanical slice. Non-blocking
 improvements and lessons may wait for the next useful checkpoint or final
 report.
 
+When explicit decision delegation is active, report the material choices,
+semantic corrections, verification effects, and residual risks that help the
+user understand the route. Do not narrate every ordinary judgment. A useful
+correction update states the changed evidence, its effect, the bounded action
+taken, and the next step; it does not expose hidden reasoning or a step-by-step
+chain of thought.
+
+If work stops because a semantic event exceeds the decision-authority envelope,
+name the exact goal, scope, environment, decision class, or guarded action that
+requires renewed confirmation. Do not describe an in-envelope route change as
+a blocker merely because it was material.
+
 While waiting, avoid repeating an unchanged status unless the user requested
 periodic reports or a deadline or risk makes it useful. Reuse exact evidence
 references; do not make each update replay the whole coordination history.
@@ -40,6 +52,8 @@ work:
 - validation evidence, its boundary, and anything important not covered;
 - requested work completed, deliberately not done, and still remaining;
 - risks, cleanup, surprising findings, and items worth the user's attention;
+- material delegated choices or corrections and their verified effect, when
+  explicit decision delegation was active;
 - the next useful action, including any separate authority it would require.
 
 Do not claim that nothing remains when a known obligation is open. Do not add a
