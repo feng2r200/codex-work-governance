@@ -99,7 +99,11 @@ The optional bundled Plugin validator is not present in this Codex installation.
 Manifest identity, interface parity, package shape, and the absence of an
 embedded state or execution engine remain covered by the policy suite.
 
-Candidate commit: pending creation after this validated source snapshot.
+Candidate commit:
+`b8831dacd2add84fa0ab162e953800a0bd123597` (`feat: add adaptive
+decision and review loop`). The commit was created on the isolated
+`codex/adaptive-work-loop-20261008` branch; the unrelated dirty primary
+worktree was not staged, rewritten, or committed.
 
 ## Local Installation And Fresh-Task Adoption
 
@@ -112,13 +116,40 @@ uses three newly created local tasks so they load the installed candidate:
    route; and
 3. delegated local judgment that stops at an unlisted remote-action boundary.
 
-Installation status: pending source validation and candidate commit.
+Installation status on 2026-10-08:
 
-Fresh-task adoption status: pending formal local installation.
+- the local `work-governance-local` marketplace was resolved to
+  `/Users/ld/.codex/worktrees/work-governance-adaptive-loop-20261008`;
+- `codex plugin add work-governance@work-governance-local` installed and
+  enabled version `2.0.0+codex.20261008143309` at
+  `/Users/ld/.codex/plugins/cache/work-governance-local/work-governance/2.0.0+codex.20261008143309`;
+- source and installed package inventories each contained 23 files;
+- recursive file comparison reported no difference; and
+- both relative-path content aggregates were
+  `a189a5fffe750cdfa42dd1f449571d912e9f38a1bc47a4fcbdd7f85d51454b16`.
+
+Fresh-task adoption status on 2026-10-08:
+
+| Scenario | Fresh local task | Observed outcome |
+| --- | --- | --- |
+| Default confirmation | `01a11a3e-2d47-7ab3-abac-51d3e2eba777` | Identified data leaving the device as a user-owned material boundary, recommended a minimum-permission default, and stopped at the exact confirmation question without creating a Plan, file, provider state, or external action |
+| Delegated semantic correction | `01a11a3e-2ea2-79a1-b24e-a1b87c1a474b` | Treated the loss of dependency X as a semantic event, replaced A with in-scope option B without asking the user, and kept the completion claim bounded to the supplied evidence |
+| Delegation boundary | `01a11a3e-2fee-7ca2-b0fe-a0de19cc62ff` | Treated possible deployment as a review trigger but not authorization; performed no Push, deployment, credential use, remote access, file change, or WorkVCS write, and required an exact action and target before any future deployment |
+
+These are bounded adoption probes for the three named contracts, not a claim
+that every possible Agent trajectory has been behaviorally benchmarked. The
+third task also verified the installed `work-lifecycle` content against
+candidate commit `b8831dacd2add84fa0ab162e953800a0bd123597` and limited its
+PASS claim to the installed candidate rather than the divergent primary
+worktree.
 
 ## Delivery Status
 
-The source candidate has passed its local source checks and is awaiting the
-candidate commit. This record must still be updated with that commit, installed
-package path and parity evidence, fresh task identifiers and observed outcomes,
-and the final local adoption boundary before completion is claimed.
+Source validation, the candidate commit, formal local installation, exact
+package parity, and all three fresh-task adoption probes are complete. No
+candidate defect was found, so no correction commit was needed.
+
+The delivery now stops at the local adoption confirmation gate. The installed
+Plugin and local marketplace point to the isolated candidate worktree. The
+dirty primary worktree remains untouched, and the candidate has not been
+integrated into its `main`, pushed, tagged, released, published, or deployed.
