@@ -37,18 +37,34 @@ are authorized.
 
 ## Staging And Commit
 
+Authorization to modify repository content includes creating new,
+non-rewriting local commits for that authorized work by default. Do not ask for
+separate confirmation after each coherent stage unless the user or project
+makes the task read-only, requests a confirmation-only proposal or review
+before commit, excludes commits, or leaves repository, branch, or worktree
+ownership unresolved.
+
+Treat a local commit as a checkpoint for staged Git-tracked state, not as a
+complete workspace backup, task-completion claim, or remote delivery. Commit
+when the stage is independently meaningful and coherent and the claimed
+validation has passed. Do not create mechanical or knowingly broken WIP
+commits merely to clear the working tree.
+
 Stage exact paths unless the entire dirty tree is proven to be one delivery
 boundary. Exclude local configuration, caches, dependencies, build outputs,
 logs, scratch files, and unrelated edits.
 
 Before committing, inspect the unstaged diff, staged name/status set, and staged
-whitespace checks. Local commits are allowed only when the work and commit are
-authorized, the boundary is coherent, and the claimed validation passed.
-Group commits by repository and independently meaningful delivery boundary.
+whitespace checks. Group commits by repository and independently meaningful
+delivery boundary; keep implementation, tests, and documentation together when
+they establish one behavior instead of splitting mechanically by file type.
 
 Push, remote branch changes, pull or merge requests, release tags, and other
 remote state changes are separate actions. A local commit does not authorize
-them.
+them. This default also does not authorize amend, rebase, reset, force updates,
+branch or worktree deletion, or destructive cleanup. A hook or signing step
+does not inherit authority for an external, credentialed, production, or
+data-changing action it triggers.
 
 ## Cleanup And Handoff
 

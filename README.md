@@ -35,8 +35,10 @@ than a monolithic process engine.
 - **Tool-neutral core:** the lifecycle and policy modules do not contain a
   state engine or require one specific CLI. Optional tool adapters are isolated,
   scenario-triggered, and able to degrade without blocking unrelated work.
-- **Authority-aware:** local changes, commits, pushes, releases, deployments,
-  production actions, and destructive cleanup remain distinct boundaries.
+- **Authority-aware:** authorization to change repository content includes
+  coherent, validated, non-rewriting local commits by default, while pushes,
+  releases, deployments, production actions, history rewriting, and destructive
+  cleanup remain separate boundaries.
 - **Evidence-calibrated:** validation expands with the claim and risk instead of
   becoming a fixed test ritual.
 - **Adaptive:** material choices are aligned before dependent work, while new
@@ -143,9 +145,12 @@ task later grows into dependent stages that must survive a handoff, the Agent
 can admit a Plan once and carry forward the useful findings, constraints, and
 evidence already discovered.
 
-If the repository is dirty, the Git module protects unrelated work. If local
-validation passes but push was not authorized, the reporting module describes
-the verified local result and leaves the remote untouched.
+If the repository is dirty, the Git module protects unrelated work. Once an
+authorized stage is coherent and its claimed validation passes, the Agent can
+create semantically grouped local commits without asking for a separate commit
+confirmation. A read-only or confirmation-only request still forbids the
+commit. If push was not authorized, the reporting module describes the verified
+local result and leaves the remote untouched.
 
 When a development task needs symbol, call-path, impact, affected-test, or
 cross-layer understanding, the optional code-intelligence module checks the

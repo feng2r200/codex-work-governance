@@ -51,6 +51,10 @@ All notable changes to Work Governance are documented here. The project follows
   delivery and readback by the task that created them, while historical open
   inventories require semantic-currentness and counterfactual-effect
   classification instead of user monitoring or batch replay.
+- Authorized repository changes now include coherent, validated,
+  non-rewriting local commits as ordinary stage checkpoints without a separate
+  confirmation, while read-only gates, remote delivery, history rewriting, and
+  destructive Git operations remain independently protected.
 
 ## 2.0.0 release candidate
 

@@ -299,6 +299,35 @@ def test_worktree_policy_prefers_current_configuration_and_default_branch() -> N
     assert "Do not assume it is named `main`" in git_skill
 
 
+def test_authorized_local_commits_are_default_stage_checkpoints() -> None:
+    """Allow recoverable local checkpoints without weakening explicit Git gates."""
+    git_skill = normalized(SKILLS / "git-change-governance" / "SKILL.md")
+    lifecycle = normalized(SKILLS / "work-lifecycle" / "SKILL.md")
+
+    assert "Authorization to modify repository content includes creating new" in git_skill
+    assert "non-rewriting local commits" in git_skill
+    assert "Do not ask for separate confirmation after each coherent stage" in git_skill
+    assert "checkpoint for staged Git-tracked state" in git_skill
+    assert "not as a complete workspace backup" in git_skill
+    assert "independently meaningful delivery boundary" in git_skill
+    assert "instead of splitting mechanically by file type" in git_skill
+
+    for protected_boundary in [
+        "makes the task read-only",
+        "confirmation-only proposal",
+        "review before commit",
+        "excludes commits",
+        "ownership unresolved",
+        "remote state changes are separate actions",
+        "does not authorize amend, rebase, reset, force updates",
+    ]:
+        assert protected_boundary in git_skill
+
+    assert "stop at the confirmation frontier" in lifecycle
+    assert "Do not mutate files, create or update durable provider state or a Plan" in lifecycle
+    assert "change Git" in lifecycle
+
+
 def test_validation_truth_and_reporting_boundaries() -> None:
     validation = read(SKILLS / "independent-validation" / "SKILL.md")
     truth = normalized(SKILLS / "project-truth-governance" / "SKILL.md")
