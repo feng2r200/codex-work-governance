@@ -71,6 +71,10 @@ workflow on every request and does not own durable state.
   when diagnosing delegation overhead, ownership, or handoff quality.
 - Load `work-governance:git-change-governance` for branch, worktree, staging,
   commit, push, or Git cleanup decisions.
+- Load `work-governance:code-intelligence` when source-code work needs
+  structural symbol, call-path, impact, affected-test, or cross-layer
+  understanding, including safe per-checkout CodeGraph readiness. Keep literal
+  text, prose, logs, and configuration on native inspection routes.
 - Load `work-governance:independent-validation` only when a separate challenge
   adds meaningful confidence.
 - Load `work-governance:project-development-governance` when an explicitly

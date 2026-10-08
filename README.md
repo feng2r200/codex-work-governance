@@ -32,8 +32,9 @@ than a monolithic process engine.
 
 - **Value-driven:** no Plan, SubAgent, tool call, or review is mandatory merely
   because a task is large or important.
-- **Tool-neutral:** the plugin does not contain a state engine, does not require
-  one specific CLI, and leaves persistence providers as separate capabilities.
+- **Tool-neutral core:** the lifecycle and policy modules do not contain a
+  state engine or require one specific CLI. Optional tool adapters are isolated,
+  scenario-triggered, and able to degrade without blocking unrelated work.
 - **Authority-aware:** local changes, commits, pushes, releases, deployments,
   production actions, and destructive cleanup remain distinct boundaries.
 - **Evidence-calibrated:** validation expands with the claim and risk instead of
@@ -50,6 +51,7 @@ User goal and authority
           +-- Plan governance
           +-- SubAgent governance
           +-- Git boundaries
+          +-- code intelligence (optional adapter)
           +-- independent validation
           +-- project development continuity
           +-- project truth
@@ -69,6 +71,7 @@ Existing tools and project-specific Skills
 | `plan-governance` | Plan admission, No-Plan evolution, and material revision |
 | `subagent-governance` | Delegation value, ownership, and integration |
 | `git-change-governance` | Branches, worktrees, commits, and remote boundaries |
+| `code-intelligence` | Structural source routing and safe per-checkout CodeGraph readiness |
 | `independent-validation` | Proportional independent challenge |
 | `project-development-governance` | Long-running project entry, recovery, and state reconciliation |
 | `project-truth-governance` | Truth-source selection and deliberate promotion |
@@ -106,6 +109,14 @@ evidence already discovered.
 If the repository is dirty, the Git module protects unrelated work. If local
 validation passes but push was not authorized, the reporting module describes
 the verified local result and leaves the remote untouched.
+
+When a development task needs symbol, call-path, impact, affected-test, or
+cross-layer understanding, the optional code-intelligence module checks the
+exact active checkout. If CodeGraph is available but that checkout has no
+index, it can create and verify the local derived index before querying it.
+Literal text, documentation, logs, configuration, unsupported content, and
+explicitly read-only locations stay on native inspection routes. The adapter
+never treats an index as project truth or silently installs global tooling.
 
 If the same outcome can be delivered through materially different approaches,
 goal discovery exposes that direction choice before a stage Plan hard-codes one
@@ -145,7 +156,8 @@ The distributable plugin lives in `plugins/work-governance` and uses:
 
 - `plugin.json` as the portable Agent Plugins manifest;
 - `.codex-plugin/plugin.json` as the Codex compatibility fallback;
-- `skills/` for the ten independent policy modules; and
+- `skills/` for ten independent policy modules plus one optional
+  code-intelligence adapter; and
 - `.agents/plugins/marketplace.json` as the repository marketplace.
 
 The portable manifest is the forward-looking package authority. Tests keep its

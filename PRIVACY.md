@@ -9,6 +9,10 @@ the user's authority. Data processed by Codex, the operating system, source
 control, persistence tools, or other external services remains subject to those
 products' policies and the user's configuration.
 
+Optional adapter Skills can contain operating guidance for separately
+configured local tools such as CodeGraph. The plugin does not bundle those
+executables or control their storage, telemetry, or privacy behavior.
+
 Optional state, evidence, knowledge, retrospective, or handoff tools own their
 own storage and privacy behavior. Work Governance decides when such a
 capability may help; it does not bundle one or require a particular provider.

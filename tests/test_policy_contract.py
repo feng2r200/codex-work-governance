@@ -14,6 +14,7 @@ SKILL_NAMES = {
     "plan-governance",
     "subagent-governance",
     "git-change-governance",
+    "code-intelligence",
     "independent-validation",
     "project-development-governance",
     "project-truth-governance",
@@ -73,8 +74,8 @@ def test_workflows_pin_external_actions_by_commit_sha() -> None:
             )
 
 
-def test_public_plugin_is_tool_neutral_and_has_no_state_engine() -> None:
-    """Verify that packaging does not smuggle in a state or execution engine."""
+def test_public_plugin_core_is_tool_neutral_and_has_no_state_engine() -> None:
+    """Verify that optional adapters do not smuggle in a state engine."""
     text = live_text().lower()
     for forbidden in ["workctl", "workvcs", "sessionstart", "userpromptsubmit", "action lease"]:
         assert forbidden not in text
@@ -87,6 +88,38 @@ def test_public_plugin_is_tool_neutral_and_has_no_state_engine() -> None:
     assert "mcp.json" not in portable
     assert not (PLUGIN / "hooks").exists()
     assert not (PLUGIN / "scripts").exists()
+
+
+def test_code_intelligence_routes_and_establishes_bounded_readiness() -> None:
+    """Keep CodeGraph useful without making it a universal prerequisite."""
+    lifecycle = normalized(SKILLS / "work-lifecycle" / "SKILL.md")
+    skill = normalized(SKILLS / "code-intelligence" / "SKILL.md")
+    operations = normalized(SKILLS / "code-intelligence" / "references" / "codegraph.md")
+
+    assert "work-governance:code-intelligence" in lifecycle
+    assert "structural symbol, call-path, impact, affected-test" in lifecycle
+    assert "Global tool availability" in skill
+    assert "Active-checkout index health" in skill
+    assert "active checkout, not from the Git common directory" in skill
+    assert "current authority permits local derived-state creation" in skill
+    assert "codegraph status --json" in skill
+    assert "synced project mirror" in skill
+    assert "reference-only `sources/` tree" in skill
+    assert "Do not install CodeGraph" in skill
+    assert "This local derived index is neither project truth nor durable work state" in skill
+    assert "Never run destructive `uninit`" in skill
+
+    assert 'PROJECT_ROOT="$(git rev-parse --show-toplevel)"' in operations
+    assert 'codegraph status --json "$PROJECT_ROOT"' in operations
+    assert 'codegraph init --yes "$PROJECT_ROOT"' in operations
+    assert 'codegraph sync "$PROJECT_ROOT"' in operations
+    assert 'codegraph index "$PROJECT_ROOT"' in operations
+    assert "The second command is mandatory readback" in operations
+    assert "`index.state` is complete" in operations
+    assert "`worktreeMismatch` is null" in operations
+    assert "`index.reindexRecommended` is false" in operations
+    assert "installation command is reference material, not standing authority" in operations
+    assert "Do not edit the tracked `.gitignore`" in operations
 
 
 def test_clear_work_and_goal_discovery_do_not_force_ceremony() -> None:
@@ -400,11 +433,14 @@ def test_manifest_readme_and_project_metadata_match_architecture() -> None:
         "and evidence with only the needed modules."
     ]
     assert all(len(prompt) <= 128 for prompt in manifest["interface"]["defaultPrompt"])
-    assert "does not require one specific CLI" in readme
+    assert "Tool-neutral core" in read(ROOT / "README.md")
+    assert "Optional tool adapters are isolated" in read(ROOT / "README.md")
+    assert "code-intelligence" in readme
     assert "project-archive-curation" in readme
     assert "project-development-governance" in readme
     assert "work-reporting" in readme
     assert "Project development continuity" in manifest["interface"]["capabilities"]
+    assert "Optional code intelligence" in manifest["interface"]["capabilities"]
     assert "Project archive curation" in manifest["interface"]["capabilities"]
     assert portable["$schema"] == "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
     assert portable["name"] == manifest["name"] == project["project"]["name"]

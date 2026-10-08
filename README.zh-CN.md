@@ -24,7 +24,7 @@ Work Governance 将这些问题拆分为彼此独立的政策模块，而不是�
 ## 它有什么不同
 
 - **价值驱动：** 不会仅仅因为任务规模大或重要，就强制要求 Plan、SubAgent、工具调用或审查。
-- **工具中立：** Plugin 不内置状态引擎、不要求某个特定 CLI，并把持久化提供方保留为独立能力。
+- **核心工具中立：** 生命周期与政策模块不内置状态引擎，也不要求某个特定 CLI。可选工具适配模块彼此隔离、按场景触发，并能在不可用时降级而不阻塞无关工作。
 - **理解授权边界：** 本地改动、commit、push、release、部署、生产操作和破坏性清理始终是不同的授权边界。
 - **按证据校准：** 验证会随声明范围和风险扩展，而不是固化成一套测试仪式。
 - **可组合：** 每个 Skill 只负责一种判断，也可以独立使用。
@@ -39,6 +39,7 @@ work-lifecycle 路由器
       +-- Plan 治理
       +-- SubAgent 治理
       +-- Git 边界
+      +-- 代码智能（可选适配）
       +-- 独立验证
       +-- 项目开发连续性
       +-- 项目事实
@@ -58,6 +59,7 @@ work-lifecycle 路由器
 | `plan-governance` | Plan 准入、No-Plan 演进和实质性修订 |
 | `subagent-governance` | 委派价值、所有权和整合 |
 | `git-change-governance` | 分支、worktree、commit 和远端边界 |
+| `code-intelligence` | 结构化源码路由与按活动 checkout 安全建立 CodeGraph 就绪条件 |
 | `independent-validation` | 与风险相匹配的独立质疑 |
 | `project-development-governance` | 长期项目入口、恢复与状态对账 |
 | `project-truth-governance` | 事实来源选择与审慎提升 |
@@ -88,6 +90,8 @@ codex plugin add work-governance@work-governance-local
 
 如果仓库存在未提交改动，Git 模块会保护无关工作。如果本地验证已经通过，但 push 尚未获得授权，汇报模块会说明本地已验证的结果，并保持远端不变。
 
+当开发任务需要理解符号、调用路径、影响范围、受影响测试或跨层关系时，可选的代码智能模块会检查精确的活动 checkout。如果本机 CodeGraph 可用，但该 checkout 尚无索引，它可以先创建并回读验证本地派生索引，再开始查询。字面文本、文档、日志、配置、不支持的内容以及明确只读的位置仍使用原生检查路径。该适配模块不会把索引当成项目事实，也不会静默安装全局工具。
+
 如果同一目标存在会实质改变结果、边界、成本、风险或验收方式的不同方案，目标发现模块会在阶段 Plan 固化任一路线之前暴露这个方向选择。它可以核验前提与约束以形成建议，但不会等到某个未经确认的方案失败后才提问。用户已经明确选择方案时，只继续完成当前切片需要的有界可行性核验。
 
 对于已经加入治理的长期项目，项目开发模块会先读取一个小型路由入口，再只读取当前任务需要的有限状态和权威内容。任务收尾时，它会把有实质变化的进展、优先级、决策、风险和验收证据对账到唯一一个可变执行状态提供方。目标、架构、约束和验收仍由项目原生权威承载，项目契约也不会强制创建任务 Plan。
@@ -104,7 +108,7 @@ codex plugin add work-governance@work-governance-local
 
 - `plugin.json` 作为可移植的 Agent Plugins manifest；
 - `.codex-plugin/plugin.json` 作为 Codex 兼容性后备 manifest；
-- `skills/` 存放十个相互独立的政策模块；
+- `skills/` 存放十个相互独立的政策模块，以及一个可选的代码智能适配模块；
 - `.agents/plugins/marketplace.json` 作为仓库 marketplace。
 
 可移植 manifest 是面向未来的包权威来源。测试会确保它的身份信息和 OpenAI 接口元数据与兼容性 manifest 保持一致。

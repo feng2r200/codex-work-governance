@@ -14,6 +14,9 @@ All notable changes to Work Governance are documented here. The project follows
 - Project development governance for enrolled long-running work, including a
   small project entry, bounded startup recovery, one mutable execution-state
   provider, and material closeout reconciliation.
+- Optional code intelligence governance that routes structural source questions
+  to CodeGraph, establishes a verified per-checkout index when safe and useful,
+  and keeps literal or unsupported content on native inspection routes.
 
 ### Changed
 
@@ -34,6 +37,9 @@ All notable changes to Work Governance are documented here. The project follows
   snapshot over repeated equivalent status calls, treats cleanly missing
   authority as degraded, and blocks only the affected path for invalid control
   state without silently authorizing activation or repair.
+- Tool neutrality is now an explicit core-policy property: optional adapters
+  may ship with the plugin when they remain isolated, scenario-triggered,
+  safely degradable, and unable to install or repair global tooling implicitly.
 
 ## 2.0.0 release candidate
 

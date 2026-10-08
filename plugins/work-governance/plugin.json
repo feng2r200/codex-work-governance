@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "work-governance",
-  "version": "2.0.0+codex.20261007080310",
-  "description": "Composable, tool-neutral governance for goals, planning, delegation, Git, validation, long-running project continuity, project truth, archive curation, and reporting.",
+  "version": "2.0.0+codex.20261008141523",
+  "description": "Composable governance for goals, planning, delegation, Git, optional code intelligence, validation, long-running project continuity, project truth, archive curation, and reporting.",
   "author": {
     "name": "feng2r200",
     "url": "https://github.com/feng2r200"
@@ -21,8 +21,8 @@
     "com.openai": {
       "interface": {
         "displayName": "Work Governance",
-        "shortDescription": "Composable, tool-neutral governance for Codex work.",
-        "longDescription": "Work Governance helps Codex discover the real goal, use Plans and SubAgents only when valuable, protect Git and authority boundaries, keep long-running project development recoverable, promote project truth deliberately, curate completed work before archival, validate proportionally, and report work completely. Each policy module remains independent of storage and tool choices.",
+        "shortDescription": "Composable governance with optional tool adapters.",
+        "longDescription": "Work Governance helps Codex discover the real goal, use Plans and SubAgents only when valuable, protect Git and authority boundaries, establish optional structural code intelligence safely, keep long-running project development recoverable, promote project truth deliberately, curate completed work before archival, validate proportionally, and report work completely. Core policy modules remain independent of storage and tool choices; optional adapters activate only for matching scenarios.",
         "developerName": "feng2r200",
         "category": "Productivity",
         "websiteURL": "https://github.com/feng2r200/codex-work-governance",
@@ -35,6 +35,7 @@
           "Validation",
           "Governance",
           "Git boundaries",
+          "Optional code intelligence",
           "Project development continuity",
           "Project truth",
           "Project archive curation",

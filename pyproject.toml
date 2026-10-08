@@ -1,7 +1,7 @@
 [project]
 name = "work-governance"
 version = "2.0.0"
-description = "Composable, tool-neutral governance policy for Codex work"
+description = "Composable core governance with optional tool adapters for Codex work"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = []

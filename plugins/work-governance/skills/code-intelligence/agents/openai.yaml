@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code Intelligence"
+  short_description: "Route structural code analysis and prepare CodeGraph"
+  default_prompt: "Use $work-governance:code-intelligence to choose structural code inspection, establish safe CodeGraph readiness for the active checkout when useful, and fall back to native tools for unsupported content."

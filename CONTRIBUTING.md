@@ -4,18 +4,21 @@ Thank you for helping improve Work Governance.
 
 ## Design Contract
 
-Keep the plugin composable and tool-neutral:
+Keep the core policy composable and tool-neutral:
 
 - clear, actionable work must not be blocked by ceremony;
 - Plans and SubAgents are introduced only when they add coordination value;
 - one module owns each judgment;
 - persistence providers remain optional, separate Skills;
+- optional tool adapters are isolated, scenario-triggered, safely degradable,
+  and never install or repair global capabilities implicitly;
 - authority boundaries are never inferred from available credentials; and
 - tests protect current behavior, not obsolete prose or historical versions.
 
-A proposal that embeds a state engine, requires one CLI, creates a second
-mutable authority, or makes governance mandatory for every task should explain
-the demonstrated need and why a smaller policy change is insufficient.
+A proposal that embeds a state engine, makes one CLI a core prerequisite,
+creates a second mutable authority, or makes governance mandatory for every
+task should explain the demonstrated need and why a smaller policy change is
+insufficient.
 
 ## Development
 
