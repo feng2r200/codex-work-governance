@@ -40,8 +40,11 @@ Capture only what controls execution and review:
 - current evidence, assumptions, constraints, and unresolved questions;
 - material solution strategies and feasibility assumptions, each marked as
   confirmed, evidenced, or gated;
+- the current decision owner, any explicit decision-authority envelope, and
+  when that delegation ends, narrows, or must return to confirmation;
 - stages, dependencies, ownership, and the next executable action;
-- acceptance evidence, confirmation gates, and stop or revision conditions.
+- acceptance evidence, semantic-event handling, confirmation gates, and stop
+  or revision conditions.
 
 Depth should match uncertainty and consequence. Do not manufacture phases,
 task hierarchies, roles, or test matrices to make the Plan look complete.
@@ -62,6 +65,17 @@ and then ask only about its prerequisites. Feasibility discovery supports a
 recommendation; it does not make a user-owned direction choice. Ordinary
 reversible implementation details remain agent-owned and must not create a
 confirmation ceremony.
+
+If explicit decision delegation covers the material choice, the Plan may mark
+that choice as Codex-owned within the stated task or stage envelope instead of
+creating a user gate. Compare the material effects, select an evidence-backed
+route, and preserve the decision and its impact. Delegation never expands Plan
+scope or authorizes a target, environment, or guarded action not named in the
+authorization contract.
+
+Decision delegation does not require a Plan. The same authority envelope and
+semantic-review rules apply to No-Plan work without creating a Plan entity or
+second permissions record.
 
 ## No-Plan To Plan
 
@@ -84,6 +98,21 @@ strategy, delivery form, material solution strategy, feasibility boundary,
 acceptance, stage dependency, or another choice that invalidates the active
 route. Record the cause, prior route, new route, affected work, and revalidation
 needed through the available Plan tool.
+
+New evidence, a failed material assumption, validation failure, milestone,
+scope or relevant external-state change, and a receipt mismatch are semantic
+events. In the default mode, reopen a compact user confirmation frontier when
+the required revision changes a user-owned route or contract. Under explicit
+decision delegation, Codex may decide the review depth and evolve the Plan,
+replace or reorder the route, or expand validation without asking while the
+change remains inside the active decision-authority envelope. Preserve the
+cause, prior route, new route, affected work, and revalidation needed.
+
+Reopen confirmation only when the revision must change the goal, exceed the
+delegated scope or decision classes, enter an unauthorized environment, or use
+an unlisted guarded action. A delegation that expires, is narrowed, or is
+revoked restores the corresponding confirmation gate. No semantic change means
+no Plan revision or repeated review merely to refresh the record.
 
 Ordinary code structure changes, local implementation choices, and corrected
 estimates do not require a user confirmation gate unless they materially alter

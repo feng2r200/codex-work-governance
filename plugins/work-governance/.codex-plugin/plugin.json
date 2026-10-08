@@ -1,7 +1,7 @@
 {
   "name": "work-governance",
-  "version": "2.0.0+codex.20261008141523",
-  "description": "Composable governance for goals, planning, delegation, Git, optional code intelligence, validation, long-running project continuity, project truth, archive curation, and reporting.",
+  "version": "2.0.0+codex.20261008145343",
+  "description": "Composable governance for adaptive decisions, planning, delegation, Git, optional code intelligence, validation, long-running project continuity, project truth, archive curation, and reporting.",
   "author": {
     "name": "feng2r200"
   },
@@ -16,8 +16,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Work Governance",
-    "shortDescription": "Composable governance with optional tool adapters.",
-    "longDescription": "Work Governance helps Codex discover the real goal, use Plans and SubAgents only when valuable, protect Git and authority boundaries, establish optional structural code intelligence safely, keep long-running project development recoverable, promote project truth deliberately, curate completed work before archival, validate proportionally, and report work completely. Core policy modules remain independent of storage and tool choices; optional adapters activate only for matching scenarios.",
+    "shortDescription": "Adaptive governance with optional tool adapters.",
+    "longDescription": "Work Governance helps Codex align goals, evidence, decisions, and authority before acting; adapt execution when semantic events change the route; use Plans and SubAgents only when valuable; protect Git and action boundaries; establish optional structural code intelligence safely; keep long-running project development recoverable; validate proportionally; and report work completely. Explicit decision delegation remains bounded, core policy stays independent of storage and tool choices, and optional adapters activate only for matching scenarios.",
     "developerName": "feng2r200",
     "category": "Productivity",
     "websiteURL": "https://github.com/feng2r200/codex-work-governance",
@@ -25,6 +25,7 @@
     "termsOfServiceURL": "https://github.com/feng2r200/codex-work-governance/blob/main/TERMS.md",
     "capabilities": [
       "Goal discovery",
+      "Adaptive decision and review",
       "Planning",
       "SubAgent governance",
       "Validation",
@@ -37,7 +38,7 @@
       "Work reporting"
     ],
     "defaultPrompt": [
-      "Use $work-governance:work-lifecycle to preserve goal, authority, momentum, and evidence with only the needed modules."
+      "Use $work-governance:work-lifecycle to align evidence and authority, then adapt execution at meaningful change."
     ]
   }
 }

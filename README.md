@@ -39,7 +39,44 @@ than a monolithic process engine.
   production actions, and destructive cleanup remain distinct boundaries.
 - **Evidence-calibrated:** validation expands with the claim and risk instead of
   becoming a fixed test ritual.
+- **Adaptive:** material choices are aligned before dependent work, while new
+  evidence triggers only the review and correction its impact warrants.
 - **Composable:** each Skill owns one judgment and remains useful on its own.
+
+## Adaptive Work Loop
+
+Work Governance distinguishes discoverable facts, ordinary implementation
+details, and material user-owned choices before execution commits to a route.
+The default mode puts material choices at a compact user confirmation frontier.
+When the user explicitly delegates judgment for a task or stage, Codex chooses
+inside that decision-authority envelope and continues without unnecessary
+stops.
+
+```text
+align goal, evidence, constraints, and authority
+                         |
+          +--------------+---------------+
+          |              |               |
+  discoverable fact  reversible detail  material choice
+    investigate         decide          default: confirm
+                                      delegated: decide
+                         |
+              smallest verifiable slice
+                         |
+                   semantic event
+                         |
+       bounded review, correction, and revalidation
+```
+
+Semantic events include new evidence, failed material assumptions, validation
+failures, milestones, scope or relevant external-state changes, and receipt
+mismatches. With explicit decision delegation, Codex may repair, roll back,
+replace or reorder the route, revise a Plan, or expand validation while it
+remains inside the envelope. It returns to the user only when the correction
+must change the goal, exceed the delegated scope, enter an unauthorized
+environment, or use an unlisted guarded action. Delegation transfers judgment;
+it never removes the evidence obligation or silently grants push, release,
+deployment, production, data, credential, or destructive authority.
 
 ```text
 User goal and authority
@@ -125,6 +162,13 @@ does not wait for an assumed approach to fail before asking the question. An
 explicit choice proceeds with only the bounded feasibility checks the next
 slice needs.
 
+If the user explicitly delegates the choice for the current task or stage,
+goal discovery compares the same material effects and selects the
+evidence-backed route directly. A later semantic event can trigger an
+autonomous correction inside that envelope; revocation, expiry, or an
+out-of-envelope action restores the corresponding confirmation gate. Unchanged
+state does not trigger repeated reading, review, reporting, or durable writes.
+
 For an enrolled long-running project, the project development module reads a
 small routing entry and only the bounded state and authority relevant to the
 task. At closeout it reconciles material progress, priority, decision, risk,
@@ -150,8 +194,10 @@ silently authorizes activation or repair.
 The provider-state evidence is recorded in
 [Provider Control-Plane Efficiency Synchronization Evidence](docs/validation/provider-control-plane-efficiency-v1.md).
 The CodeGraph ownership decision, readiness contract, validation scope, and
-local-adoption boundary are recorded in
+adoption boundary are recorded in
 [Code Intelligence Adapter Adoption Evidence](docs/validation/code-intelligence-adoption-v1.md).
+The adaptive decision-delegation and semantic-review contract is recorded in
+[Adaptive Decision and Review Loop Evidence](docs/validation/adaptive-decision-and-review-loop-v1.md).
 
 ## Package Layout
 

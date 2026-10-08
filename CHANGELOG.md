@@ -17,6 +17,9 @@ All notable changes to Work Governance are documented here. The project follows
 - Optional code intelligence governance that routes structural source questions
   to CodeGraph, establishes a verified per-checkout index when safe and useful,
   and keeps literal or unsupported content on native inspection routes.
+- An adaptive pre-alignment and execution-feedback loop with default user
+  confirmation, task- or stage-scoped explicit decision delegation, and
+  semantic-event-driven correction.
 
 ### Changed
 
@@ -40,6 +43,10 @@ All notable changes to Work Governance are documented here. The project follows
 - Tool neutrality is now an explicit core-policy property: optional adapters
   may ship with the plugin when they remain isolated, scenario-triggered,
   safely degradable, and unable to install or repair global tooling implicitly.
+- Goal discovery, Plan governance, project continuity, and reporting now share
+  one bounded decision-authority contract: delegated judgment can adapt the
+  route without unnecessary stops, but cannot expand scope, action authority,
+  evidence, or completion claims.
 
 ## 2.0.0 release candidate
 

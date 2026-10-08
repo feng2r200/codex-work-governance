@@ -8,22 +8,83 @@ description: Use for Codex work requests when Work Governance is available. Pres
 Use this skill as a small router and safety kernel. It does not impose one
 workflow on every request and does not own durable state.
 
+## Align Before Committing Work
+
+Before the first decision or mutation that can constrain the route, establish
+only what the current slice needs:
+
+- the intended outcome and how meaningful success or failure will be observed;
+- current evidence, separated from assumptions and unresolved choices;
+- scope, target, environment, constraints, and the actions actually authorized;
+  and
+- the smallest next slice that can produce useful evidence.
+
+Route each uncertainty by ownership:
+
+- investigate an in-scope fact when Codex can discover it safely;
+- decide an interchangeable, reversible implementation detail and keep moving;
+  and
+- treat a material choice about outcome, data, architecture, delivery, cost,
+  risk, acceptance, or authority as user-owned by default. Put a compact
+  confirmation frontier before dependent work unless explicit decision
+  delegation covers that choice.
+
+This alignment applies to No-Plan and Plan work alike. It is not a requirement
+to create a Plan or ask questions when the next slice is already clear.
+
+If the user explicitly requests analysis, a proposal, or a stop at the
+confirmation frontier, treat that as an execution boundary for the proposed
+next stage. Do not mutate files, create or update durable provider state or a
+Plan, change Git, install, or operate externally before the user authorizes
+execution.
+
+## Explicit Decision Delegation
+
+Explicit decision delegation transfers specified judgment from the user to
+Codex. Activate it only from the user's direct statement; never infer it from
+silence, urgency, a request to keep moving, available credentials, or authority
+granted in another task or stage.
+
+Unless the user states otherwise, the delegation lasts only for the current
+task or named stage. Define its decision-authority envelope from the authorized
+goal, scope, targets, environments, decision classes, and action permissions.
+The user's latest instruction can narrow or revoke it at any time.
+
+Inside that envelope, Codex may choose the solution strategy, architecture,
+priority, implementation structure, risk tradeoff, validation method, and
+semantic-event response. Outside it, the ordinary confirmation boundary still
+applies. Delegation does not expand the goal, scope, target, environment, or
+operations authorized. Push, release, deployment, production or data changes,
+credential use, destructive cleanup, and comparable guarded actions require
+explicit inclusion of the exact action and target in the same authorization
+contract.
+
+When that contract does explicitly include a guarded action, resolve the exact
+target and obtain the fresh guard evidence the action requires before executing
+it. Do not add another policy-only confirmation when the action, target, and
+preconditions are already unambiguous and verified.
+
+Record the operative decision, its evidence and rationale, and its material
+impact when continuity requires it. Do not record hidden reasoning or a
+step-by-step chain of thought.
+
 ## Working Contract
 
 - Treat the user's current explicit instruction as the highest task authority.
 - Infer routine details from available context and continue while the goal and
   safe next action are clear. Ask only when a user-owned answer can change the
   direction, final result, authority boundary, or an irreversible action.
-- Before a stage proposal, delegation, or mutation commits to a material
+- Before a stage proposal, agent delegation, or mutation commits to a material
   solution assumption, separate the requested outcome from the proposed means.
   Inspect cheap facts, then route unresolved user-owned choices to goal
   discovery; do not bury them in later feasibility or implementation checks.
 - Use the least governance that materially improves correctness, recovery, or
   coordination. Do not make process setup a prerequisite for already-actionable
   work.
-- In sustained coordination, let new evidence or a changed obligation trigger
-  another full read, review, delegation, or durable update. An unchanged status
-  alone is not a reason to repeat them; unknown status still needs resolution.
+- In sustained coordination, let a semantic event trigger only the review,
+  reread, agent delegation, or durable update its impact warrants. An unchanged
+  status alone is not a reason to repeat them; unknown status still needs
+  resolution.
 - Reuse one verified, bounded provider snapshot while its logical owner,
   provider revision or head, task scope, and relevant evidence identity remain
   unchanged. Invalidate only the affected path after an owner or route change,
@@ -88,11 +149,27 @@ workflow on every request and does not own durable state.
 - Load scene- or tool-specific Skills only when their actual scenario or tool
   is in scope. Their operating details do not belong in this lifecycle router.
 
-## Deviation
+## Semantic Review And Correction
 
-If evidence shows the current route no longer serves the goal, contain only the
-affected work, distinguish the observed failure from its possible causes, and
-choose the smallest causal correction. Return to the user only for a material
-change to an agreed goal or contract, data strategy, delivery form, authority,
-solution strategy, feasibility boundary, or irreversible outcome. Ordinary
-implementation structure changes remain an execution decision.
+A semantic event is new evidence, a failed material assumption, a validation
+failure, a milestone completion, a scope or relevant external-state change, or
+a mismatch between a receipt and observed state. Contain the affected work,
+separate the observed fact from possible causes, and review only the goal,
+route, priority, Plan, validation, or delivery claims the event can affect.
+
+In the default mode, correct ordinary implementation deviations directly, but
+return a material user-owned route or contract change to a compact confirmation
+frontier. With active explicit decision delegation, Codex decides review depth
+and may continue, repair, roll back, replace the approach, reorder work, revise
+a Plan, or expand validation without interrupting the user while the response
+remains inside the decision-authority envelope.
+
+Reopen user confirmation only when the correction must change the goal, exceed
+the delegated scope or decision classes, enter an unauthorized environment, or
+perform an unlisted guarded action. Decision delegation never permits ignoring
+evidence that undermines correctness, safety, or a completion claim, and it
+never widens a claim beyond the validation performed.
+
+If review finds no meaningful change, reuse current evidence and continue. Do
+not repeat broad reads, independent review, agent delegation, reporting, Plan
+updates, or durable writes merely to document that nothing changed.
