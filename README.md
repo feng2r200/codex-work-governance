@@ -147,8 +147,11 @@ degraded only for the named operation; stale, malformed, ambiguous, or
 integrity-failed control state blocks the affected provider path. Neither state
 silently authorizes activation or repair.
 
-The exact source and installed-adoption evidence is recorded in
+The provider-state evidence is recorded in
 [Provider Control-Plane Efficiency Synchronization Evidence](docs/validation/provider-control-plane-efficiency-v1.md).
+The CodeGraph ownership decision, readiness contract, validation scope, and
+local-adoption boundary are recorded in
+[Code Intelligence Adapter Adoption Evidence](docs/validation/code-intelligence-adoption-v1.md).
 
 ## Package Layout
 
