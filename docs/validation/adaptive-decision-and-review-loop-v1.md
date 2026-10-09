@@ -95,7 +95,6 @@ Source status on 2026-10-08:
 - the bundled Skill validator accepted all ten Skill packages; and
 - `git diff --check` passed.
 
-The optional bundled Plugin validator is not present in this Codex installation.
 Manifest identity, interface parity, package shape, and the absence of an
 embedded state or execution engine remain covered by the policy suite.
 

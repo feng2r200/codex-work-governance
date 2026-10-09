@@ -59,10 +59,9 @@ engine, hook, fallback ledger, or automatic repair.
   aggregate tree SHA-256
   `ccfcc90b9be46436b895e11c80ad05f28208f937e6cc736d7fc26df9c7c24f63`.
 
-The optional bundled Plugin validator is not present in the current Codex
-installation, so no claim is made for that unavailable check. Manifest
-alignment remains covered by the policy-contract suite, and the formal plugin
-manager accepted, installed, enabled, and read back the candidate.
+Manifest alignment remains covered by the policy-contract suite, and the
+formal plugin manager accepted, installed, enabled, and read back the
+candidate.
 
 ## Remote delivery
 

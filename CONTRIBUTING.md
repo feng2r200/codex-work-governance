@@ -31,8 +31,8 @@ uv run ruff check tests/test_policy_contract.py
 uv run ruff format --check tests/test_policy_contract.py
 ```
 
-Run the Codex Skill and plugin validators when they are available, using the
-commands in the repository README.
+Run the bundled Codex Skill validator when it is available, using the commands
+in the repository README.
 
 ## Pull Requests
 

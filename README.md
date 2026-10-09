@@ -255,21 +255,18 @@ uv sync --locked --all-groups
 uv run pytest
 uv run ruff check tests/test_policy_contract.py
 uv run ruff format --check tests/test_policy_contract.py
+git diff --check
 ```
 
-When the bundled Codex validators are available locally, also run:
+When the bundled Codex Skill validator is available locally, also run:
 
 ```sh
 SKILL_VALIDATOR="${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py"
-PLUGIN_VALIDATOR="${CODEX_HOME:-$HOME/.codex}/skills/.system/plugin-creator/scripts/validate_plugin.py"
 
 for skill in plugins/work-governance/skills/*; do
   test -f "$skill/SKILL.md" || continue
   uv run --with pyyaml python "$SKILL_VALIDATOR" "$skill"
 done
-
-uv run --with pyyaml python "$PLUGIN_VALIDATOR" plugins/work-governance
-git diff --check
 ```
 
 The current suite protects representative policy boundaries and packaging

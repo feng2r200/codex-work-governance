@@ -153,21 +153,18 @@ uv sync --locked --all-groups
 uv run pytest
 uv run ruff check tests/test_policy_contract.py
 uv run ruff format --check tests/test_policy_contract.py
+git diff --check
 ```
 
-如果本地可以使用 Codex 自带的验证器，还应运行：
+如果本地可以使用 Codex 自带的 Skill 验证器，还应运行：
 
 ```sh
 SKILL_VALIDATOR="${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py"
-PLUGIN_VALIDATOR="${CODEX_HOME:-$HOME/.codex}/skills/.system/plugin-creator/scripts/validate_plugin.py"
 
 for skill in plugins/work-governance/skills/*; do
   test -f "$skill/SKILL.md" || continue
   uv run --with pyyaml python "$SKILL_VALIDATOR" "$skill"
 done
-
-uv run --with pyyaml python "$PLUGIN_VALIDATOR" plugins/work-governance
-git diff --check
 ```
 
 当前测试套件保护具有代表性的政策边界和打包一致性。它还不是一套已经发布、用于衡量 Agent 实际效果的行为基准；这是一个有意保留并明确记录的区别，而不是被隐藏的缺口。

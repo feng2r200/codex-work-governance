@@ -137,10 +137,8 @@ The revised candidate passed:
 - the bundled Skill validator for all 12 packaged Skills; and
 - `git diff --check`.
 
-The optional bundled Plugin validator is not installed in this Codex
-environment and is not claimed. The forward scenario used the source Skill
-directly; it is evidence for candidate behavior, not proof of installed or
-remote adoption.
+The forward scenario used the source Skill directly; it is evidence for
+candidate behavior, not proof of installed or remote adoption.
 
 ## Remaining Boundaries
 
