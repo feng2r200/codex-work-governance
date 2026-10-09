@@ -149,6 +149,11 @@ step-by-step chain of thought.
   structural symbol, call-path, impact, affected-test, or cross-layer
   understanding, including safe per-checkout CodeGraph readiness. Keep literal
   text, prose, logs, and configuration on native inspection routes.
+- Load `work-governance:problem-discovery` when designing or reviewing how
+  tests, validation, or evidence should expose important defects early across
+  observation environments, state transitions, integrations, side effects, and
+  oracle behavior. Do not load it merely to run an already-defined routine test
+  suite.
 - Load `work-governance:independent-validation` only when a separate challenge
   adds meaningful confidence.
 - Load `work-governance:project-development-governance` when an explicitly

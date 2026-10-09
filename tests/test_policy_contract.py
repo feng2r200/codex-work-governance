@@ -15,6 +15,7 @@ SKILL_NAMES = {
     "subagent-governance",
     "git-change-governance",
     "code-intelligence",
+    "problem-discovery",
     "independent-validation",
     "project-development-governance",
     "project-truth-governance",
@@ -347,6 +348,27 @@ def test_validation_truth_and_reporting_boundaries() -> None:
     assert "Do not claim that nothing remains" in reporting
 
 
+def test_problem_discovery_is_early_stage_appropriate_and_risk_bounded() -> None:
+    """Keep proactive discovery broad enough to matter without becoming exhaustive."""
+    lifecycle = normalized(SKILLS / "work-lifecycle" / "SKILL.md")
+    discovery = normalized(SKILLS / "problem-discovery" / "SKILL.md")
+    validation = normalized(SKILLS / "independent-validation" / "SKILL.md")
+
+    assert "work-governance:problem-discovery" in lifecycle
+    assert "already-defined routine test suite" in lifecycle
+    assert "Do not assume the important claims have already been written down" in discovery
+    assert "work-governance:goal-discovery" in discovery
+    assert "must not invent a material product rule" in discovery
+    assert "orthogonal to risk dimensions" in discovery
+    assert "Concurrency is not a later stage" in discovery
+    assert "Do not multiply every dimension into an exhaustive Cartesian product" in discovery
+    assert "exact target and uniquely unresolved claim" in discovery
+    assert "maximum effect or cost per probe" in discovery
+    assert "Do not force every task through every environment" in discovery
+    assert "work-governance:independent-validation" in discovery
+    assert "primary need is to design the coverage" in validation
+
+
 def test_project_development_trigger_and_anti_trigger_are_explicit() -> None:
     skill_path = SKILLS / "project-development-governance" / "SKILL.md"
     text = read(skill_path)
@@ -619,6 +641,7 @@ def test_manifest_readme_and_project_metadata_match_architecture() -> None:
     assert "Project development continuity" in manifest["interface"]["capabilities"]
     assert "Optional code intelligence" in manifest["interface"]["capabilities"]
     assert "Adaptive decision and review" in manifest["interface"]["capabilities"]
+    assert "Problem discovery" in manifest["interface"]["capabilities"]
     assert "Project archive curation" in manifest["interface"]["capabilities"]
     assert portable["$schema"] == "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
     assert portable["name"] == manifest["name"] == project["project"]["name"]

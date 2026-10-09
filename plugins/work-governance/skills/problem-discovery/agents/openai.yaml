@@ -1,0 +1,4 @@
+interface:
+  display_name: "Problem Discovery"
+  short_description: "Design tests that expose important failures early"
+  default_prompt: "Use $work-governance:problem-discovery to design an early, risk-driven problem-discovery strategy for this work."

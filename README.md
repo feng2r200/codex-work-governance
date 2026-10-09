@@ -91,6 +91,7 @@ User goal and authority
           +-- SubAgent governance
           +-- Git boundaries
           +-- code intelligence (optional adapter)
+          +-- problem discovery
           +-- independent validation
           +-- project development continuity
           +-- project truth
@@ -111,6 +112,7 @@ Existing tools and project-specific Skills
 | `subagent-governance` | Delegation value, ownership, and integration |
 | `git-change-governance` | Branches, worktrees, commits, and remote boundaries |
 | `code-intelligence` | Structural source routing and current per-checkout CodeGraph readiness |
+| `problem-discovery` | Early, stage-appropriate falsification and validation design |
 | `independent-validation` | Proportional independent challenge |
 | `project-development-governance` | Long-running project entry, recovery, and state reconciliation |
 | `project-truth-governance` | Truth-source selection and deliberate promotion |
@@ -161,6 +163,18 @@ read-only. Literal text, documentation, logs, configuration, unsupported
 content, and protected or ambiguous locations stay on native inspection routes.
 The adapter never treats an index as project truth or silently installs global
 tooling.
+
+When tests or evidence must reveal problems rather than merely confirm an
+expected path, the problem-discovery module first maps the relevant actors,
+states, assets, effects, dependencies, and trust boundaries, then derives
+explicit and latent claims from changed seams and high-consequence boundaries.
+It chooses the earliest observation environment with trustworthy evidence,
+combines representative workloads with targeted state and boundary challenges,
+checks effects that may occur before an error, and tests the acceptance oracle
+itself. Observation environments remain separate from risk dimensions such as
+concurrency or recovery. Later integration or real-service checks are added
+only for bindings, composed behavior, or environmental and operational
+semantics that earlier deterministic evidence cannot represent.
 
 If the same outcome can be delivered through materially different approaches,
 goal discovery exposes that direction choice before a stage Plan hard-codes one
@@ -213,6 +227,9 @@ adoption boundary are recorded in
 [Code Intelligence Adapter Adoption Evidence](docs/validation/code-intelligence-adoption-v1.md).
 The adaptive decision-delegation and semantic-review contract is recorded in
 [Adaptive Decision and Review Loop Evidence](docs/validation/adaptive-decision-and-review-loop-v1.md).
+The source learning, architecture boundary, independent challenge, and
+forward-scenario evidence for early problem discovery are recorded in
+[Problem Discovery Skill Adoption Evidence](docs/validation/problem-discovery-adoption-v1.md).
 The combined source, current local activation, and remote delivery are recorded
 in [Integrated Code Intelligence And Adaptive Governance Delivery Evidence](docs/validation/integrated-code-intelligence-adaptive-delivery-v1.md).
 
@@ -222,7 +239,7 @@ The distributable plugin lives in `plugins/work-governance` and uses:
 
 - `plugin.json` as the portable Agent Plugins manifest;
 - `.codex-plugin/plugin.json` as the Codex compatibility fallback;
-- `skills/` for ten independent policy modules plus one optional
+- `skills/` for eleven independent policy modules plus one optional
   code-intelligence adapter; and
 - `.agents/plugins/marketplace.json` as the repository marketplace.
 

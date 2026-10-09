@@ -20,6 +20,9 @@ All notable changes to Work Governance are documented here. The project follows
 - An adaptive pre-alignment and execution-feedback loop with default user
   confirmation, task- or stage-scoped explicit decision delegation, and
   semantic-event-driven correction.
+- Problem-discovery governance for designing stage-appropriate falsifiers,
+  state and boundary coverage, side-effect observations, oracle challenges, and
+  bounded escalation from deterministic evidence to real dependencies.
 
 ### Changed
 

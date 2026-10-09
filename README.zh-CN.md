@@ -63,6 +63,7 @@ work-lifecycle 路由器
       +-- SubAgent 治理
       +-- Git 边界
       +-- 代码智能（可选适配）
+      +-- 问题发现
       +-- 独立验证
       +-- 项目开发连续性
       +-- 项目事实
@@ -83,6 +84,7 @@ work-lifecycle 路由器
 | `subagent-governance` | 委派价值、所有权和整合 |
 | `git-change-governance` | 分支、worktree、commit 和远端边界 |
 | `code-intelligence` | 结构化源码路由与按活动 checkout 保持 CodeGraph 就绪且最新 |
+| `problem-discovery` | 尽早、分阶段构造反例与设计验证 |
 | `independent-validation` | 与风险相匹配的独立质疑 |
 | `project-development-governance` | 长期项目入口、恢复与状态对账 |
 | `project-truth-governance` | 事实来源选择与审慎提升 |
@@ -115,6 +117,8 @@ codex plugin add work-governance@work-governance-local
 
 当开发任务需要理解符号、调用路径、影响范围、受影响测试或跨层关系时，可选的代码智能模块会检查精确的活动 checkout。如果本机 CodeGraph 可用，但该 checkout 没有最新索引，它可以创建、同步或完整刷新本地派生索引，并在回读确认最新后再开始查询；即使源码任务是只读的，也不跳过这一步。字面文本、文档、日志、配置、不支持的内容以及受保护或无法明确归属的位置仍使用原生检查路径。该适配模块不会把索引当成项目事实，也不会静默安装全局工具。
 
+当测试或证据的目标是主动暴露问题，而不只是确认预期路径时，问题发现模块会先建立参与者、状态、资产、副作用、依赖与信任边界的轻量行为模型，再推导显式和隐式声明。它把观测环境与并发、恢复等风险维度分开，选择最早具备可信观测条件的环境，同时结合代表性任务、状态与边界反例、错误前副作用检查和判定器负例。只有早期确定性证据无法表达的系统绑定、组合行为或环境与运行语义，才继续进入本地组合或获准的真实服务验证。
+
 如果同一目标存在会实质改变结果、边界、成本、风险或验收方式的不同方案，目标发现模块会在阶段 Plan 固化任一路线之前暴露这个方向选择。它可以核验前提与约束以形成建议，但不会等到某个未经确认的方案失败后才提问。用户已经明确选择方案时，只继续完成当前切片需要的有界可行性核验。
 
 如果用户明确委托当前任务或阶段内的方向选择，目标发现模块会比较同样的实质影响，并直接选取有证据支持的路线。之后出现语义事件时，只要纠偏仍在该包络内，就可以自主完成；委托被撤销、到期或动作越界时，相应确认门恢复。状态没有真实变化时，不重复读取、评审、汇报或持久化写入。
@@ -127,7 +131,7 @@ codex plugin add work-governance@work-governance-local
 
 当提供方具备只读的综合健康或就绪视图时，治理层优先复用这一个有界快照，而不重复执行等价的细分状态检查。路由干净未激活或能力缺失，只让对应操作处于降级状态；陈旧、损坏、歧义或完整性失败的控制状态会阻断受影响的提供方路径。两者都不会自动授予激活或修复权限。
 
-提供方状态证据记录在 [提供方控制面效率同步证据](docs/validation/provider-control-plane-efficiency-v1.md) 中。CodeGraph 的职责归属、就绪条件、验证范围与采纳边界记录在 [代码智能适配模块采纳证据](docs/validation/code-intelligence-adoption-v1.md) 中。自适应决策委托与语义回看合同记录在 [自适应决策与回看闭环证据](docs/validation/adaptive-decision-and-review-loop-v1.md) 中。组合源码、当前本机生效状态与远端交付记录在 [代码智能与自适应治理组合交付证据](docs/validation/integrated-code-intelligence-adaptive-delivery-v1.md) 中。
+提供方状态证据记录在 [提供方控制面效率同步证据](docs/validation/provider-control-plane-efficiency-v1.md) 中。CodeGraph 的职责归属、就绪条件、验证范围与采纳边界记录在 [代码智能适配模块采纳证据](docs/validation/code-intelligence-adoption-v1.md) 中。自适应决策委托与语义回看合同记录在 [自适应决策与回看闭环证据](docs/validation/adaptive-decision-and-review-loop-v1.md) 中。问题发现的来源学习、架构边界、独立质疑和前向场景证据记录在 [问题发现 Skill 采纳证据](docs/validation/problem-discovery-adoption-v1.md) 中。组合源码、当前本机生效状态与远端交付记录在 [代码智能与自适应治理组合交付证据](docs/validation/integrated-code-intelligence-adaptive-delivery-v1.md) 中。
 
 ## 包结构
 
@@ -135,7 +139,7 @@ codex plugin add work-governance@work-governance-local
 
 - `plugin.json` 作为可移植的 Agent Plugins manifest；
 - `.codex-plugin/plugin.json` 作为 Codex 兼容性后备 manifest；
-- `skills/` 存放十个相互独立的政策模块，以及一个可选的代码智能适配模块；
+- `skills/` 存放十一个相互独立的政策模块，以及一个可选的代码智能适配模块；
 - `.agents/plugins/marketplace.json` 作为仓库 marketplace。
 
 可移植 manifest 是面向未来的包权威来源。测试会确保它的身份信息和 OpenAI 接口元数据与兼容性 manifest 保持一致。

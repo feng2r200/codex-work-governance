@@ -8,6 +8,11 @@ description: Use when a plan, artifact, causal diagnosis, evidence set, activati
 Validation challenges a claim; it does not own the parent goal, plan,
 authorization, persistence records, or final wording.
 
+Use `work-governance:problem-discovery` when the primary need is to design the
+coverage, stages, falsifiers, side-effect observations, and oracles. Use this
+Skill when a separate challenge of that design or its resulting claim adds
+meaningful confidence.
+
 ## Use It Selectively
 
 Independent review is useful when:
