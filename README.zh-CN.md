@@ -82,7 +82,7 @@ work-lifecycle 路由器
 | `plan-governance` | Plan 准入、No-Plan 演进和实质性修订 |
 | `subagent-governance` | 委派价值、所有权和整合 |
 | `git-change-governance` | 分支、worktree、commit 和远端边界 |
-| `code-intelligence` | 结构化源码路由与按活动 checkout 安全建立 CodeGraph 就绪条件 |
+| `code-intelligence` | 结构化源码路由与按活动 checkout 保持 CodeGraph 就绪且最新 |
 | `independent-validation` | 与风险相匹配的独立质疑 |
 | `project-development-governance` | 长期项目入口、恢复与状态对账 |
 | `project-truth-governance` | 事实来源选择与审慎提升 |
@@ -113,7 +113,7 @@ codex plugin add work-governance@work-governance-local
 
 如果仓库存在未提交改动，Git 模块会保护无关工作。已授权阶段达到语义完整且其声明所需的验证通过后，Agent 可以按语义边界分组创建本地 commit，无需再单独确认；只读或仅方案确认门仍禁止 commit。如果 push 尚未获得授权，汇报模块会说明本地已验证的结果，并保持远端不变。
 
-当开发任务需要理解符号、调用路径、影响范围、受影响测试或跨层关系时，可选的代码智能模块会检查精确的活动 checkout。如果本机 CodeGraph 可用，但该 checkout 尚无索引，它可以先创建并回读验证本地派生索引，再开始查询。字面文本、文档、日志、配置、不支持的内容以及明确只读的位置仍使用原生检查路径。该适配模块不会把索引当成项目事实，也不会静默安装全局工具。
+当开发任务需要理解符号、调用路径、影响范围、受影响测试或跨层关系时，可选的代码智能模块会检查精确的活动 checkout。如果本机 CodeGraph 可用，但该 checkout 没有最新索引，它可以创建、同步或完整刷新本地派生索引，并在回读确认最新后再开始查询；即使源码任务是只读的，也不跳过这一步。字面文本、文档、日志、配置、不支持的内容以及受保护或无法明确归属的位置仍使用原生检查路径。该适配模块不会把索引当成项目事实，也不会静默安装全局工具。
 
 如果同一目标存在会实质改变结果、边界、成本、风险或验收方式的不同方案，目标发现模块会在阶段 Plan 固化任一路线之前暴露这个方向选择。它可以核验前提与约束以形成建议，但不会等到某个未经确认的方案失败后才提问。用户已经明确选择方案时，只继续完成当前切片需要的有界可行性核验。
 

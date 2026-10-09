@@ -1,6 +1,6 @@
 # Code Intelligence Adapter Adoption Evidence
 
-Status: Plan B source, combined integration, and current local activation verified
+Status: Plan B source, combined integration, current local activation verified; freshness contract amended 2026-10-09
 Date: 2026-10-08
 
 ## Why the ownership changed
@@ -39,14 +39,20 @@ The adapter checks three independent conditions before relying on CodeGraph:
 When those conditions apply and the checkout is writable, uninitialized, and
 authorized for local derived-state creation, the adapter may run the
 non-interactive initialization flow and must read status back before querying.
+For an existing index, pending changes, stale coverage, a worktree mismatch,
+an extraction-version mismatch, a reindex recommendation, or another unknown
+freshness condition requires an incremental refresh and status readback before
+querying; if it remains stale, the adapter performs a full index refresh and
+reads status back again. This applies even when the source task is read-only.
 The resulting `.codegraph/` directory is local derived state. It is excluded
 locally rather than promoted to project truth or committed merely to hide the
 index.
 
-The adapter does not initialize an index for prose, logs, configuration,
-unsupported content, an explicitly read-only task, a synced project mirror,
-or another protected or ambiguous path. Missing global capability degrades to
-native inspection without silently installing or upgrading CodeGraph. Locks,
+The adapter does not initialize or refresh an index for prose, logs,
+configuration, unsupported content, a synced project mirror, or another
+protected or ambiguous path. A source-read-only boundary alone does not block
+local derived-index refresh. Missing global capability degrades to native
+inspection without silently installing or upgrading CodeGraph. Locks,
 integrity failures, forced initialization, `uninit`, and `unlock` remain
 separate diagnosis and authorization boundaries.
 
@@ -58,7 +64,7 @@ separate diagnosis and authorization boundaries.
 | Structural question and safe uninitialized checkout | Initialize non-interactively, read status back, then query | Initialization is checkout-specific local derived state |
 | Structural question but CodeGraph is unavailable or incompatible | Use native inspection and report the degraded route | No implicit global install, upgrade, or MCP reconfiguration |
 | Literal text, documentation, policy prose, logs, or configuration | Use `rg`, file listing, and direct reads | No unnecessary graph query or index creation |
-| Pending or stale indexed files | Refresh only when the affected claim needs current graph state | No default full rebuild |
+| Pending or stale indexed files | Always refresh before a structural graph query; use incremental sync first and full index refresh if the readback remains stale | No query against stale state; no full rebuild when the index is already current |
 | Lock, integrity problem, or failed incremental repair | Preserve evidence and continue safe native work | No destructive repair without separate authority |
 
 ## Verification snapshot

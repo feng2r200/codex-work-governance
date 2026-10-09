@@ -90,8 +90,8 @@ def test_public_plugin_core_is_tool_neutral_and_has_no_state_engine() -> None:
     assert not (PLUGIN / "scripts").exists()
 
 
-def test_code_intelligence_routes_and_establishes_bounded_readiness() -> None:
-    """Keep CodeGraph useful without making it a universal prerequisite."""
+def test_code_intelligence_routes_and_refreshes_bounded_readiness() -> None:
+    """Keep CodeGraph current without making it a universal prerequisite."""
     lifecycle = normalized(SKILLS / "work-lifecycle" / "SKILL.md")
     skill = normalized(SKILLS / "code-intelligence" / "SKILL.md")
     operations = normalized(SKILLS / "code-intelligence" / "references" / "codegraph.md")
@@ -102,11 +102,14 @@ def test_code_intelligence_routes_and_establishes_bounded_readiness() -> None:
     assert "Active-checkout index health" in skill
     assert "active checkout, not from the Git common directory" in skill
     assert "current authority permits local derived-state creation" in skill
+    assert "Source-read-only is not derived-state-read-only" in skill
     assert "codegraph status --json" in skill
     assert "synced project mirror" in skill
     assert "reference-only `sources/` tree" in skill
     assert "Do not install CodeGraph" in skill
     assert "This local derived index is neither project truth nor durable work state" in skill
+    assert "Before any CodeGraph query" in skill
+    assert "Refresh only what the evidence requires" in skill
     assert "Never run destructive `uninit`" in skill
 
     assert 'PROJECT_ROOT="$(git rev-parse --show-toplevel)"' in operations
@@ -115,6 +118,9 @@ def test_code_intelligence_routes_and_establishes_bounded_readiness() -> None:
     assert 'codegraph sync "$PROJECT_ROOT"' in operations
     assert 'codegraph index "$PROJECT_ROOT"' in operations
     assert "The second command is mandatory readback" in operations
+    assert "Do not issue a CodeGraph query against that index" in operations
+    assert "regardless of whether the source task is read-only" in operations
+    assert "Only use CodeGraph after the final readback proves the index is current" in operations
     assert "`index.state` is complete" in operations
     assert "`worktreeMismatch` is null" in operations
     assert "`index.reindexRecommended` is false" in operations

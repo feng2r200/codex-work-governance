@@ -110,7 +110,7 @@ Existing tools and project-specific Skills
 | `plan-governance` | Plan admission, No-Plan evolution, and material revision |
 | `subagent-governance` | Delegation value, ownership, and integration |
 | `git-change-governance` | Branches, worktrees, commits, and remote boundaries |
-| `code-intelligence` | Structural source routing and safe per-checkout CodeGraph readiness |
+| `code-intelligence` | Structural source routing and current per-checkout CodeGraph readiness |
 | `independent-validation` | Proportional independent challenge |
 | `project-development-governance` | Long-running project entry, recovery, and state reconciliation |
 | `project-truth-governance` | Truth-source selection and deliberate promotion |
@@ -155,10 +155,12 @@ local result and leaves the remote untouched.
 When a development task needs symbol, call-path, impact, affected-test, or
 cross-layer understanding, the optional code-intelligence module checks the
 exact active checkout. If CodeGraph is available but that checkout has no
-index, it can create and verify the local derived index before querying it.
-Literal text, documentation, logs, configuration, unsupported content, and
-explicitly read-only locations stay on native inspection routes. The adapter
-never treats an index as project truth or silently installs global tooling.
+current index, it can create, synchronize, or fully refresh the local derived
+index and verify it before querying it, including when the source task is
+read-only. Literal text, documentation, logs, configuration, unsupported
+content, and protected or ambiguous locations stay on native inspection routes.
+The adapter never treats an index as project truth or silently installs global
+tooling.
 
 If the same outcome can be delivered through materially different approaches,
 goal discovery exposes that direction choice before a stage Plan hard-codes one

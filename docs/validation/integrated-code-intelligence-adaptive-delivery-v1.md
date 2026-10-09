@@ -10,9 +10,11 @@ effective plugin:
 
 1. **Code intelligence:** move CodeGraph-specific judgment out of the generic
    `cli-command-reference` Skill and into an optional Work Governance adapter;
-   create safe checkout-specific readiness only for structural source
-   questions; retain native inspection for prose, literal text, logs,
-   configuration, unsupported content, and read-only boundaries.
+   create and refresh safe checkout-specific readiness only for structural
+   source questions; retain native inspection for prose, literal text, logs,
+   configuration, unsupported content, and protected or ambiguous boundaries.
+   A source-read-only structural task may refresh only the local derived index
+   before querying it.
 2. **Adaptive governance:** align goal, evidence, constraints, decision owner,
    and action authority before dependent work; keep material choices
    user-owned by default; allow explicit task- or stage-scoped decision
@@ -95,6 +97,14 @@ Skill and CodeGraph operations reference are present.
 
 The completed isolated adaptive worktree remains preserved as historical
 provenance. It is no longer the active marketplace source.
+
+## Current CodeGraph freshness amendment
+
+The current contract requires a structural task to inspect exact-checkout
+CodeGraph status and refresh any stale, mismatched, or extraction-version-old
+index before querying it. This includes source-read-only work because `.codegraph`
+is local derived state; it does not authorize source edits, commits, remote
+operations, or refreshes in protected or ambiguous paths.
 
 ## Remote delivery
 
