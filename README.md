@@ -13,6 +13,12 @@ and durable state enter only when they add value.
 
 Created and maintained by [feng2r200](https://github.com/feng2r200).
 
+The current semantic plugin version is `2.1.0`. Release-impacting changes to
+Skills, plugin metadata, packaging, installation, or release workflow must bump
+the version according to compatibility impact. Build timestamps and Git commits
+are provenance only; they do not replace a semantic version bump. The CI gate
+enforces this contract.
+
 ## Why It Exists
 
 Capable Agents usually do not fail because they lack another mandatory
@@ -138,6 +144,15 @@ codex plugin add work-governance@work-governance-local
 
 Open a new Codex task after installing or updating. Existing tasks can retain
 the Skill content that was loaded when they started.
+
+After local adoption, verify the enabled version with `codex plugin list` and
+remove older direct cache entries with:
+
+```sh
+scripts/prune-local-plugin-cache.sh \
+  --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
+  --keep-version 2.1.0
+```
 
 ## Example Behavior
 

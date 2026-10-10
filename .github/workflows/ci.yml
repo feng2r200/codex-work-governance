@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
@@ -22,6 +24,16 @@ jobs:
 
       - name: Install locked dependencies
         run: uv sync --locked --all-groups
+
+      - name: Validate semantic version bump
+        env:
+          VERSION_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -n "$VERSION_BASE_REF" ] && [ "$VERSION_BASE_REF" != "0000000000000000000000000000000000000000" ]; then
+            scripts/validate-version-bump.sh --base-ref "$VERSION_BASE_REF"
+          else
+            scripts/validate-version-bump.sh
+          fi
 
       - name: Lint policy contracts
         run: uv run ruff check tests/test_policy_contract.py

@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "work-governance",
-  "version": "2.0.0+codex.20261009111424",
+  "version": "2.1.0",
   "description": "Composable governance for adaptive decisions, problem discovery, planning, delegation, Git, optional code intelligence, validation, long-running project continuity, project truth, archive curation, and reporting.",
   "author": {
     "name": "feng2r200",

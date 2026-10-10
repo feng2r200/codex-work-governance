@@ -650,6 +650,24 @@ def test_manifest_readme_and_project_metadata_match_architecture() -> None:
     assert portable["author"]["name"] == manifest["author"]["name"] == "feng2r200"
     assert portable["license"] == manifest["license"] == project["project"]["license"]
     assert portable_interface == manifest["interface"]
-    assert project["project"]["version"] == "2.0.0"
+    assert project["project"]["version"] == "2.1.0"
+    assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", portable["version"])
     assert project["project"]["dependencies"] == []
     assert "/.work-governance/" in read(ROOT / ".gitignore").splitlines()
+
+
+def test_release_versioning_and_local_cleanup_contract_is_present() -> None:
+    """Keep semantic versioning and historical-cache cleanup enforceable."""
+    policy = read(ROOT / "docs" / "validation" / "versioning-and-installation-policy.md")
+    gate = ROOT / "scripts" / "validate-version-bump.sh"
+    prune = ROOT / "scripts" / "prune-local-plugin-cache.sh"
+    assert "release-impacting paths" in policy
+    assert "CI compares the current" in policy
+    assert "prune-local-plugin-cache.sh" in policy
+    assert gate.is_file()
+    assert prune.is_file()
+    assert "release-impacting changes require a semantic version bump" in read(gate)
+    prune_text = read(prune)
+    assert 'manifest_value "$manifest" name' in prune_text
+    assert 'manifest_value "$manifest" version' in prune_text
+    assert "work-governance" in prune_text

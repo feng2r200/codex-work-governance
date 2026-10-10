@@ -5,6 +5,10 @@ All notable changes to Work Governance are documented here. The project follows
 
 ## Unreleased
 
+No unreleased changes.
+
+## 2.1.0 - 2026-10-10
+
 ### Added
 
 - A complete Simplified Chinese README with bidirectional language navigation.
@@ -23,6 +27,10 @@ All notable changes to Work Governance are documented here. The project follows
 - Problem-discovery governance for designing stage-appropriate falsifiers,
   state and boundary coverage, side-effect observations, oracle challenges, and
   bounded escalation from deterministic evidence to real dependencies.
+- Semantic version-bump enforcement for release-impacting Skills, plugin
+  metadata, packaging, installation, and release-workflow changes.
+- Exact local plugin-cache cleanup for removing verified historical versions
+  after adoption.
 
 ### Changed
 
@@ -62,6 +70,8 @@ All notable changes to Work Governance are documented here. The project follows
   non-rewriting local commits as ordinary stage checkpoints without a separate
   confirmation, while read-only gates, remote delivery, history rewriting, and
   destructive Git operations remain independently protected.
+- The portable and compatibility manifests now use the semantic version from
+  the project metadata instead of timestamp-only `2.0.0+codex.*` identities.
 
 ## 2.0.0 release candidate
 

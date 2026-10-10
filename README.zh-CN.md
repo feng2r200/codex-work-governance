@@ -8,6 +8,8 @@ Work Governance 帮助 Agent 发现真实目标，只引入任务确实需要的
 
 由 [feng2r200](https://github.com/feng2r200) 创建并维护。
 
+当前语义插件版本为 `2.1.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
+
 ## 为什么需要它
 
 能力强大的 Agent 通常不是因为缺少另一套强制工作流而失败，而是因为它们：
@@ -108,6 +110,14 @@ codex plugin add work-governance@work-governance-local
 ```
 
 安装或更新后，请新建一个 Codex 任务。已有任务可能继续保留其启动时加载的 Skill 内容。
+
+本地采用完成后，使用 `codex plugin list` 核对启用版本，并用下面的命令删除旧的直接缓存目录：
+
+```sh
+scripts/prune-local-plugin-cache.sh \
+  --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
+  --keep-version 2.1.0
+```
 
 ## 行为示例
 
