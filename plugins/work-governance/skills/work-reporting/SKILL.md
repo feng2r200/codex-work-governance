@@ -71,5 +71,14 @@ For a real handoff, add the context another agent or future session needs:
 - failed attempts or invalidated routes worth avoiding;
 - open questions, risks, next action, and stop conditions.
 
+When a Plan exits, report the bounded disposition result instead of only its
+new status: preserved terminal history, `retain-original` assessments and their
+unchanged identity, status, or version, old and successor Task identities,
+machine-readable handoff or supersession, cancellation reasons, continued or
+deferred carriers and next entries, protected current Goal, Plan, and external
+`depends_on` references, and any in-progress or live-claim transition still
+unresolved. Distinguish Task status from executable currentness, bind the report
+to the exact readback boundary, and label a partial assessment as incomplete.
+
 Use a persistence capability for durable handoff mechanics when available; this
 Skill decides what the handoff must mean, not how a particular tool stores it.

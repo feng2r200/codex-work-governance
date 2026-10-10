@@ -239,6 +239,19 @@ after stage completion and acceptance, using verified artifacts, relevant
 conversation decisions, and provider records; then preserve a provider-side
 reference or evidence pointer to that snapshot.
 
+### Plan Exit Reconciliation
+
+Use
+[Plan Exit And Task Disposition](../../plan-governance/SKILL.md)
+as the single authority for bounded inventory, traversal-integrity stops,
+current-reference protection, Task outcomes, claim handling, and exact
+readback. Project continuity adds only this obligation: reconcile the verified
+changed or retained outcomes into the selected execution-state provider at the
+same semantic checkpoint. Preserve an incomplete exit and its exact integrity
+finding without guessing or opening a second provider queue. An accurate
+no-delta assessment creates no Task mutation or version churn. Provider-specific
+schemas and mutation mechanics remain with the selected provider Skill.
+
 ## Trigger And Anti-Trigger Scenarios
 
 | Scenario | Expected route |
@@ -261,3 +274,5 @@ reference or evidence pointer to that snapshot.
 | An older operation is already delivered, terminal, replaced, or semantically superseded | Preserve that distinction and do not replay it merely to clear an open status |
 | A precise mutation receipt and exact target readback match the recovered snapshot | Advance the bounded packet; do not repeat broad recovery |
 | Provider owner, route, revision, head, scope, external-write state, or evidence identity changes | Invalidate and reread the affected path; broaden only when the change cannot be bounded |
+| An active Plan is replaced or abandoned while nonterminal Tasks remain | Apply Plan Exit And Task Disposition, then reconcile its verified changed or retained outcomes |
+| A Plan-exit inventory finds a primary cycle, missing stable identity, or conflicting primary parents | Keep that exit incomplete and preserve current state under Plan Exit And Task Disposition; continue unrelated project work |

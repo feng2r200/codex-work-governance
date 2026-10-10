@@ -7,6 +7,17 @@ All notable changes to Work Governance are documented here. The project follows
 
 No unreleased changes.
 
+## 2.2.0 - 2026-10-10
+
+### Added
+
+- Tool-neutral Plan-exit Task assessment for retain-original, replacement,
+  abandonment, cancellation, continuation, and deferral, including bounded
+  nested Plan and Task containment, fail-closed graph-integrity stops, current
+  Goal, Plan, and external dependency protection, live-claim handoff, explicit
+  currentness recovery, and exact readback closure without no-delta version
+  churn.
+
 ## 2.1.0 - 2026-10-10
 
 ### Added

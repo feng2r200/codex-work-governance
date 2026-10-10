@@ -8,7 +8,7 @@ Work Governance 帮助 Agent 发现真实目标，只引入任务确实需要的
 
 由 [feng2r200](https://github.com/feng2r200) 创建并维护。
 
-当前语义插件版本为 `2.1.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
+当前语义插件版本为 `2.2.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
 
 ## 为什么需要它
 
@@ -116,12 +116,14 @@ codex plugin add work-governance@work-governance-local
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 2.1.0
+  --keep-version 2.2.0
 ```
 
 ## 行为示例
 
 面对一个可直接执行的缺陷修复，Work Governance 应当让 Agent 直接检查、实现并运行针对性测试，而不是要求先创建 Plan。如果同一任务后来扩展为必须跨交接持续推进的多个依赖阶段，Agent 可以在那时创建一次 Plan，并继承已经发现的有效结论、约束和证据。
+
+当活动 Plan 被替代或放弃时，Work Governance 会沿 primary containment 把嵌套 Plan 与 Task 纳入一个有界评估范围。每个 Task 都可以在准确评估后保持原 identity、status 和 version，也可以由带可机读承接关系的后继 Task 替代、带原因取消、继续或延后。状态与可执行 currentness 分别判断，同时保护其他 current Goal、Plan 和外部依赖引用；Plan 退出闭合前必须精确回读发生变更或保持不变的结果。
 
 如果仓库存在未提交改动，Git 模块会保护无关工作。已授权阶段达到语义完整且其声明所需的验证通过后，Agent 可以按语义边界分组创建本地 commit，无需再单独确认；只读或仅方案确认门仍禁止 commit。如果 push 尚未获得授权，汇报模块会说明本地已验证的结果，并保持远端不变。
 

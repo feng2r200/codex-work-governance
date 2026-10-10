@@ -125,6 +125,14 @@ long-lived architecture or contract changes in project authority; keep
 temporary execution state and pending choices in the selected provider. Do not
 roll the stage baseline forward during ordinary in-stage work.
 
+When an active Plan is replaced, abandoned, cancelled, or retired, reconcile
+its verified assessment in the same semantic checkpoint. Apply
+[Plan Exit And Task Disposition](../plan-governance/SKILL.md)
+as the single authority for bounded traversal, integrity stops, current
+reference protection, Task outcomes, claim handling, and exact readback. This
+project contract adds continuity reconciliation; it does not redefine that
+exit contract. The Plan-level status alone is not a closeout result.
+
 Semantic events include new evidence, a failed material assumption, validation
 failure, milestone completion, scope or relevant external-state change, and a
 receipt mismatch. Under explicit decision delegation, record only material
@@ -161,7 +169,11 @@ After validating the work and before making the final continuity claim:
    priority, material decisions and reasons, open risks and boundary cases, and
    acceptance evidence in the single state provider. Include any material
    delegated decision or changed decision-authority envelope; omit routine
-   choices and unchanged review outcomes.
+   choices and unchanged review outcomes. For an exited Plan, include each
+   affected nonterminal Task's assessment, including an unchanged retained
+   result, effective carrier or terminal reason, currentness, next entry or
+   re-entry condition, and successor, current Goal or Plan, or external
+   `depends_on` relation.
 3. Reconcile every durable operation created by the current task through the
    provider's bounded delivery and exact readback when existing authority
    already covers that operation and target. The responsible task, not the

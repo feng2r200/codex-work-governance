@@ -282,6 +282,38 @@ def test_plan_is_independent_and_no_plan_can_evolve() -> None:
     assert "per-version test suites" in plan
 
 
+def test_plan_exit_contract_is_bounded_and_reused_by_lifecycle_routers() -> None:
+    """Keep one bounded Plan-exit contract without freezing its prose."""
+    plan = normalized(SKILLS / "plan-governance" / "SKILL.md")
+    lifecycle = normalized(SKILLS / "work-lifecycle" / "SKILL.md")
+    project = normalized(SKILLS / "project-development-governance" / "SKILL.md")
+    contract = normalized(
+        SKILLS / "project-development-governance" / "references" / "project-contract.md"
+    )
+    reporting = normalized(SKILLS / "work-reporting" / "SKILL.md")
+
+    assert plan.count("### Plan Exit And Task Disposition") == 1
+    for action_anchor in [
+        "`retain-original`",
+        "stable Plan and Task identity",
+        "visit each identity once",
+        "primary-containment cycle",
+        "conflicting primary parents",
+        "exact readback",
+    ]:
+        assert action_anchor in plan
+    assert "Valid secondary references" in plan
+    assert "are not conflicting primary parents" in plan
+
+    exit_contract = "plan-governance/SKILL.md"
+    for dependent_text in [lifecycle, project, contract]:
+        assert exit_contract in dependent_text
+        assert "single authority" in dependent_text
+
+    assert "Plan-exit inventory finds a primary cycle" in contract
+    assert "label a partial assessment as incomplete" in reporting
+
+
 def test_subagent_rules_preserve_net_value_and_single_ownership() -> None:
     subagent = normalized(SKILLS / "subagent-governance" / "SKILL.md")
     assert "provides net value" in subagent
@@ -650,7 +682,7 @@ def test_manifest_readme_and_project_metadata_match_architecture() -> None:
     assert portable["author"]["name"] == manifest["author"]["name"] == "feng2r200"
     assert portable["license"] == manifest["license"] == project["project"]["license"]
     assert portable_interface == manifest["interface"]
-    assert project["project"]["version"] == "2.1.0"
+    assert project["project"]["version"] == "2.2.0"
     assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", portable["version"])
     assert project["project"]["dependencies"] == []
     assert "/.work-governance/" in read(ROOT / ".gitignore").splitlines()

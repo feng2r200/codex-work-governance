@@ -175,6 +175,17 @@ a mismatch between a receipt and observed state. Contain the affected work,
 separate the observed fact from possible causes, and review only the goal,
 route, priority, Plan, validation, or delivery claims the event can affect.
 
+A Plan exit or replacement is also a semantic event when Tasks depend on that
+Plan for currentness, ownership, or execution entry. Use
+[Plan Exit And Task Disposition](../plan-governance/SKILL.md)
+as the single authority for exit scope, traversal integrity, reference
+protection, Task assessment, and exact readback. The Plan mutation alone does
+not complete the exit, and an accurate assessment may retain an unchanged Task.
+Do not widen the check into a full project scan, create a Plan for No-Plan work,
+or repeat confirmation for dispositions already covered by current authority.
+Reopen the frontier only when the disposition changes the goal, budget,
+permissions, environment, or another guarded boundary.
+
 In the default mode, correct ordinary implementation deviations directly, but
 return a material user-owned route or contract change to a compact confirmation
 frontier. With active explicit decision delegation, Codex decides review depth
