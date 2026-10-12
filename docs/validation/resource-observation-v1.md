@@ -1,6 +1,6 @@
 # Development Resource Observation
 
-Status: source contract; validation results are recorded below
+Status: implemented, source-validated, and locally installed
 Date: 2026-10-12
 Version: 2.3.0
 
@@ -108,5 +108,22 @@ Validation and local adoption evidence will distinguish those claims explicitly.
   Capability completeness still depends on its own accepted oracle; this policy
   cannot declare a retrieval metric or batch sample sufficient by itself.
 
-Local installation, source parity, and current-context loading are separate
-claims to be recorded at adoption.
+### Local adoption
+
+- The validated implementation was committed as
+  `a60ed10d8bfe55492f6e7023151e0f29149e38e5` and fast-forward integrated into the
+  verified local default branch. No unrelated source changes were included.
+- Version 2.3.0 was installed through the existing local marketplace and read
+  back as installed and enabled. All 30 plugin files matched the source tree
+  byte for byte, including the new resource-observation Skill and metadata.
+- Independent narrow review confirmed that the recording and aggregation
+  clarifications preserve the original nine decisions. External billing-system
+  access still requires its applicable target, credential, and data authority;
+  an active-context pending packet is not durable storage.
+- Existing long-chat hot reload was not verified. New conversations are the
+  recommended adoption entry. No actual service probe, automated accounting,
+  protection engine, measured savings, remote Push, or public release was part
+  of this adoption. Existing caches and unrelated worktrees were preserved.
+
+Ongoing delivery and exact readback belong to the selected durable provider;
+this document is the accepted local phase snapshot, not an execution ledger.
