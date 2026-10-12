@@ -152,6 +152,8 @@ scripts/prune-local-plugin-cache.sh \
 
 前端任务可使用 `frontend-governance`，把选定参考、交付层级、必需交互、产品文案与实际结果连接起来。截图不能证明隐藏行为，Demo 的模拟状态不能改变业务 API 合同。必需控件保留约定动作；清除开发说明不能替代功能修复。验收覆盖本次涉及的必需流程，分别说明构建、视觉、交互、模拟与真实集成的证据范围。一处文案或样式修复仍按小任务推进，实现与浏览器操作沿用项目和工具 Skill。按需读取的验收示例用于澄清结果，不强制固定表单或新增状态账本。
 
+首次可显式调用：`使用 $work-governance:frontend-governance 处理这次前端修改，保留指定参考与当前业务合同。` 源码、场景、纠正和本机采用的证据边界见 [前端治理第一版采用记录](docs/validation/frontend-governance-v1.md)。
+
 ## 包结构
 
 可分发 Plugin 位于 `plugins/work-governance`，其中使用：

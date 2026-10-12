@@ -279,6 +279,10 @@ distinguishing builds, visual evidence, interactions, mocks, and real integratio
 A small label or style repair remains a small task; project and tool Skills
 retain implementation and browser routing. The conditional delivery-checks
 reference supplies examples without imposing a fixed form or new state ledger.
+For an explicit first use, ask `Use $work-governance:frontend-governance for this
+frontend change, preserving the specified reference and current business contracts.`
+Source, scenario, correction, and local-adoption boundaries are recorded in
+[Frontend Governance First-Version Adoption](docs/validation/frontend-governance-v1.md).
 
 ## Package Layout
 
