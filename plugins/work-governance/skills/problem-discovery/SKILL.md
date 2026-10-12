@@ -74,7 +74,7 @@ semantics are part of the claim.
 | Design and static contract | Missing states, contradictory obligations, unsafe ownership, irreversible-effect assumptions, schema and compatibility gaps |
 | Isolated deterministic execution | Boundary values, state transitions, ordering, stale ownership, exact calls and effects, positive and negative controls using controlled time, scheduling, storage, or transport |
 | Local composed system | Actual serialization, transport, identity, roles, persistence, networking, dependency wiring, and multi-step or multi-round flow |
-| Authorized real dependency | Provider- or environment-specific behavior with the smallest useful probe, explicit budget, and stop conditions |
+| Authorized real dependency | Provider- or environment-specific behavior with a useful scoped probe, applicable binding limits, and evidence-based stop conditions |
 | Acceptance and operation | Business truth, artifact and input binding, drift, recovery evidence, observability, and the accuracy of the acceptance method itself |
 
 Choose the earliest environment that can produce trustworthy evidence for the
@@ -194,10 +194,17 @@ evidence should precede expensive or external probes, but they do not replace
 the real dependency behavior they cannot represent.
 
 Real services, paid calls, production-like environments, credentials, and data
-effects remain within their existing authorization, budget, and stop
-conditions. Before an external probe, name the exact target and uniquely
-unresolved claim, the maximum effect or cost per probe, the total budget, and
-the stopping response to the first unexplained result or unexpected effect.
+effects remain within their existing authorization and applicable binding
+limits. Before an external probe, name the exact target and uniquely unresolved
+claim, authorized effects, any explicit binding budget and its source, and the
+stopping response to the first unexplained result or unexpected effect.
+Assess uncertain consumption using [Resource Observation](../resource-observation/SKILL.md);
+record estimates and unknowns without inventing a per-probe or total numerical
+cap. An already authorized probe does not need renewed approval merely because
+billing telemetry is missing or an agent estimate changed. New spending
+commitments, actual resource failures, and other authority changes still require
+their appropriate response. Do not weaken the required evidence to satisfy a
+savings target.
 Stop when no remaining claim is unique to that environment. More tests, calls,
 retries, Agents, or progress messages are not evidence of better discovery by
 themselves.

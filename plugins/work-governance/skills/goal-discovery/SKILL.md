@@ -68,6 +68,13 @@ check.
 Do not open this frontier for an ordinary, reversible implementation detail
 whose alternatives are interchangeable for the current slice.
 
+Expected development consumption and corrected estimates are observations,
+not implicit direction choices or hard budgets. Continue within existing
+authority; route an actual spending commitment, binding-limit change, or
+material outcome tradeoff through its owner. Use
+[Resource Observation](../resource-observation/SKILL.md) when this distinction
+or a resource assessment affects the current work.
+
 ## Decision Frontier
 
 Use a compact frontier only when one unresolved choice would change the product

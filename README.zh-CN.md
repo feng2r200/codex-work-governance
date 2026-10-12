@@ -8,7 +8,7 @@ Work Governance 帮助 Agent 发现真实目标，只引入任务确实需要的
 
 由 [feng2r200](https://github.com/feng2r200) 创建并维护。
 
-当前语义插件版本为 `2.2.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
+当前语义插件版本为 `2.3.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
 
 ## 为什么需要它
 
@@ -92,6 +92,7 @@ work-lifecycle 路由器
 | `project-truth-governance` | 事实来源选择与审慎提升 |
 | `project-archive-curation` | 保留位置与归档就绪判断 |
 | `work-reporting` | 进度、交接和完成汇报 |
+| `resource-observation` | 消耗评估与记录、真实额度边界及后续增强候选 |
 
 ## 安装
 
@@ -116,7 +117,7 @@ codex plugin add work-governance@work-governance-local
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 2.2.0
+  --keep-version 2.3.0
 ```
 
 ## 行为示例
@@ -145,13 +146,15 @@ scripts/prune-local-plugin-cache.sh \
 
 提供方状态证据记录在 [提供方控制面效率同步证据](docs/validation/provider-control-plane-efficiency-v1.md) 中。CodeGraph 的职责归属、就绪条件、验证范围与采纳边界记录在 [代码智能适配模块采纳证据](docs/validation/code-intelligence-adoption-v1.md) 中。自适应决策委托与语义回看合同记录在 [自适应决策与回看闭环证据](docs/validation/adaptive-decision-and-review-loop-v1.md) 中。问题发现的来源学习、架构边界、独立质疑和前向场景证据记录在 [问题发现 Skill 采纳证据](docs/validation/problem-discovery-adoption-v1.md) 中。组合源码、当前本机生效状态与远端交付记录在 [代码智能与自适应治理组合交付证据](docs/validation/integrated-code-intelligence-adaptive-delivery-v1.md) 中。
 
+开发过程中默认先实现并验证能力，对 Token、费用、耗时和内存等做有证据边界的评估，在已有语义检查点记录。未知费用、修正后的估算或 Agent 自定的节约目标不会成为暂停或裁剪证据的理由。用户明确额度、平台实际限制、真实资源故障和新增付费承诺仍按其来源与授权处理；资源保护、压缩、缓存、限流等实现能力在当前能力验收后作为独立增强评估。详见 [资源观测政策与验证边界](docs/validation/resource-observation-v1.md)。
+
 ## 包结构
 
 可分发 Plugin 位于 `plugins/work-governance`，其中使用：
 
 - `plugin.json` 作为可移植的 Agent Plugins manifest；
 - `.codex-plugin/plugin.json` 作为 Codex 兼容性后备 manifest；
-- `skills/` 存放十一个相互独立的政策模块，以及一个可选的代码智能适配模块；
+- `skills/` 存放十二个相互独立的政策模块，以及一个可选的代码智能适配模块；
 - `.agents/plugins/marketplace.json` 作为仓库 marketplace。
 
 可移植 manifest 是面向未来的包权威来源。测试会确保它的身份信息和 OpenAI 接口元数据与兼容性 manifest 保持一致。

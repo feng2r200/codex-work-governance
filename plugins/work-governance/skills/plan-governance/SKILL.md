@@ -49,6 +49,13 @@ Capture only what controls execution and review:
 Depth should match uncertainty and consequence. Do not manufacture phases,
 task hierarchies, roles, or test matrices to make the Plan look complete.
 
+Resource estimates describe expected consumption; they are not stage gates.
+Do not invent numerical allowances or make savings a prerequisite for capability
+acceptance. Preserve an explicit binding limit's source and scope when one
+applies, and keep later protection or efficiency work independently scoped.
+Use [Resource Observation](../resource-observation/SKILL.md) for assessment and
+recording without creating a Plan solely for accounting.
+
 ## Executable Stage Gate
 
 Before presenting or delegating a stage as executable, distinguish confirmed
@@ -191,10 +198,11 @@ handoff, or release or fence the claim before replacement, cancellation,
 abandonment, or deferral. A status-only edit is insufficient.
 
 Apply ordinary dispositions directly when existing authority already covers
-the same goal, budget, permissions, target, and effects. The Plan exit decision
-does not need a second confirmation ceremony. Reopen confirmation only when a
-disposition changes the goal or budget, expands permissions or scope, enters an
-unauthorized environment, or requires another guarded action.
+the same goal, explicit binding budget, permissions, target, and effects. The
+Plan exit decision does not need a second confirmation ceremony. Reopen
+confirmation only when a disposition changes the goal or an explicit binding
+budget, expands permissions or scope, enters an unauthorized environment, or
+requires another guarded action.
 
 After assessment and any mutation, require exact readback of the exiting Plan
 and every affected Task. Verify retained identity, status, version, effective

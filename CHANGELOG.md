@@ -7,6 +7,24 @@ All notable changes to Work Governance are documented here. The project follows
 
 No unreleased changes.
 
+## 2.3.0 - 2026-10-12
+
+### Added
+
+- Scenario-triggered resource observation for development consumption,
+  evidence scope, meaningful checkpoint recording, applicable binding limits,
+  and later protection or efficiency enhancement candidates.
+
+### Changed
+
+- Capability development and acceptance proceed without invented Token,
+  spending, or other savings ceilings. Estimates and unavailable billing data
+  do not become execution gates; explicit limits, actual technical failures,
+  and new spending or other guarded actions retain their authority boundaries.
+- External validation no longer requires an agent-created numerical budget for
+  an already authorized probe. Resource savings remain separate from evidence
+  completeness and capability acceptance.
+
 ## 2.2.0 - 2026-10-10
 
 ### Added

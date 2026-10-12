@@ -13,7 +13,7 @@ and durable state enter only when they add value.
 
 Created and maintained by [feng2r200](https://github.com/feng2r200).
 
-The current semantic plugin version is `2.2.0`. Release-impacting changes to
+The current semantic plugin version is `2.3.0`. Release-impacting changes to
 Skills, plugin metadata, packaging, installation, or release workflow must bump
 the version according to compatibility impact. Build timestamps and Git commits
 are provenance only; they do not replace a semantic version bump. The CI gate
@@ -124,6 +124,7 @@ Existing tools and project-specific Skills
 | `project-truth-governance` | Truth-source selection and deliberate promotion |
 | `project-archive-curation` | Retention placement and archive readiness |
 | `work-reporting` | Progress, handoff, and completion communication |
+| `resource-observation` | Consumption assessment, binding limits, and later efficiency candidates |
 
 ## Install
 
@@ -151,7 +152,7 @@ remove older direct cache entries with:
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 2.2.0
+  --keep-version 2.3.0
 ```
 
 ## Example Behavior
@@ -256,13 +257,23 @@ forward-scenario evidence for early problem discovery are recorded in
 The combined source, current local activation, and remote delivery are recorded
 in [Integrated Code Intelligence And Adaptive Governance Delivery Evidence](docs/validation/integrated-code-intelligence-adaptive-delivery-v1.md).
 
+During development, implement and verify the agreed capability while assessing
+Token, monetary, time, and memory use from available evidence. Record useful
+assessments at existing semantic checkpoints. Unknown billing, corrected
+estimates, and agent-created savings targets do not pause work or justify losing
+evidence. Explicit binding limits, actual resource failures, and new spending
+commitments retain their existing boundaries. Protection, compression, caching,
+throttling, and similar mechanisms are separately scoped enhancements after
+capability acceptance. See
+[the resource-observation contract and validation boundary](docs/validation/resource-observation-v1.md).
+
 ## Package Layout
 
 The distributable plugin lives in `plugins/work-governance` and uses:
 
 - `plugin.json` as the portable Agent Plugins manifest;
 - `.codex-plugin/plugin.json` as the Codex compatibility fallback;
-- `skills/` for eleven independent policy modules plus one optional
+- `skills/` for twelve independent policy modules plus one optional
   code-intelligence adapter; and
 - `.agents/plugins/marketplace.json` as the repository marketplace.
 

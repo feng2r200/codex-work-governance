@@ -136,6 +136,14 @@ step-by-step chain of thought.
 
 ## Route Only When Needed
 
+During authorized development, assess and record meaningful resource use while
+implementing and verifying the agreed capability. Do not invent Token or money
+ceilings, truncate evidence, weaken acceptance, or pause for speculative savings.
+Keep estimates distinct from explicit binding limits and actual technical
+failures. Resource protection and savings mechanisms are later enhancements
+unless a demonstrated failure makes a bounded remedy necessary now; existing
+spending, external-action, and safety authority still applies.
+
 - Load `work-governance:goal-discovery` when the stated solution may hide an
   unresolved goal, data strategy, delivery form, material solution strategy,
   or acceptance choice.
@@ -164,6 +172,9 @@ step-by-step chain of thought.
   where a finding should become durable project authority.
 - Load `work-governance:work-reporting` for sustained progress reporting,
   phase handoff, or a full completion report.
+- Load `work-governance:resource-observation` when assessing or recording
+  meaningful consumption, reviewing a proposed resource restriction, or scoping
+  a later efficiency enhancement. Ordinary work needs no separate resource audit.
 - Load scene- or tool-specific Skills only when their actual scenario or tool
   is in scope. Their operating details do not belong in this lifecycle router.
 
@@ -183,8 +194,8 @@ protection, Task assessment, and exact readback. The Plan mutation alone does
 not complete the exit, and an accurate assessment may retain an unchanged Task.
 Do not widen the check into a full project scan, create a Plan for No-Plan work,
 or repeat confirmation for dispositions already covered by current authority.
-Reopen the frontier only when the disposition changes the goal, budget,
-permissions, environment, or another guarded boundary.
+Reopen the frontier only when the disposition changes the goal, an explicit
+binding budget, permissions, environment, or another guarded boundary.
 
 In the default mode, correct ordinary implementation deviations directly, but
 return a material user-owned route or contract change to a compact confirmation

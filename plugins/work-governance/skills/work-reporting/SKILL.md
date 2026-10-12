@@ -41,6 +41,13 @@ references; do not make each update replay the whole coordination history.
 When reporting efficiency, distinguish fewer repeated operations from measured
 resource savings, and source validation from installed or observed behavior.
 
+When consumption matters, report its scope, source, measured or estimated values,
+and relevant unknowns at a useful checkpoint. An estimate is not a binding limit.
+Name the source of a real resource stop; keep later protection or savings
+candidates separate from capability completion. Use
+[Resource Observation](../resource-observation/SKILL.md) for that assessment,
+without adding a fixed resource table to every update.
+
 ## Completion Report
 
 At task completion, give a complete account in natural language. It must make

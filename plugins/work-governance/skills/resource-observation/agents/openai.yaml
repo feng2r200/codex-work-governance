@@ -1,0 +1,4 @@
+interface:
+  display_name: "Resource Observation"
+  short_description: "Assess resource use while capability work continues"
+  default_prompt: "Use $work-governance:resource-observation to assess and record development consumption, distinguish binding limits, and preserve later enhancement candidates."

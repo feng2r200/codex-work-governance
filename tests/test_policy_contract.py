@@ -21,6 +21,7 @@ SKILL_NAMES = {
     "project-truth-governance",
     "project-archive-curation",
     "work-reporting",
+    "resource-observation",
 }
 
 
@@ -395,7 +396,8 @@ def test_problem_discovery_is_early_stage_appropriate_and_risk_bounded() -> None
     assert "Concurrency is not a later stage" in discovery
     assert "Do not multiply every dimension into an exhaustive Cartesian product" in discovery
     assert "exact target and uniquely unresolved claim" in discovery
-    assert "maximum effect or cost per probe" in discovery
+    assert "work-governance:resource-observation" in lifecycle
+    assert (SKILLS / "resource-observation" / "SKILL.md").exists()
     assert "Do not force every task through every environment" in discovery
     assert "work-governance:independent-validation" in discovery
     assert "primary need is to design the coverage" in validation
@@ -682,7 +684,7 @@ def test_manifest_readme_and_project_metadata_match_architecture() -> None:
     assert portable["author"]["name"] == manifest["author"]["name"] == "feng2r200"
     assert portable["license"] == manifest["license"] == project["project"]["license"]
     assert portable_interface == manifest["interface"]
-    assert project["project"]["version"] == "2.2.0"
+    assert project["project"]["version"] == "2.3.0"
     assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", portable["version"])
     assert project["project"]["dependencies"] == []
     assert "/.work-governance/" in read(ROOT / ".gitignore").splitlines()

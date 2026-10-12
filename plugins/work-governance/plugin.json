@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "work-governance",
-  "version": "2.2.0",
-  "description": "Composable governance for adaptive decisions, problem discovery, planning, delegation, Git, optional code intelligence, validation, long-running project continuity, project truth, archive curation, and reporting.",
+  "version": "2.3.0",
+  "description": "Composable governance for adaptive decisions, problem discovery, planning, delegation, Git, resource observation, optional code intelligence, validation, long-running project continuity, project truth, archive curation, and reporting.",
   "author": {
     "name": "feng2r200",
     "url": "https://github.com/feng2r200"
@@ -22,7 +22,7 @@
       "interface": {
         "displayName": "Work Governance",
         "shortDescription": "Adaptive governance with optional tool adapters.",
-        "longDescription": "Work Governance helps Codex align goals, evidence, decisions, and authority before acting; design risk-driven validation that exposes important problems early; adapt execution when semantic events change the route; use Plans and SubAgents only when valuable; protect Git and action boundaries; establish optional structural code intelligence safely; keep long-running project development recoverable; validate proportionally; and report work completely. Explicit decision delegation remains bounded, core policy stays independent of storage and tool choices, and optional adapters activate only for matching scenarios.",
+        "longDescription": "Work Governance helps Codex align goals, evidence, decisions, and authority before acting; design risk-driven validation that exposes important problems early; adapt execution when semantic events change the route; use Plans and SubAgents only when valuable; protect Git and action boundaries; establish optional structural code intelligence safely; keep long-running project development recoverable; assess and record consumption without invented development budgets; validate proportionally; and report work completely. Explicit decision delegation remains bounded, core policy stays independent of storage and tool choices, and optional adapters activate only for matching scenarios.",
         "developerName": "feng2r200",
         "category": "Productivity",
         "websiteURL": "https://github.com/feng2r200/codex-work-governance",
@@ -41,7 +41,8 @@
           "Project development continuity",
           "Project truth",
           "Project archive curation",
-          "Work reporting"
+          "Work reporting",
+          "Resource observation"
         ],
         "defaultPrompt": [
           "Use $work-governance:work-lifecycle to align evidence and authority, then adapt execution at meaningful change."
