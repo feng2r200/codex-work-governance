@@ -8,7 +8,7 @@ Work Governance 帮助 Agent 发现真实目标，只引入任务确实需要的
 
 由 [feng2r200](https://github.com/feng2r200) 创建并维护。
 
-当前语义插件版本为 `2.3.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
+当前语义插件版本为 `2.4.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
 
 ## 为什么需要它
 
@@ -66,6 +66,7 @@ work-lifecycle 路由器
       +-- Git 边界
       +-- 代码智能（可选适配）
       +-- 问题发现
+      +-- 前端交付
       +-- 独立验证
       +-- 项目开发连续性
       +-- 项目事实
@@ -87,6 +88,7 @@ work-lifecycle 路由器
 | `git-change-governance` | 分支、worktree、commit 和远端边界 |
 | `code-intelligence` | 结构化源码路由与按活动 checkout 保持 CodeGraph 就绪且最新 |
 | `problem-discovery` | 尽早、分阶段构造反例与设计验证 |
+| `frontend-governance` | 参考对齐、必需功能、产品文案和有界前端验收 |
 | `independent-validation` | 与风险相匹配的独立质疑 |
 | `project-development-governance` | 长期项目入口、恢复与状态对账 |
 | `project-truth-governance` | 事实来源选择与审慎提升 |
@@ -117,7 +119,7 @@ codex plugin add work-governance@work-governance-local
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 2.3.0
+  --keep-version 2.4.0
 ```
 
 ## 行为示例
@@ -148,13 +150,15 @@ scripts/prune-local-plugin-cache.sh \
 
 开发过程中默认先实现并验证能力，对 Token、费用、耗时和内存等做有证据边界的评估，在已有语义检查点记录。未知费用、修正后的估算或 Agent 自定的节约目标不会成为暂停或裁剪证据的理由。用户明确额度、平台实际限制、真实资源故障和新增付费承诺仍按其来源与授权处理；资源保护、压缩、缓存、限流等实现能力在当前能力验收后作为独立增强评估。详见 [资源观测政策与验证边界](docs/validation/resource-observation-v1.md)。
 
+前端任务可使用 `frontend-governance`，把选定参考、交付层级、必需交互、产品文案与实际结果连接起来。截图不能证明隐藏行为，Demo 的模拟状态不能改变业务 API 合同。必需控件保留约定动作；清除开发说明不能替代功能修复。验收覆盖本次涉及的必需流程，分别说明构建、视觉、交互、模拟与真实集成的证据范围。一处文案或样式修复仍按小任务推进，实现与浏览器操作沿用项目和工具 Skill。按需读取的验收示例用于澄清结果，不强制固定表单或新增状态账本。
+
 ## 包结构
 
 可分发 Plugin 位于 `plugins/work-governance`，其中使用：
 
 - `plugin.json` 作为可移植的 Agent Plugins manifest；
 - `.codex-plugin/plugin.json` 作为 Codex 兼容性后备 manifest；
-- `skills/` 存放十二个相互独立的政策模块，以及一个可选的代码智能适配模块；
+- `skills/` 存放十三个相互独立的政策模块，以及一个可选的代码智能适配模块；
 - `.agents/plugins/marketplace.json` 作为仓库 marketplace。
 
 可移植 manifest 是面向未来的包权威来源。测试会确保它的身份信息和 OpenAI 接口元数据与兼容性 manifest 保持一致。

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Frontend Governance"
+  short_description: "Preserve frontend behavior and verify delivery"
+  default_prompt: "Use $work-governance:frontend-governance to align this frontend change with its reference, product behavior, copy, and acceptance evidence."

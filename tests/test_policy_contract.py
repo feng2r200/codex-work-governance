@@ -22,6 +22,7 @@ SKILL_NAMES = {
     "project-archive-curation",
     "work-reporting",
     "resource-observation",
+    "frontend-governance",
 }
 
 
@@ -677,6 +678,7 @@ def test_manifest_readme_and_project_metadata_match_architecture() -> None:
     assert "Adaptive decision and review" in manifest["interface"]["capabilities"]
     assert "Problem discovery" in manifest["interface"]["capabilities"]
     assert "Project archive curation" in manifest["interface"]["capabilities"]
+    assert "Frontend delivery governance" in manifest["interface"]["capabilities"]
     assert portable["$schema"] == "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
     assert portable["name"] == manifest["name"] == project["project"]["name"]
     assert portable["version"] == manifest["version"]
@@ -684,10 +686,23 @@ def test_manifest_readme_and_project_metadata_match_architecture() -> None:
     assert portable["author"]["name"] == manifest["author"]["name"] == "feng2r200"
     assert portable["license"] == manifest["license"] == project["project"]["license"]
     assert portable_interface == manifest["interface"]
-    assert project["project"]["version"] == "2.3.0"
+    lock = tomllib.loads(read(ROOT / "uv.lock"))
+    package = next(item for item in lock["package"] if item["name"] == project["project"]["name"])
+    assert package["version"] == project["project"]["version"]
     assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", portable["version"])
     assert project["project"]["dependencies"] == []
     assert "/.work-governance/" in read(ROOT / ".gitignore").splitlines()
+
+
+def test_frontend_module_is_discoverable_without_tool_dependencies() -> None:
+    """Expose the frontend module normally without requiring an external runtime."""
+    agent = yaml.safe_load(read(SKILLS / "frontend-governance" / "agents" / "openai.yaml"))
+    assert agent.get("policy", {}).get("allow_implicit_invocation", True)
+    assert not agent.get("dependencies", {}).get("tools")
+    for filename in ["README.md", "README.zh-CN.md"]:
+        text = read(ROOT / filename)
+        for name in SKILL_NAMES:
+            assert f"`{name}`" in text, f"{filename} omits discoverable module {name}"
 
 
 def test_release_versioning_and_local_cleanup_contract_is_present() -> None:

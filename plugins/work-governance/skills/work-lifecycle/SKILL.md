@@ -162,6 +162,10 @@ spending, external-action, and safety authority still applies.
   observation environments, state transitions, integrations, side effects, and
   oracle behavior. Do not load it merely to run an already-defined routine test
   suite.
+- Load `work-governance:frontend-governance` for rendered frontend work whose
+  reference, required controls, product copy, or interaction acceptance needs
+  an explicit delivery contract. Keep its implementation and browser mechanics
+  with the relevant project and tool Skills.
 - Load `work-governance:independent-validation` only when a separate challenge
   adds meaningful confidence.
 - Load `work-governance:project-development-governance` when an explicitly

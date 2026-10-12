@@ -7,6 +7,22 @@ All notable changes to Work Governance are documented here. The project follows
 
 No unreleased changes.
 
+## 2.4.0 - 2026-10-12
+
+### Added
+
+- Scenario-triggered frontend governance connecting reference applicability,
+  required behavior, product copy, and scoped runtime acceptance. Includes a
+  conditional reference with examples of observable effects and evidence limits.
+
+### Changed
+
+- The lifecycle routes frontend delivery obligations to the new module while
+  project and tool Skills retain implementation and browser mechanics. Small
+  edits do not acquire a full-site capture, fixed document, or Plan requirement.
+- Frontend acceptance distinguishes prototypes, mocked checks, and real
+  integration; removing development copy cannot conceal a missing function.
+
 ## 2.3.0 - 2026-10-12
 
 ### Added

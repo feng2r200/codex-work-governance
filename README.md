@@ -13,7 +13,7 @@ and durable state enter only when they add value.
 
 Created and maintained by [feng2r200](https://github.com/feng2r200).
 
-The current semantic plugin version is `2.3.0`. Release-impacting changes to
+The current semantic plugin version is `2.4.0`. Release-impacting changes to
 Skills, plugin metadata, packaging, installation, or release workflow must bump
 the version according to compatibility impact. Build timestamps and Git commits
 are provenance only; they do not replace a semantic version bump. The CI gate
@@ -98,6 +98,7 @@ User goal and authority
           +-- Git boundaries
           +-- code intelligence (optional adapter)
           +-- problem discovery
+          +-- frontend delivery
           +-- independent validation
           +-- project development continuity
           +-- project truth
@@ -119,6 +120,7 @@ Existing tools and project-specific Skills
 | `git-change-governance` | Branches, worktrees, commits, and remote boundaries |
 | `code-intelligence` | Structural source routing and current per-checkout CodeGraph readiness |
 | `problem-discovery` | Early, stage-appropriate falsification and validation design |
+| `frontend-governance` | Reference fidelity, required behavior, product copy, and scoped frontend acceptance |
 | `independent-validation` | Proportional independent challenge |
 | `project-development-governance` | Long-running project entry, recovery, and state reconciliation |
 | `project-truth-governance` | Truth-source selection and deliberate promotion |
@@ -152,7 +154,7 @@ remove older direct cache entries with:
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 2.3.0
+  --keep-version 2.4.0
 ```
 
 ## Example Behavior
@@ -267,13 +269,24 @@ throttling, and similar mechanisms are separately scoped enhancements after
 capability acceptance. See
 [the resource-observation contract and validation boundary](docs/validation/resource-observation-v1.md).
 
+Frontend work can use `frontend-governance` to connect the selected reference
+and delivery level with required interactions, product-facing copy, and
+observable effects. Screenshots do not establish hidden behavior; a Demo's
+sample state does not change a business API contract. Required controls keep
+their promised actions, and removing development narration does not repair a
+missing function. Acceptance covers the required flows affected by the change,
+distinguishing builds, visual evidence, interactions, mocks, and real integration.
+A small label or style repair remains a small task; project and tool Skills
+retain implementation and browser routing. The conditional delivery-checks
+reference supplies examples without imposing a fixed form or new state ledger.
+
 ## Package Layout
 
 The distributable plugin lives in `plugins/work-governance` and uses:
 
 - `plugin.json` as the portable Agent Plugins manifest;
 - `.codex-plugin/plugin.json` as the Codex compatibility fallback;
-- `skills/` for twelve independent policy modules plus one optional
+- `skills/` for thirteen independent policy modules plus one optional
   code-intelligence adapter; and
 - `.agents/plugins/marketplace.json` as the repository marketplace.
 
