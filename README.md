@@ -13,7 +13,7 @@ and durable state enter only when they add value.
 
 Created and maintained by [feng2r200](https://github.com/feng2r200).
 
-The current semantic plugin version is `2.5.1`. Release-impacting changes to
+The current semantic plugin version is `2.6.0`. Release-impacting changes to
 Skills, plugin metadata, packaging, installation, or release workflow must bump
 the version according to compatibility impact. Build timestamps and Git commits
 are provenance only; they do not replace a semantic version bump. The CI gate
@@ -38,9 +38,11 @@ than a monolithic process engine.
 
 - **Value-driven:** no Plan, SubAgent, tool call, or review is mandatory merely
   because a task is large or important.
-- **Tool-neutral core:** the lifecycle and policy modules do not contain a
-  state engine or require one specific CLI. Optional tool adapters are isolated,
-  scenario-triggered, and able to degrade without blocking unrelated work.
+- **Tool-neutral governance core:** the lifecycle and policy modules do not
+  contain a state engine or require one specific CLI. When justified, optional
+  deterministic adapters, including bundled Hook definitions or installation
+  scripts, may ship with the Plugin; they remain isolated, scenario-triggered,
+  and able to degrade without blocking unrelated work.
 - **Authority-aware:** authorization to change repository content includes
   coherent, validated, non-rewriting local commits by default, while pushes,
   releases, deployments, production actions, history rewriting, and destructive
@@ -154,9 +156,9 @@ the Plugin:
 
 ```sh
 scripts/install-hook-runtime.py package \
-  --expected-digest c809a614107c874e512c2bc828634d6c316d4186364d64620efe88658dba79af
+  --expected-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
 scripts/install-hook-runtime.py launcher \
-  --probe-digest c809a614107c874e512c2bc828634d6c316d4186364d64620efe88658dba79af
+  --probe-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
 ```
 
 During an upgrade, name the current digest with `--rollback-digest` and pass
@@ -176,16 +178,32 @@ scripts/install-hook-runtime.py launcher \
   --probe-digest <CANDIDATE_DIGEST>
 ```
 
-After installation, use `/hooks` in a fresh local Codex session and require the
-three events to appear before reviewing and trusting their exact definitions.
-If the events remain `Installed 0`, adoption is blocked: do not use trust bypass
-as the installed configuration and do not report the Hook as active. Current
-Agent Plugins manifests can encounter
-[openai/codex#47925](https://github.com/openai/codex/issues/47925), where the
-portable manifest is parsed but its bundled Hooks are not loaded. Retain the
-verified launcher and immutable package, keep the failure visible, and retry
-adoption only after the host runtime is fixed or a separately approved delivery
-route is selected.
+For stable user-level adoption, install the same exact definition into
+`$HOME/.codex/hooks.json`. The installer preserves unrelated user Hooks, replaces
+only prior Work Governance definitions, writes atomically, and restores the
+previous configuration if its own readback fails. It never writes a Plugin cache
+path or trusts a Hook on the user's behalf. A successful install writes an
+owner-private rollback receipt containing the exact candidate and prior managed
+definitions, prior package digests, and whether a user configuration existed.
+The explicit rollback uses compare-and-swap protection: it refuses a changed
+managed definition, verifies each prior immutable package, and preserves
+unrelated Hook changes.
+
+```sh
+scripts/install-hook-runtime.py user-hook install \
+  --expected-package-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
+scripts/install-hook-runtime.py user-hook status \
+  --expected-package-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
+scripts/install-hook-runtime.py user-hook rollback \
+  --expected-package-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
+```
+
+Use `/hooks` in a fresh local Codex session, require SessionStart, PreCompact,
+and PostToolUse to appear, then review and trust their exact definitions through
+Codex. Do not use trust bypass as the installed configuration. The Plugin-bundled
+definition remains available, but a Plugin-only `Installed 0` result does not
+invalidate the separately installed user-level definition; report each adoption
+surface independently.
 
 After local adoption, verify the enabled version with `codex plugin list` and
 remove older direct cache entries with:
@@ -193,7 +211,7 @@ remove older direct cache entries with:
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 2.5.1
+  --keep-version 2.6.0
 ```
 
 ## Example Behavior

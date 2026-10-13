@@ -1,1 +1,1 @@
-{"contract":"wg-hook-v1","files":[{"path":"hook_runtime.py","sha256":"66e9f1b0528257156a72de1686c3882a109208b4da6b0a059ac694aa91832ef0"}],"package_version":"2.5.1","schema_version":1}
+{"contract":"wg-hook-v1","files":[{"path":"hook_runtime.py","sha256":"66e9f1b0528257156a72de1686c3882a109208b4da6b0a059ac694aa91832ef0"}],"package_version":"2.6.0","schema_version":1}

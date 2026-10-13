@@ -7,6 +7,22 @@ All notable changes to Work Governance are documented here. The project follows
 
 No unreleased changes.
 
+## 2.6.0 - 2026-10-13
+
+### Added
+
+- A stable user-level Hook adoption route that atomically manages only Work
+  Governance definitions in `$HOME/.codex/hooks.json`, preserves unrelated
+  Hooks, reads back the installed bytes, records a private CAS-protected
+  rollback receipt, and reports Codex trust as a separate required review
+  boundary.
+
+### Changed
+
+- Hook activation can now use the official user-level configuration surface
+  when a Plugin-bundled definition is not enumerated by the host. Commands
+  continue to execute only the stable launcher and one immutable package digest.
+
 ## 2.5.1 - 2026-10-13
 
 ### Fixed

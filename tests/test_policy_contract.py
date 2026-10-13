@@ -77,7 +77,7 @@ def test_workflows_pin_external_actions_by_commit_sha() -> None:
             )
 
 
-def test_public_plugin_core_is_tool_neutral_and_has_no_second_state_engine() -> None:
+def test_public_plugin_preserves_tool_neutral_governance_core_and_stable_hooks() -> None:
     """Verify that deterministic helpers do not smuggle in a state engine."""
     text = live_text().lower()
     for forbidden in ["workctl", "workvcs", "action lease"]:
@@ -100,6 +100,10 @@ def test_public_plugin_core_is_tool_neutral_and_has_no_second_state_engine() -> 
     assert all(
         "plugin" not in command.lower() and "latest" not in command.lower() for command in commands
     )
+    installer = read(ROOT / "scripts" / "install-hook-runtime.py")
+    assert 'USER_HOOKS_RELATIVE_PATH = Path(".codex") / "hooks.json"' in installer
+    assert "requires_codex_review" in installer
+    assert "preserves unrelated user Hooks" in read(ROOT / "README.md")
 
 
 def test_code_intelligence_routes_and_refreshes_bounded_readiness() -> None:
@@ -676,8 +680,8 @@ def test_manifest_readme_and_project_metadata_match_architecture() -> None:
         "execution at meaningful change."
     ]
     assert all(len(prompt) <= 128 for prompt in manifest["interface"]["defaultPrompt"])
-    assert "Tool-neutral core" in read(ROOT / "README.md")
-    assert "Optional tool adapters are isolated" in read(ROOT / "README.md")
+    assert "Tool-neutral governance core" in read(ROOT / "README.md")
+    assert "including bundled Hook definitions or installation" in read(ROOT / "README.md")
     assert "code-intelligence" in readme
     assert "project-archive-curation" in readme
     assert "project-development-governance" in readme

@@ -32,16 +32,21 @@ The Plugin remains a governance policy package. The portable Agent Plugins
 manifest declares `hooks/hooks.json` inside `extensions.com.openai`, while the
 compatibility manifest declares that same path directly. A root-level portable
 `hooks` field is deliberately forbidden because current Codex treats it as an
-unknown Agent Plugins field. The Hook runtime is not a semantic state engine
-and does not replace project authority or the selected durable work-state
-provider.
+unknown Agent Plugins field. When host enumeration of the Plugin definition is
+unavailable, the installer can explicitly and atomically merge that same Hook
+definition into the supported user-level `$HOME/.codex/hooks.json` surface. It
+preserves unrelated user Hooks and never uses a Plugin cache path. The Hook
+runtime is not a semantic state engine and does not replace project authority
+or the selected durable work-state provider.
 
 ## Stable execution contract
 
 Every shipped Hook command has exactly four authorities: the stable absolute
 user-level launcher, `wg-hook-v1`, one immutable package SHA-256, and one named
-handler. It contains no Plugin cache path, `latest`/`current` selector, CWD
-lookup, PATH lookup, or PYTHONPATH import.
+handler. The user-level configuration file only declares those exact commands;
+it never becomes an executable package source. A command contains no Plugin
+cache path, `latest`/`current` selector, CWD lookup, PATH lookup, or PYTHONPATH
+import.
 
 The package lives at
 `$HOME/.local/libexec/work-governance/<manifest-sha256>/`. On every call the
@@ -78,7 +83,8 @@ Upgrade is two-stage and fail-closed:
    and the candidate package, naming the old package explicitly as the rollback
    digest;
 3. exercise a real event through the old trusted Hook;
-4. install the new Plugin definition;
+4. install the new Plugin definition and atomically update only the managed
+   definitions in the user-level Hook configuration;
 5. trust only its exact Hook hash in Codex;
 6. exercise and read back the new real event.
 
@@ -101,7 +107,7 @@ PATH/PYTHONPATH/CWD injection, malformed and oversized input, runtime timeout,
 Hook disabled/untrusted/hash-changed behavior, exact package and plugin
 readback, and real SessionStart, PreCompact, and PostToolUse events.
 
-## 2026-10-13 local adoption result
+## 2026-10-13 Plugin-only adoption result
 
 Implementation and package adoption are separate. The immutable package
 `c809a614107c874e512c2bc828634d6c316d4186364d64620efe88658dba79af`
@@ -119,7 +125,25 @@ the open upstream loader defect
 [openai/codex#47925](https://github.com/openai/codex/issues/47925).
 
 No Hook hash was marked trusted, no global user Hook file was installed, and no
-companion plugin remains installed. Until the host runtime is fixed or a
-different delivery form is explicitly approved, the launcher and immutable
-package remain inert evidence and the non-Hook governance path remains the
-active behavior.
+companion plugin remains installed. This is historical Plugin-only evidence;
+it does not authorize a trust bypass or prove user-level adoption.
+
+## 2026-10-13 user-level adoption route
+
+The user explicitly approved the supported user-level configuration route after
+the Plugin-only loader observation. Version 2.6.0 adds `user-hook install` and
+`user-hook status`, and `user-hook rollback`. Install first verifies the
+installed immutable package and stable launcher, then merges the exact three
+commands into `$HOME/.codex/hooks.json` under an owner-private lock. It preserves
+non-Work-Governance handlers, replaces only prior syntactically exact
+Work-Governance commands, writes and reads back canonical bytes atomically, and
+restores the prior bytes if the installer’s own readback fails. Its private
+rollback receipt stores the candidate and prior managed definitions, prior
+package digests, and prior configuration presence; rollback requires that the
+candidate managed definition is unchanged, verifies the old immutable package(s),
+and retains intervening unrelated user Hook changes. Repeating an already-active
+candidate does not replace a matching receipt, so its original rollback target
+remains intact. The status result compares the exact managed substructure, including
+event, matcher, handler, and multiplicity, and deliberately reports
+`requires_codex_review`; only a fresh `/hooks` review, trust, and observed real
+SessionStart, PreCompact, and PostToolUse events establish active adoption.

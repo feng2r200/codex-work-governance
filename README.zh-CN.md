@@ -8,7 +8,7 @@ Work Governance 帮助 Agent 发现真实目标，只引入任务确实需要的
 
 由 [feng2r200](https://github.com/feng2r200) 创建并维护。
 
-当前语义插件版本为 `2.5.1`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
+当前语义插件版本为 `2.6.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
 
 ## 为什么需要它
 
@@ -26,7 +26,7 @@ Work Governance 将这些问题拆分为彼此独立的政策模块，而不是�
 ## 它有什么不同
 
 - **价值驱动：** 不会仅仅因为任务规模大或重要，就强制要求 Plan、SubAgent、工具调用或审查。
-- **核心工具中立：** 生命周期与政策模块不内置状态引擎，也不要求某个特定 CLI。可选工具适配模块彼此隔离、按场景触发，并能在不可用时降级而不阻塞无关工作。
+- **治理核心工具中立：** 生命周期与政策模块不内置状态引擎，也不要求某个特定 CLI。在有必要时，Plugin 可随附 Hook 定义或安装脚本等确定性可选适配能力；它们仍彼此隔离、按场景触发，并能在不可用时降级而不阻塞无关工作。
 - **理解授权边界：** 仓库内容修改一经授权，语义完整、验证通过且不改写历史的本地 commit 默认属于同一执行边界；push、release、部署、生产操作、历史改写和破坏性清理仍是独立授权边界。
 - **按证据校准：** 验证会随声明范围和风险扩展，而不是固化成一套测试仪式。
 - **自适应：** 在依赖工作开始前对齐实质选择；出现新证据时，只执行其影响所需的回看与纠偏。
@@ -118,9 +118,9 @@ codex plugin add work-governance@work-governance-local
 
 ```sh
 scripts/install-hook-runtime.py package \
-  --expected-digest c809a614107c874e512c2bc828634d6c316d4186364d64620efe88658dba79af
+  --expected-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
 scripts/install-hook-runtime.py launcher \
-  --probe-digest c809a614107c874e512c2bc828634d6c316d4186364d64620efe88658dba79af
+  --probe-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
 ```
 
 升级时，必须用 `--rollback-digest` 指定当前包摘要，并在安装新版 Plugin 前通过
@@ -137,12 +137,25 @@ scripts/install-hook-runtime.py launcher \
   --probe-digest <候选摘要>
 ```
 
+为稳定的用户级采用，请将同一份精确定义安装到 `$HOME/.codex/hooks.json`。安装器会保留无关的用户 Hook，只替换旧的 Work Governance 定义，原子写入并在自身回读失败时恢复旧配置；它不会写入 Plugin 缓存路径，也不会代替用户信任 Hook。成功安装会写入同时记录精确候选/旧受管定义、旧包摘要和原有用户配置是否存在的、仅限当前用户读取的回滚凭据；显式回滚使用 compare-and-swap 保护：受管定义已变化则拒绝，逐个核验旧的不可变包，并保留无关 Hook 的后续改动：
+
+```sh
+scripts/install-hook-runtime.py user-hook install \
+  --expected-package-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
+scripts/install-hook-runtime.py user-hook status \
+  --expected-package-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
+scripts/install-hook-runtime.py user-hook rollback \
+  --expected-package-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
+```
+
+在新的本地 Codex 会话中使用 `/hooks`，确认 SessionStart、PreCompact 和 PostToolUse 三个事件出现后，再通过 Codex 审查并信任精确定义。不要把 trust bypass 作为已安装配置。Plugin 内置定义仍可用；但仅 Plugin 路径的 `Installed 0` 不会否定单独安装的用户级定义，两个采用面必须分别汇报。
+
 本地采用完成后，使用 `codex plugin list` 核对启用版本，并用下面的命令删除旧的直接缓存目录：
 
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 2.5.1
+  --keep-version 2.6.0
 ```
 
 ## 行为示例
