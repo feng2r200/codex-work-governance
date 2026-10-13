@@ -8,7 +8,7 @@ Work Governance 帮助 Agent 发现真实目标，只引入任务确实需要的
 
 由 [feng2r200](https://github.com/feng2r200) 创建并维护。
 
-当前语义插件版本为 `2.5.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
+当前语义插件版本为 `2.5.1`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
 
 ## 为什么需要它
 
@@ -118,9 +118,9 @@ codex plugin add work-governance@work-governance-local
 
 ```sh
 scripts/install-hook-runtime.py package \
-  --expected-digest b3c566cab26450cb6f5b05b51501c6303dbad7d9ce5f2c3085b90874db10580a
+  --expected-digest c809a614107c874e512c2bc828634d6c316d4186364d64620efe88658dba79af
 scripts/install-hook-runtime.py launcher \
-  --probe-digest b3c566cab26450cb6f5b05b51501c6303dbad7d9ce5f2c3085b90874db10580a
+  --probe-digest c809a614107c874e512c2bc828634d6c316d4186364d64620efe88658dba79af
 ```
 
 升级时，必须用 `--rollback-digest` 指定当前包摘要，并在安装新版 Plugin 前通过
@@ -142,7 +142,7 @@ scripts/install-hook-runtime.py launcher \
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 2.5.0
+  --keep-version 2.5.1
 ```
 
 ## 行为示例

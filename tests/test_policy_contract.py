@@ -724,7 +724,10 @@ def test_release_versioning_and_local_cleanup_contract_is_present() -> None:
     assert "prune-local-plugin-cache.sh" in policy
     assert gate.is_file()
     assert prune.is_file()
-    assert "release-impacting changes require a semantic version bump" in read(gate)
+    gate_text = read(gate)
+    assert "release-impacting changes require a semantic version bump" in gate_text
+    assert '[[ "$base_ref" =~ ^0+$ ]]' in gate_text
+    assert 'base_ref="HEAD^"' in gate_text
     prune_text = read(prune)
     assert 'manifest_value "$manifest" name' in prune_text
     assert 'manifest_value "$manifest" version' in prune_text

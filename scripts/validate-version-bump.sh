@@ -80,6 +80,10 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
+if [[ "$base_ref" =~ ^0+$ ]]; then
+    base_ref="HEAD^"
+fi
+
 git -C "$repo_root" rev-parse --verify "$base_ref^{commit}" >/dev/null \
     || die "base ref does not resolve to a commit: $base_ref"
 

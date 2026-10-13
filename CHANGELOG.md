@@ -7,6 +7,14 @@ All notable changes to Work Governance are documented here. The project follows
 
 No unreleased changes.
 
+## 2.5.1 - 2026-10-13
+
+### Fixed
+
+- Treat GitHub's all-zero `before` sentinel for a new branch as an absent base
+  so the release gate compares against the parent commit instead of rejecting
+  the sentinel as an unresolved revision.
+
 ## 2.5.0 - 2026-10-13
 
 ### Added

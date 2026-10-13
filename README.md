@@ -13,7 +13,7 @@ and durable state enter only when they add value.
 
 Created and maintained by [feng2r200](https://github.com/feng2r200).
 
-The current semantic plugin version is `2.5.0`. Release-impacting changes to
+The current semantic plugin version is `2.5.1`. Release-impacting changes to
 Skills, plugin metadata, packaging, installation, or release workflow must bump
 the version according to compatibility impact. Build timestamps and Git commits
 are provenance only; they do not replace a semantic version bump. The CI gate
@@ -154,9 +154,9 @@ the Plugin:
 
 ```sh
 scripts/install-hook-runtime.py package \
-  --expected-digest b3c566cab26450cb6f5b05b51501c6303dbad7d9ce5f2c3085b90874db10580a
+  --expected-digest c809a614107c874e512c2bc828634d6c316d4186364d64620efe88658dba79af
 scripts/install-hook-runtime.py launcher \
-  --probe-digest b3c566cab26450cb6f5b05b51501c6303dbad7d9ce5f2c3085b90874db10580a
+  --probe-digest c809a614107c874e512c2bc828634d6c316d4186364d64620efe88658dba79af
 ```
 
 During an upgrade, name the current digest with `--rollback-digest` and pass
@@ -193,7 +193,7 @@ remove older direct cache entries with:
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 2.5.0
+  --keep-version 2.5.1
 ```
 
 ## Example Behavior

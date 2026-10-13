@@ -104,9 +104,9 @@ readback, and real SessionStart, PreCompact, and PostToolUse events.
 ## 2026-10-13 local adoption result
 
 Implementation and package adoption are separate. The immutable package
-`b3c566cab26450cb6f5b05b51501c6303dbad7d9ce5f2c3085b90874db10580a`
+`c809a614107c874e512c2bc828634d6c316d4186364d64620efe88658dba79af`
 and stable `$HOME/.local/bin/work-governance-hook` were installed, read back,
-and probed successfully. Plugin version 2.5.0 was also installed from the
+and probed successfully. Plugin version 2.5.1 was also installed from the
 candidate checkout with byte-identical Hook configuration.
 
 Hook adoption is nevertheless **blocked/degraded**, not successful. Codex CLI
