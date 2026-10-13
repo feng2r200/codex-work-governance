@@ -1,0 +1,35 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.local/bin/work-governance-hook dispatch --contract wg-hook-v1 --package-digest b3c566cab26450cb6f5b05b51501c6303dbad7d9ce5f2c3085b90874db10580a --handler session-start"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.local/bin/work-governance-hook dispatch --contract wg-hook-v1 --package-digest b3c566cab26450cb6f5b05b51501c6303dbad7d9ce5f2c3085b90874db10580a --handler pre-compact"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|functions\\.exec|functions\\.apply_patch|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.local/bin/work-governance-hook dispatch --contract wg-hook-v1 --package-digest b3c566cab26450cb6f5b05b51501c6303dbad7d9ce5f2c3085b90874db10580a --handler post-tool-use"
+          }
+        ]
+      }
+    ]
+  }
+}

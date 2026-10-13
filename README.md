@@ -13,7 +13,7 @@ and durable state enter only when they add value.
 
 Created and maintained by [feng2r200](https://github.com/feng2r200).
 
-The current semantic plugin version is `2.4.0`. Release-impacting changes to
+The current semantic plugin version is `2.5.0`. Release-impacting changes to
 Skills, plugin metadata, packaging, installation, or release workflow must bump
 the version according to compatibility impact. Build timestamps and Git commits
 are provenance only; they do not replace a semantic version bump. The CI gate
@@ -148,13 +148,52 @@ codex plugin add work-governance@work-governance-local
 Open a new Codex task after installing or updating. Existing tasks can retain
 the Skill content that was loaded when they started.
 
+The optional hooks use a separately installed stable launcher, never a Plugin
+cache path. Install and read back the immutable runtime package before updating
+the Plugin:
+
+```sh
+scripts/install-hook-runtime.py package \
+  --expected-digest b3c566cab26450cb6f5b05b51501c6303dbad7d9ce5f2c3085b90874db10580a
+scripts/install-hook-runtime.py launcher \
+  --probe-digest b3c566cab26450cb6f5b05b51501c6303dbad7d9ce5f2c3085b90874db10580a
+```
+
+During an upgrade, name the current digest with `--rollback-digest` and pass
+both the current and candidate digests with `--probe-digest` before installing
+the new Plugin. The installer verifies the current launcher first and, if the
+candidate fails, restores the previous launcher and internally re-probes the
+rollback digest. A rollback-probe failure is reported separately. Trust the
+new exact Hook hash through Codex only after the old Hook still runs and the
+candidate package probe succeeds. Hook trust is not inferred from installation.
+The runtime is passive until a Hook invokes it, emits nothing when no explicit
+context packet changed, and does not install a background service.
+
+```sh
+scripts/install-hook-runtime.py launcher \
+  --rollback-digest <CURRENT_DIGEST> \
+  --probe-digest <CURRENT_DIGEST> \
+  --probe-digest <CANDIDATE_DIGEST>
+```
+
+After installation, use `/hooks` in a fresh local Codex session and require the
+three events to appear before reviewing and trusting their exact definitions.
+If the events remain `Installed 0`, adoption is blocked: do not use trust bypass
+as the installed configuration and do not report the Hook as active. Current
+Agent Plugins manifests can encounter
+[openai/codex#47925](https://github.com/openai/codex/issues/47925), where the
+portable manifest is parsed but its bundled Hooks are not loaded. Retain the
+verified launcher and immutable package, keep the failure visible, and retry
+adoption only after the host runtime is fixed or a separately approved delivery
+route is selected.
+
 After local adoption, verify the enabled version with `codex plugin list` and
 remove older direct cache entries with:
 
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 2.4.0
+  --keep-version 2.5.0
 ```
 
 ## Example Behavior
@@ -290,6 +329,8 @@ The distributable plugin lives in `plugins/work-governance` and uses:
 
 - `plugin.json` as the portable Agent Plugins manifest;
 - `.codex-plugin/plugin.json` as the Codex compatibility fallback;
+- `hooks/hooks.json` as the Hook definition declared by both the portable
+  OpenAI extension and the Codex compatibility manifest;
 - `skills/` for thirteen independent policy modules plus one optional
   code-intelligence adapter; and
 - `.agents/plugins/marketplace.json` as the repository marketplace.

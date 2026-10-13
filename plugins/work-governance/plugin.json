@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "work-governance",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "Composable governance for adaptive decisions, problem discovery, frontend delivery, planning, delegation, Git, resource observation, optional code intelligence, validation, long-running project continuity, project truth, archive curation, and reporting.",
   "author": {
     "name": "feng2r200",
@@ -19,6 +19,7 @@
   ],
   "extensions": {
     "com.openai": {
+      "hooks": "./hooks/hooks.json",
       "interface": {
         "displayName": "Work Governance",
         "shortDescription": "Adaptive governance with optional tool adapters.",

@@ -1,0 +1,180 @@
+#!/usr/bin/python3 -I
+"""Stable Work Governance hook launcher with per-call package verification."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+from typing import Any
+
+CONTRACT = "wg-hook-v1"
+MANIFEST_NAME = "package.json"
+MAX_MANIFEST_BYTES = 65_536
+MAX_RUNTIME_BYTES = 262_144
+
+
+def _require_owner_path(path: Path, *, directory: bool, executable: bool = False) -> os.stat_result:
+    info = path.lstat()
+    expected = stat.S_ISDIR if directory else stat.S_ISREG
+    if stat.S_ISLNK(info.st_mode) or not expected(info.st_mode):
+        raise RuntimeError(f"path has an unsafe type: {path}")
+    if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+        raise RuntimeError(f"path is not owner-private: {path}")
+    if executable and not stat.S_IMODE(info.st_mode) & stat.S_IXUSR:
+        raise RuntimeError(f"launcher is not owner-executable: {path}")
+    return info
+
+
+def _require_safe_parent(path: Path) -> None:
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"package parent has an unsafe type: {path}")
+    if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o022:
+        raise RuntimeError(f"package parent is not safely owner-controlled: {path}")
+
+
+def _read_nofollow(path: Path, limit: int) -> bytes:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise RuntimeError(f"file is not an owner-owned regular file: {path}")
+        if stat.S_IMODE(info.st_mode) & 0o077 or info.st_size > limit:
+            raise RuntimeError(f"file permissions or size are invalid: {path}")
+        data = bytearray()
+        while len(data) <= limit:
+            chunk = os.read(descriptor, min(65_536, limit + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+        if len(data) > limit:
+            raise RuntimeError(f"file exceeds validation bound: {path}")
+        return bytes(data)
+    finally:
+        os.close(descriptor)
+
+
+def _canonical(value: object) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _validate_manifest(data: bytes, expected_digest: str) -> dict[str, Any]:
+    parsed = json.loads(data)
+    if not isinstance(parsed, dict) or parsed.get("schema_version") != 1:
+        raise RuntimeError("package manifest has an unsupported schema")
+    if parsed.get("contract") != CONTRACT:
+        raise RuntimeError("package manifest has an incompatible contract")
+    actual = hashlib.sha256(_canonical(parsed)).hexdigest()
+    if actual != expected_digest:
+        raise RuntimeError("package manifest digest does not match the pinned digest")
+    files = parsed.get("files")
+    if not isinstance(files, list) or not files:
+        raise RuntimeError("package manifest has no files")
+    return parsed
+
+
+def _load_runtime(package_digest: str) -> tuple[bytes, Path]:
+    if len(package_digest) != 64 or any(
+        value not in "0123456789abcdef" for value in package_digest
+    ):
+        raise RuntimeError("package digest must be lowercase SHA-256")
+    home = Path.home()
+    _require_safe_parent(home / ".local")
+    _require_safe_parent(home / ".local" / "bin")
+    root = home / ".local" / "libexec" / "work-governance"
+    package = root / package_digest
+    _require_safe_parent(home / ".local")
+    _require_safe_parent(home / ".local" / "libexec")
+    _require_owner_path(root, directory=True)
+    _require_owner_path(package, directory=True)
+    manifest_data = _read_nofollow(package / MANIFEST_NAME, MAX_MANIFEST_BYTES)
+    manifest = _validate_manifest(manifest_data, package_digest)
+    runtime_data: bytes | None = None
+    runtime_path: Path | None = None
+    expected_names: set[str] = {MANIFEST_NAME}
+    for entry in manifest["files"]:
+        if not isinstance(entry, dict) or set(entry) != {"path", "sha256"}:
+            raise RuntimeError("package file entry is malformed")
+        name = entry["path"]
+        digest = entry["sha256"]
+        if not isinstance(name, str) or Path(name).name != name:
+            raise RuntimeError("package file path must be one plain filename")
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise RuntimeError("package file digest is malformed")
+        path = package / name
+        data = _read_nofollow(path, MAX_RUNTIME_BYTES)
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise RuntimeError(f"package file digest mismatch: {name}")
+        expected_names.add(name)
+        if name == "hook_runtime.py":
+            runtime_data = data
+            runtime_path = path
+    actual_names = {entry.name for entry in package.iterdir()}
+    if actual_names != expected_names:
+        raise RuntimeError("package tree contains unexpected or missing files")
+    if runtime_data is None or runtime_path is None:
+        raise RuntimeError("package does not contain hook_runtime.py")
+    return runtime_data, runtime_path
+
+
+def main() -> int:
+    """Verify the pinned package and execute exactly its bounded runtime."""
+    launcher_path = Path(__file__).absolute()
+    _require_owner_path(launcher_path, directory=False, executable=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("command", choices=["dispatch", "probe", "stage-context"])
+    parser.add_argument("--contract", required=True)
+    parser.add_argument("--package-digest", required=True)
+    parser.add_argument("--handler")
+    parser.add_argument("--session-id")
+    parser.add_argument("--context")
+    args = parser.parse_args()
+    if args.contract != CONTRACT:
+        raise RuntimeError(f"unsupported contract: {args.contract}")
+    runtime_data, runtime_path = _load_runtime(args.package_digest)
+    handler = args.handler
+    if args.command == "probe":
+        handler = "probe"
+    elif args.command == "stage-context":
+        handler = "stage-context"
+    if handler is None:
+        raise RuntimeError("dispatch requires --handler")
+    runtime_argv = [
+        str(runtime_path),
+        "--contract",
+        CONTRACT,
+        "--package-digest",
+        args.package_digest,
+        "--handler",
+        handler,
+    ]
+    if args.session_id is not None:
+        runtime_argv.extend(["--session-id", args.session_id])
+    if args.context is not None:
+        runtime_argv.extend(["--context", args.context])
+    home = Path.home()
+    os.environ.clear()
+    os.environ.update({"HOME": str(home), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"})
+    sys.path[:] = [entry for entry in sys.path if entry and Path(entry).is_absolute()]
+    sys.argv = runtime_argv
+    namespace: dict[str, Any] = {
+        "__builtins__": __builtins__,
+        "__file__": str(runtime_path),
+        "__name__": "__main__",
+        "__package__": None,
+    }
+    exec(compile(runtime_data, str(runtime_path), "exec"), namespace, namespace)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as error:  # noqa: BLE001 - caller must observe integrity failures.
+        print(f"work-governance-hook: {error}", file=sys.stderr)
+        raise SystemExit(70) from error

@@ -34,6 +34,12 @@ Tie a validation result to its claim, input revision, evidence, and scope.
 Reuse it while that basis remains applicable; a changed input requires checking
 the affected obligations, not automatically restarting every review.
 
+Stage independent review after a coherent implementation slice and Validator
+acceptance after the reviewed corrections. Do not request a new independent
+turn for unchanged inputs, but do not combine the two roles, narrow their
+accepted scope, or substitute a compact handoff for the raw evidence they must
+be able to inspect.
+
 Choose the smallest observation that proves the claim. Source text containing a
 read or write does not prove that execution reached it, and a successful
 synthetic probe does not prove actual adoption or task quality. Use an isolated

@@ -7,6 +7,28 @@ All notable changes to Work Governance are documented here. The project follows
 
 No unreleased changes.
 
+## 2.5.0 - 2026-10-13
+
+### Added
+
+- Optional SessionStart, PreCompact, and bounded PostToolUse hooks backed by an
+  explicitly installed, immutable user-level runtime package.
+- A stable launcher and two-stage installer with exact package digests,
+  per-invocation owner/mode/tree verification, old-and-new package probes, and
+  deterministic no-change output.
+
+### Changed
+
+- The former blanket prohibition on Plugin hooks and scripts is replaced by a
+  stable-runtime boundary: hook commands never execute from the mutable Plugin
+  cache, current directory, PATH, or PYTHONPATH.
+- Context injection is opt-in, bounded, digest-deduplicated, and measured.
+  Tool observations retain only small identifiers and latency metadata, never
+  transcript or tool payload content.
+- Hook installation and Hook adoption are reported separately. A host loader
+  that exposes no installed events remains blocked/degraded; a package probe or
+  trust bypass is not treated as successful activation.
+
 ## 2.4.0 - 2026-10-12
 
 ### Added

@@ -77,20 +77,29 @@ def test_workflows_pin_external_actions_by_commit_sha() -> None:
             )
 
 
-def test_public_plugin_core_is_tool_neutral_and_has_no_state_engine() -> None:
-    """Verify that optional adapters do not smuggle in a state engine."""
+def test_public_plugin_core_is_tool_neutral_and_has_no_second_state_engine() -> None:
+    """Verify that deterministic helpers do not smuggle in a state engine."""
     text = live_text().lower()
-    for forbidden in ["workctl", "workvcs", "sessionstart", "userpromptsubmit", "action lease"]:
+    for forbidden in ["workctl", "workvcs", "action lease"]:
         assert forbidden not in text
 
     manifest = json.loads(read(PLUGIN / ".codex-plugin" / "plugin.json"))
     portable = json.loads(read(PLUGIN / "plugin.json"))
-    assert "hooks" not in manifest
+    assert manifest["hooks"] == "./hooks/hooks.json"
+    assert "hooks" not in portable
+    assert portable["extensions"]["com.openai"]["hooks"] == "./hooks/hooks.json"
+    assert (PLUGIN / "hooks" / "hooks.json").is_file()
     assert "mcpServers" not in manifest
-    assert "scripts" not in manifest
     assert "mcp.json" not in portable
-    assert not (PLUGIN / "hooks").exists()
-    assert not (PLUGIN / "scripts").exists()
+    hooks = json.loads(read(PLUGIN / "hooks" / "hooks.json"))["hooks"]
+    commands = [
+        hook["command"] for groups in hooks.values() for group in groups for hook in group["hooks"]
+    ]
+    assert commands
+    assert all(command.startswith("$HOME/.local/bin/work-governance-hook ") for command in commands)
+    assert all(
+        "plugin" not in command.lower() and "latest" not in command.lower() for command in commands
+    )
 
 
 def test_code_intelligence_routes_and_refreshes_bounded_readiness() -> None:

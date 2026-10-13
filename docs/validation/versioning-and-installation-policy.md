@@ -28,12 +28,24 @@ version with the exact change base and rejects an unchanged or lower version.
 ## Installation and cleanup
 
 Install from the repository marketplace, then verify the enabled plugin version
-and source tree. After adoption, retain only the current semantic version in
+and source tree. A Hook runtime is a separate explicit adoption surface: install
+its immutable package under `$HOME/.local/libexec/work-governance/<digest>/`,
+validate the stable `$HOME/.local/bin/work-governance-hook` launcher against
+both old and candidate package digests, prove an old exact Hook event, and only
+then install and trust the candidate exact Hook hash. Plugin installation does
+not imply Hook trust. The Hook command must not execute through a plugin cache,
+`latest` or `current` link, CWD, PATH, or PYTHONPATH.
+
+After adoption, retain only the current semantic version in
 the exact local cache root. Use `scripts/prune-local-plugin-cache.sh` with the
 explicit cache root and `--keep-version`; it removes only direct child
 directories whose plugin name and version match their directory name. Historical
 versions, source checkouts, marketplace metadata, and unrelated caches are not
 silently removed.
+
+An immutable Hook package is retained while any installed Hook definition
+references its digest or a live process may be using it. Cleanup may target
+only one exact validated digest and remains a separate explicit action.
 
 Work Governance is a policy plugin, not WorkVCS development code. It must not
 introduce or retain a second WorkVCS CLI version as part of ordinary plugin

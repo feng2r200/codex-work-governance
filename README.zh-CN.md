@@ -8,7 +8,7 @@ Work Governance 帮助 Agent 发现真实目标，只引入任务确实需要的
 
 由 [feng2r200](https://github.com/feng2r200) 创建并维护。
 
-当前语义插件版本为 `2.4.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
+当前语义插件版本为 `2.5.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
 
 ## 为什么需要它
 
@@ -114,12 +114,35 @@ codex plugin add work-governance@work-governance-local
 
 安装或更新后，请新建一个 Codex 任务。已有任务可能继续保留其启动时加载的 Skill 内容。
 
+可选 Hook 使用单独安装的稳定启动器，不执行 Plugin 缓存目录中的脚本。更新 Plugin 之前，先安装并回读不可变运行时包：
+
+```sh
+scripts/install-hook-runtime.py package \
+  --expected-digest b3c566cab26450cb6f5b05b51501c6303dbad7d9ce5f2c3085b90874db10580a
+scripts/install-hook-runtime.py launcher \
+  --probe-digest b3c566cab26450cb6f5b05b51501c6303dbad7d9ce5f2c3085b90874db10580a
+```
+
+升级时，必须用 `--rollback-digest` 指定当前包摘要，并在安装新版 Plugin 前通过
+`--probe-digest` 同时探测当前包与候选包。安装器先验证当前启动器；候选探针失败时，
+安装器会恢复旧启动器并在内部重新探测回滚包，且会单独报告回滚探针失败。旧 Hook
+真实事件仍可运行且候选探针通过后，才通过 Codex 信任新的精确 Hook 哈希。安装不会
+自动产生信任。没有显式活动上下文包或内容未变化时，Hook 不输出模型上下文，也不会
+安装后台服务。
+
+```sh
+scripts/install-hook-runtime.py launcher \
+  --rollback-digest <当前摘要> \
+  --probe-digest <当前摘要> \
+  --probe-digest <候选摘要>
+```
+
 本地采用完成后，使用 `codex plugin list` 核对启用版本，并用下面的命令删除旧的直接缓存目录：
 
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 2.4.0
+  --keep-version 2.5.0
 ```
 
 ## 行为示例

@@ -58,6 +58,11 @@ back off or do independent work instead of repeatedly reading full history.
 Missing or uncertain status is not an unchanged result. A new external fact,
 deadline, blocker, or ownership risk can justify a fresh targeted check.
 
+For sustained work, pass one changed active-context packet at a phase boundary
+rather than replaying the full parent conversation. Keep full evidence
+retrievable by exact reference, and preserve the agreed independent Reviewer
+and Validator boundaries; fewer handoff turns must not merge or weaken them.
+
 Give each issue one actionable feedback package: affected input, evidence,
 impact, requested correction, and acceptance. Update it when evidence or the
 decision changes. Do not resend it, commission another review, or launch a

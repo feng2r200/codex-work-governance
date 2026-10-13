@@ -144,6 +144,14 @@ failures. Resource protection and savings mechanisms are later enhancements
 unless a demonstrated failure makes a bounded remedy necessary now; existing
 spending, external-action, and safety authority still applies.
 
+When observed cost is dominated by repeated model turns, polling,
+fine-grained deterministic operations, or unchanged context replay, use
+[Token-efficient execution without quality loss](references/token-efficient-execution.md).
+It batches only already-decided work, carries changed phase context by exact
+reference, and stages coordination at semantic boundaries. It never weakens
+the accepted validation matrix, independent review, raw evidence, UI coverage,
+model capability, reasoning, or failure visibility.
+
 - Load `work-governance:goal-discovery` when the stated solution may hide an
   unresolved goal, data strategy, delivery form, material solution strategy,
   or acceptance choice.
