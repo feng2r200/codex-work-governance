@@ -231,6 +231,7 @@ def test_concurrent_context_event_emits_exactly_once(tmp_path: Path) -> None:
         (b"{", b"Expecting"),
         (b"x" * 262_145, b"exceeds the bounded input limit"),
     ],
+    ids=["malformed", "oversized"],
 )
 def test_malformed_and_oversized_input_fail_explicitly(
     tmp_path: Path, payload: bytes, message: bytes
