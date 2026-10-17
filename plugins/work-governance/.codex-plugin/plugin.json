@@ -1,7 +1,7 @@
 {
   "name": "work-governance",
-  "version": "2.6.0",
-  "description": "Composable governance for adaptive decisions, problem discovery, frontend delivery, planning, delegation, Git, resource observation, optional code intelligence, validation, long-running project continuity, project truth, archive curation, and reporting.",
+  "version": "2.7.0",
+  "description": "Composable governance for adaptive decisions, safe conversation continuation, problem discovery, frontend delivery, planning, delegation, Git, resource observation, optional code intelligence, validation, long-running project continuity, project truth, archive curation, and reporting.",
   "author": {
     "name": "feng2r200"
   },
@@ -39,6 +39,7 @@
       "Project archive curation",
       "Work reporting",
       "Resource observation",
+      "Conversation continuation governance",
       "Frontend delivery governance"
     ],
     "defaultPrompt": [

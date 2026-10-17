@@ -8,7 +8,7 @@ Work Governance 帮助 Agent 发现真实目标，只引入任务确实需要的
 
 由 [feng2r200](https://github.com/feng2r200) 创建并维护。
 
-当前语义插件版本为 `2.6.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
+当前语义插件版本为 `2.7.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
 
 ## 为什么需要它
 
@@ -72,6 +72,7 @@ work-lifecycle 路由器
       +-- 项目事实
       +-- 归档整理
       +-- 工作汇报
+      +-- 会话接续治理
       |
       v
 现有工具与项目专用 Skill
@@ -95,6 +96,10 @@ work-lifecycle 路由器
 | `project-archive-curation` | 保留位置与归档就绪判断 |
 | `work-reporting` | 进度、交接和完成汇报 |
 | `resource-observation` | 消耗评估与记录、真实额度边界及后续增强候选 |
+| `continuation-governance` | 只在收益明确时接续 Work，并避免会话碎片化 |
+
+[会话接续治理验证档案](docs/validation/continuation-governance-v1.md)记录了设计来源、
+纠偏历史、确定性测试策略，以及“本地候选能力”和“真实可见 Work 会话”之间的证据边界。
 
 ## 安装
 
@@ -118,9 +123,9 @@ codex plugin add work-governance@work-governance-local
 
 ```sh
 scripts/install-hook-runtime.py package \
-  --expected-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
+  --expected-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
 scripts/install-hook-runtime.py launcher \
-  --probe-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
+  --probe-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
 ```
 
 升级时，必须用 `--rollback-digest` 指定当前包摘要，并在安装新版 Plugin 前通过
@@ -141,11 +146,11 @@ scripts/install-hook-runtime.py launcher \
 
 ```sh
 scripts/install-hook-runtime.py user-hook install \
-  --expected-package-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
+  --expected-package-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
 scripts/install-hook-runtime.py user-hook status \
-  --expected-package-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
+  --expected-package-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
 scripts/install-hook-runtime.py user-hook rollback \
-  --expected-package-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
+  --expected-package-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
 ```
 
 在新的本地 Codex 会话中使用 `/hooks`，确认 SessionStart、PreCompact 和 PostToolUse 三个事件出现后，再通过 Codex 审查并信任精确定义。不要把 trust bypass 作为已安装配置。Plugin 内置定义仍可用；但仅 Plugin 路径的 `Installed 0` 不会否定单独安装的用户级定义，两个采用面必须分别汇报。
@@ -155,7 +160,7 @@ scripts/install-hook-runtime.py user-hook rollback \
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 2.6.0
+  --keep-version 2.7.0
 ```
 
 ## 行为示例
@@ -196,7 +201,7 @@ scripts/prune-local-plugin-cache.sh \
 
 - `plugin.json` 作为可移植的 Agent Plugins manifest；
 - `.codex-plugin/plugin.json` 作为 Codex 兼容性后备 manifest；
-- `skills/` 存放十三个相互独立的政策模块，以及一个可选的代码智能适配模块；
+- `skills/` 存放十四个相互独立的政策模块，以及一个可选的代码智能适配模块；
 - `.agents/plugins/marketplace.json` 作为仓库 marketplace。
 
 可移植 manifest 是面向未来的包权威来源。测试会确保它的身份信息和 OpenAI 接口元数据与兼容性 manifest 保持一致。

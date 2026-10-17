@@ -1,0 +1,4 @@
+interface:
+  display_name: "Continuation Governance"
+  short_description: "Rotate sustained Work only when continuity gains are clear"
+  default_prompt: "Use $work-governance:continuation-governance to decide whether this exact Work should continue in a new visible Project-bound conversation without fragmenting its state."

@@ -22,6 +22,7 @@ SKILL_NAMES = {
     "project-archive-curation",
     "work-reporting",
     "resource-observation",
+    "continuation-governance",
     "frontend-governance",
 }
 
@@ -417,6 +418,48 @@ def test_problem_discovery_is_early_stage_appropriate_and_risk_bounded() -> None
     assert "primary need is to design the coverage" in validation
 
 
+def test_continuation_governance_preserves_roles_and_real_work_acceptance() -> None:
+    lifecycle = normalized(SKILLS / "work-lifecycle" / "SKILL.md")
+    continuation = normalized(SKILLS / "continuation-governance" / "SKILL.md")
+    contract = normalized(
+        SKILLS / "continuation-governance" / "references" / "decision-contract.md"
+    )
+
+    assert "work-governance:continuation-governance" in lifecycle
+    assert "One compaction alone is insufficient" in lifecycle
+    assert "one active listener" in continuation
+    assert "must not create a replacement listener" in continuation
+    assert "SubAgent or side chat" in continuation
+    assert "resolved, stable `thread_id`" in continuation
+    assert "pending `clientThreadId`" in continuation
+    assert "exact specified Project" in continuation
+    assert "see it, audit it, and continue interacting with it" in continuation
+    assert "current carrier with the exact exclusive Claim" in continuation
+    assert "must never silently rebase the decision basis" in continuation
+    assert "irreversible `abort_only` listener recovery" in continuation
+    assert "cannot dispatch creation, attach or accept a candidate, or" in continuation
+    assert "non-forking `create_thread`" in continuation
+    assert "provider Project-policy receipt and monotonic revision" in continuation
+    assert "`source_transcript_included=false`" in continuation
+    assert "8,192 bytes, 64 items, and a 4,096-token budget" in continuation
+    assert "require the same target to accept again" in continuation
+    assert "Local tests" in continuation
+    assert "cannot prove that a real Codex Work conversation exists" in continuation
+    assert "At least two pressure signals" in contract
+    assert "Compaction only" in contract
+    assert "user-visible, auditable, and interactive" in contract
+    assert "previously committed current Work candidate source" in contract
+    assert "creation operation/request correlation" in contract
+    assert "`project_opt_in_receipt_kind`: the exact durable-provider" in contract
+    assert "`continuation_packet_token_budget`" in contract
+    assert "`evidence_references`" in contract
+    assert "complete gate summary" in contract
+    assert "irreversibly `abort_only`" in contract
+    assert "dispatch must reread the enabled Project" in contract
+    assert "recompute exact admitted scope currentness" in contract
+    assert "cannot later become a listener or ordinary Work" in contract
+
+
 def test_project_development_trigger_and_anti_trigger_are_explicit() -> None:
     skill_path = SKILLS / "project-development-governance" / "SKILL.md"
     text = read(skill_path)
@@ -692,6 +735,7 @@ def test_manifest_readme_and_project_metadata_match_architecture() -> None:
     assert "Problem discovery" in manifest["interface"]["capabilities"]
     assert "Project archive curation" in manifest["interface"]["capabilities"]
     assert "Frontend delivery governance" in manifest["interface"]["capabilities"]
+    assert "Conversation continuation governance" in manifest["interface"]["capabilities"]
     assert portable["$schema"] == "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
     assert portable["name"] == manifest["name"] == project["project"]["name"]
     assert portable["version"] == manifest["version"]

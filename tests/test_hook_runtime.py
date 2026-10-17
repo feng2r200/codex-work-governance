@@ -12,6 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install-hook-runtime.py"
 MANIFEST = ROOT / "plugins" / "work-governance" / "runtime" / "package.json"
+RUNTIME = ROOT / "plugins" / "work-governance" / "runtime" / "hook_runtime.py"
 HOOKS = ROOT / "plugins" / "work-governance" / "hooks" / "hooks.json"
 CONTRACT = "wg-hook-v1"
 
@@ -98,6 +99,82 @@ def load_installer_module() -> object:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def load_runtime_module() -> object:
+    spec = importlib.util.spec_from_file_location("work_governance_hook_runtime", RUNTIME)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def continuation_event() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "continuation_enabled": True,
+        "durable_provider_available": True,
+        "project_opt_in_receipt_kind": "workvcs_project_policy",
+        "project_opt_in_receipt_digest": "1" * 64,
+        "project_opt_in_revision": 4,
+        "project_opt_in_verified_at_us": 1_790_000_000_000_000,
+        "project_id": "g-p-continuation-test",
+        "scope_id": "01900000-0000-7000-8000-000000000001",
+        "workspace_id": "01900000-0000-7000-8000-000000000002",
+        "branch_id": "01900000-0000-7000-8000-000000000003",
+        "task_entity_id": "01900000-0000-7000-8000-000000000004",
+        "listener_session_id": "01900000-0000-7000-8000-000000000005",
+        "listener_revision": 3,
+        "source_session_id": "01900000-0000-7000-8000-000000000006",
+        "source_claim_id": "01900000-0000-7000-8000-000000000007",
+        "owner_epoch": 2,
+        "handoff_digest": "2" * 64,
+        "scope_currentness_digest": "3" * 64,
+        "continuation_packet_digest": "4" * 64,
+        "continuation_packet_bytes": 4_096,
+        "continuation_packet_items": 12,
+        "continuation_packet_token_budget": 2_048,
+        "initial_message_digest": "5" * 64,
+        "adapter_kind": "codex-app",
+        "adapter_version": "test-v1",
+        "evaluated_at_us": 1_790_000_000_000_000,
+        "actor_role": "listener",
+        "source_role": "work",
+        "target_role": "work_candidate",
+        "source_committed": True,
+        "source_is_current_carrier": True,
+        "source_has_exclusive_claim": True,
+        "listener_matches": True,
+        "listener_revision_matches": True,
+        "scope_currentness_matches": True,
+        "project_binding_matches": True,
+        "active_rotation": False,
+        "prior_rotation_terminal": True,
+        "cooldown_satisfied": True,
+        "safe_semantic_point": True,
+        "handoff_fresh": True,
+        "progress_since_last_rotation": True,
+        "expected_benefit": "high",
+        "continuation_risk": "low",
+        "signals": {
+            "context_pressure": True,
+            "repeated_compaction": False,
+            "unchanged_context_replay": True,
+            "coordination_drag": False,
+        },
+        "evidence_references": [
+            {
+                "kind": "workvcs_record",
+                "reference": "record:01900000-0000-7000-8000-000000000008",
+                "digest": "6" * 64,
+            },
+            {
+                "kind": "runtime_observation",
+                "reference": "observation:continuation-pressure",
+                "digest": "7" * 64,
+            },
+        ],
+    }
 
 
 def managed_commands(config: dict[str, object]) -> list[str]:
@@ -208,6 +285,297 @@ def invoke_raw(
         cwd="/",
         check=False,
     )
+
+
+def test_continuation_policy_admits_only_the_nearest_valid_control() -> None:
+    runtime = load_runtime_module()
+    result = runtime.evaluate_continuation_policy(continuation_event())
+
+    assert result["action"] == "prepare_rotation"
+    assert result["causes_product_effects"] is False
+    assert result["pressure_signal_count"] == 2
+    evaluator_receipt = result["evaluator_receipt"]
+    assert isinstance(evaluator_receipt, dict)
+    assert evaluator_receipt["evaluator_version"] == "wg-continuation-v1"
+    assert evaluator_receipt["action"] == "prepare_rotation"
+    assert evaluator_receipt["result"]["action"] == "prepare_rotation"
+    assert evaluator_receipt["result"]["gate_summary"] == evaluator_receipt["gate_summary"]
+    assert evaluator_receipt["evidence_references"] == continuation_event()["evidence_references"]
+    assert (
+        result["evaluator_receipt_digest"]
+        == hashlib.sha256(canonical(evaluator_receipt)).hexdigest()
+    )
+    assert result["policy_decision"] == {
+        "schema_version": 1,
+        "action": "prepare_rotation",
+        "continuation_enabled": True,
+        "durable_provider_available": True,
+        "project_opt_in_receipt_kind": "workvcs_project_policy",
+        "project_opt_in_receipt_digest": "1" * 64,
+        "project_opt_in_revision": 4,
+        "project_opt_in_verified_at_us": 1_790_000_000_000_000,
+        "project_id": "g-p-continuation-test",
+        "scope_id": "01900000-0000-7000-8000-000000000001",
+        "workspace_id": "01900000-0000-7000-8000-000000000002",
+        "branch_id": "01900000-0000-7000-8000-000000000003",
+        "task_entity_id": "01900000-0000-7000-8000-000000000004",
+        "listener_session_id": "01900000-0000-7000-8000-000000000005",
+        "listener_revision": 3,
+        "source_session_id": "01900000-0000-7000-8000-000000000006",
+        "source_claim_id": "01900000-0000-7000-8000-000000000007",
+        "owner_epoch": 2,
+        "handoff_digest": "2" * 64,
+        "scope_currentness_digest": "3" * 64,
+        "continuation_packet_digest": "4" * 64,
+        "continuation_packet_bytes": 4_096,
+        "continuation_packet_items": 12,
+        "continuation_packet_token_budget": 2_048,
+        "initial_message_digest": "5" * 64,
+        "adapter_kind": "codex-app",
+        "adapter_version": "test-v1",
+        "evaluated_at_us": 1_790_000_000_000_000,
+        "evaluator_version": "wg-continuation-v1",
+        "evaluator_result_digest": evaluator_receipt["result_digest"],
+        "evaluator_receipt": evaluator_receipt,
+        "evaluator_receipt_digest": result["evaluator_receipt_digest"],
+    }
+    assert result["target_contract"] == {
+        "conversation_kind": "work",
+        "creation_method": "create_thread",
+        "forked": False,
+        "exact_project_required": True,
+        "project_binding_provenance_required": True,
+        "creation_operation_correlation_required": True,
+        "creation_request_digest_required": True,
+        "bounded_continuation_packet_required": True,
+        "continuation_packet_max_bytes": 8_192,
+        "continuation_packet_max_items": 64,
+        "continuation_packet_token_budget_max": 4_096,
+        "initial_message_digest_required": True,
+        "source_transcript_included": False,
+        "durable_dispatch_before_product_call_required": True,
+        "dispatch_currentness_revalidation_required": True,
+        "product_receipt_required": True,
+        "product_receipt_actor_binding_required": True,
+        "current_listener_revision_required": True,
+        "stable_thread_id_required": True,
+        "resolved_thread_id_required": True,
+        "user_visible": True,
+        "auditable": True,
+        "interactive": True,
+        "target_authored_acceptance_required": True,
+        "created_target_global_role_reservation_required": True,
+        "created_target_source_exception": "exact_committed_candidate_claim_scope",
+        "lost_listener_drift_recovery_mode": "abort_only",
+        "abort_only_recovery_may_create_target": False,
+        "abort_only_recovery_may_commit": False,
+        "abort_only_recovery_requires_original_operation_reconciliation": True,
+        "abort_only_recovery_requires_state_specific_terminal_evidence": True,
+        "prohibited_targets": ["listener", "subagent", "side_chat", "hidden_task"],
+    }
+
+
+def test_continuation_evaluator_receipt_is_deterministic_and_sensitive_to_evidence() -> None:
+    runtime = load_runtime_module()
+    first = runtime.evaluate_continuation_policy(continuation_event())
+    replay = runtime.evaluate_continuation_policy(continuation_event())
+
+    assert replay["evaluator_receipt"] == first["evaluator_receipt"]
+    assert replay["evaluator_receipt_digest"] == first["evaluator_receipt_digest"]
+    assert replay["policy_decision"] == first["policy_decision"]
+
+    changed_gate = continuation_event()
+    changed_gate["safe_semantic_point"] = False
+    gate_result = runtime.evaluate_continuation_policy(changed_gate)
+    assert gate_result["action"] == "stay"
+    assert gate_result["evaluator_receipt_digest"] != first["evaluator_receipt_digest"]
+    assert (
+        gate_result["policy_decision"]["evaluator_result_digest"]
+        != first["policy_decision"]["evaluator_result_digest"]
+    )
+
+    changed_evidence = continuation_event()
+    references = changed_evidence["evidence_references"]
+    assert isinstance(references, list)
+    references[1] = {
+        "kind": "runtime_observation",
+        "reference": "observation:continuation-pressure-refreshed",
+        "digest": "8" * 64,
+    }
+    evidence_result = runtime.evaluate_continuation_policy(changed_evidence)
+    assert evidence_result["action"] == "prepare_rotation"
+    assert evidence_result["evaluator_receipt_digest"] != first["evaluator_receipt_digest"]
+    assert (
+        evidence_result["policy_decision"]["evaluator_result_digest"]
+        != first["policy_decision"]["evaluator_result_digest"]
+    )
+
+
+@pytest.mark.parametrize(
+    "evidence_references",
+    [
+        None,
+        [],
+        [
+            {
+                "kind": "runtime_observation",
+                "reference": f"observation:{index}",
+                "digest": "6" * 64,
+            }
+            for index in range(33)
+        ],
+        [
+            {
+                "kind": "runtime_observation",
+                "reference": "observation:duplicate",
+                "digest": "6" * 64,
+            },
+            {
+                "kind": "runtime_observation",
+                "reference": "observation:duplicate",
+                "digest": "6" * 64,
+            },
+        ],
+        [
+            {
+                "kind": "runtime\nobservation",
+                "reference": "observation:invalid-kind",
+                "digest": "6" * 64,
+            }
+        ],
+        [
+            {
+                "kind": "runtime_observation",
+                "reference": "observation:invalid-digest",
+                "digest": "not-a-digest",
+            }
+        ],
+    ],
+)
+def test_continuation_evaluator_rejects_unbounded_or_malformed_evidence(
+    evidence_references: object,
+) -> None:
+    runtime = load_runtime_module()
+    event = continuation_event()
+    event["evidence_references"] = evidence_references
+
+    with pytest.raises(RuntimeError):
+        runtime.evaluate_continuation_policy(event)
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "reason"),
+    [
+        (("actor_role",), "subagent", "actor_must_be_bound_listener"),
+        (("actor_role",), "side_chat", "actor_must_be_bound_listener"),
+        (("source_role",), "listener", "source_role_not_rotatable"),
+        (("target_role",), "listener", "target_must_be_work_candidate"),
+        (("source_is_current_carrier",), False, "source_not_current_carrier"),
+        (("source_has_exclusive_claim",), False, "source_missing_exclusive_claim"),
+        (("listener_revision_matches",), False, "listener_revision_mismatch"),
+        (("scope_currentness_matches",), False, "scope_currentness_mismatch"),
+        (("project_binding_matches",), False, "project_binding_mismatch"),
+        (("active_rotation",), True, "rotation_already_active_or_unknown"),
+        (("safe_semantic_point",), False, "unsafe_semantic_point"),
+        (("handoff_fresh",), False, "handoff_not_fresh"),
+        (("cooldown_satisfied",), False, "cooldown_not_satisfied"),
+        (("expected_benefit",), "medium", "expected_benefit_not_high"),
+        (("continuation_risk",), "high", "continuation_risk_high"),
+        (("continuation_enabled",), False, "project_not_opted_in"),
+        (("durable_provider_available",), False, "durable_provider_unavailable"),
+    ],
+)
+def test_continuation_policy_rejects_unsafe_or_fragmenting_cases(
+    path: tuple[str, ...], value: object, reason: str
+) -> None:
+    runtime = load_runtime_module()
+    event = continuation_event()
+    event[path[0]] = value
+
+    result = runtime.evaluate_continuation_policy(event)
+
+    assert result["action"] == "stay"
+    assert reason in result["reasons"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("scope_id", "scope\nforged-output=true"),
+        ("handoff_digest", "not-a-digest"),
+        ("listener_revision", 0),
+        ("owner_epoch", True),
+        ("evaluated_at_us", -1),
+        ("project_opt_in_revision", 0),
+        ("continuation_packet_digest", "not-a-digest"),
+        ("continuation_packet_bytes", 8_193),
+        ("continuation_packet_items", 65),
+        ("continuation_packet_token_budget", 4_097),
+    ],
+)
+def test_continuation_policy_fails_closed_on_malformed_decision_identity(
+    field: str, value: object
+) -> None:
+    """Malformed durable-decision identity must never produce a rotation recommendation."""
+    runtime = load_runtime_module()
+    event = continuation_event()
+    event[field] = value
+
+    with pytest.raises(RuntimeError):
+        runtime.evaluate_continuation_policy(event)
+
+
+def test_compaction_alone_never_triggers_continuation() -> None:
+    runtime = load_runtime_module()
+    event = continuation_event()
+    event["signals"] = {
+        "context_pressure": False,
+        "repeated_compaction": True,
+        "unchanged_context_replay": False,
+        "coordination_drag": False,
+    }
+
+    result = runtime.evaluate_continuation_policy(event)
+
+    assert result["action"] == "stay"
+    assert result["pressure_signal_count"] == 1
+    assert "insufficient_pressure_diversity" in result["reasons"]
+
+
+def test_committed_work_candidate_can_be_the_next_rotation_source() -> None:
+    runtime = load_runtime_module()
+    event = continuation_event()
+    event["source_role"] = "work_candidate"
+
+    result = runtime.evaluate_continuation_policy(event)
+
+    assert result["action"] == "prepare_rotation"
+
+
+def test_uncommitted_work_candidate_cannot_chain_rotation() -> None:
+    runtime = load_runtime_module()
+    event = continuation_event()
+    event["source_role"] = "work_candidate"
+    event["source_committed"] = False
+
+    result = runtime.evaluate_continuation_policy(event)
+
+    assert result["action"] == "stay"
+    assert "work_candidate_not_committed" in result["reasons"]
+
+
+def test_installed_runtime_evaluator_is_deterministic_and_has_no_state_side_effect(
+    tmp_path: Path,
+) -> None:
+    launcher, digest = install(tmp_path)
+    event = continuation_event()
+    first = invoke(launcher, tmp_path, digest, "evaluate-continuation", event)
+    second = invoke(launcher, tmp_path, digest, "evaluate-continuation", event)
+
+    assert first.returncode == second.returncode == 0
+    assert first.stdout == second.stdout
+    assert json.loads(first.stdout)["action"] == "prepare_rotation"
+    assert not (tmp_path / ".local/state/work-governance-hook").exists()
 
 
 def test_install_probe_and_no_change_hook_output(tmp_path: Path) -> None:

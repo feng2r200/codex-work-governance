@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.local/bin/work-governance-hook dispatch --contract wg-hook-v1 --package-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c --handler session-start"
+            "command": "$HOME/.local/bin/work-governance-hook dispatch --contract wg-hook-v1 --package-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9 --handler session-start"
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.local/bin/work-governance-hook dispatch --contract wg-hook-v1 --package-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c --handler pre-compact"
+            "command": "$HOME/.local/bin/work-governance-hook dispatch --contract wg-hook-v1 --package-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9 --handler pre-compact"
           }
         ]
       }
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.local/bin/work-governance-hook dispatch --contract wg-hook-v1 --package-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c --handler post-tool-use"
+            "command": "$HOME/.local/bin/work-governance-hook dispatch --contract wg-hook-v1 --package-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9 --handler post-tool-use"
           }
         ]
       }

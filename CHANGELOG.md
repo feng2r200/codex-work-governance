@@ -7,6 +7,37 @@ All notable changes to Work Governance are documented here. The project follows
 
 No unreleased changes.
 
+## 2.7.0 - 2026-10-17
+
+### Added
+
+- Continuation Governance for deciding when one exact Work should move to a
+  new visible, auditable, interactive conversation in the same Project without
+  making every compaction a rotation trigger.
+- A deterministic, side-effect-free continuation evaluator, compact replay
+  fixtures, and a validation dossier that separates local contract coverage
+  from real-product and natural resource acceptance.
+
+### Changed
+
+- Listener, Work carrier, committed-candidate, SubAgent, and side-chat roles
+  now have explicit asymmetric continuation rules. A listener may create a
+  Work candidate for monitored Work but cannot duplicate itself; SubAgents and
+  side chats cannot act as rotation source, actor, or target.
+- Candidate readiness now requires non-forking creation-operation correlation,
+  exact Project-binding provenance, a resolved stable thread identity, product
+  receipt, visibility, auditability, and interactivity.
+- Continuation decisions now carry a deterministic evaluator receipt whose
+  digest binds the complete canonical result, gate summary, and bounded
+  evidence references.
+- Dispatch must freshly revalidate exact-scope currentness before the product
+  effect. A created target thread is globally excluded from listener and
+  ordinary Work roles; only its exact committed candidate/Claim/scope may later
+  source another rotation.
+- An inactive lost listener with drifted Work currentness can only be replaced
+  through irreversible abort-only recovery: the original attempt may be
+  reconciled and terminated, but it cannot create, attach, accept, or commit.
+
 ## 2.6.0 - 2026-10-13
 
 ### Added

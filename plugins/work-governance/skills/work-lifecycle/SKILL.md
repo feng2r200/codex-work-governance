@@ -187,6 +187,11 @@ model capability, reasoning, or failure visibility.
 - Load `work-governance:resource-observation` when assessing or recording
   meaningful consumption, reviewing a proposed resource restriction, or scoping
   a later efficiency enhancement. Ordinary work needs no separate resource audit.
+- Load `work-governance:continuation-governance` during sustained Work when
+  context pressure, repeated compaction, unchanged replay, or coordination drag
+  may justify continuing the exact Work in a new normal conversation. One
+  compaction alone is insufficient; SubAgent, side-chat, and listener-self
+  rotation remain prohibited.
 - Load scene- or tool-specific Skills only when their actual scenario or tool
   is in scope. Their operating details do not belong in this lifecycle router.
 

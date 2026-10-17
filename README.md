@@ -13,7 +13,7 @@ and durable state enter only when they add value.
 
 Created and maintained by [feng2r200](https://github.com/feng2r200).
 
-The current semantic plugin version is `2.6.0`. Release-impacting changes to
+The current semantic plugin version is `2.7.0`. Release-impacting changes to
 Skills, plugin metadata, packaging, installation, or release workflow must bump
 the version according to compatibility impact. Build timestamps and Git commits
 are provenance only; they do not replace a semantic version bump. The CI gate
@@ -106,6 +106,7 @@ User goal and authority
           +-- project truth
           +-- archive curation
           +-- work reporting
+          +-- continuation governance
           |
           v
 Existing tools and project-specific Skills
@@ -129,6 +130,12 @@ Existing tools and project-specific Skills
 | `project-archive-curation` | Retention placement and archive readiness |
 | `work-reporting` | Progress, handoff, and completion communication |
 | `resource-observation` | Consumption assessment, binding limits, and later efficiency candidates |
+| `continuation-governance` | Evidence-based conversation rotation without Work fragmentation |
+
+The [continuation-governance validation dossier](docs/validation/continuation-governance-v1.md)
+records the design lineage, correction history, deterministic test strategy,
+and the boundary between a local candidate and a real product-visible Work
+conversation.
 
 ## Install
 
@@ -156,9 +163,9 @@ the Plugin:
 
 ```sh
 scripts/install-hook-runtime.py package \
-  --expected-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
+  --expected-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
 scripts/install-hook-runtime.py launcher \
-  --probe-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
+  --probe-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
 ```
 
 During an upgrade, name the current digest with `--rollback-digest` and pass
@@ -191,11 +198,11 @@ unrelated Hook changes.
 
 ```sh
 scripts/install-hook-runtime.py user-hook install \
-  --expected-package-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
+  --expected-package-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
 scripts/install-hook-runtime.py user-hook status \
-  --expected-package-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
+  --expected-package-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
 scripts/install-hook-runtime.py user-hook rollback \
-  --expected-package-digest 923d1b419d7068bafbd3a07805348a27195a8571cbf4d1574e1c5f6d8060585c
+  --expected-package-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
 ```
 
 Use `/hooks` in a fresh local Codex session, require SessionStart, PreCompact,
@@ -211,7 +218,7 @@ remove older direct cache entries with:
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 2.6.0
+  --keep-version 2.7.0
 ```
 
 ## Example Behavior
@@ -349,7 +356,7 @@ The distributable plugin lives in `plugins/work-governance` and uses:
 - `.codex-plugin/plugin.json` as the Codex compatibility fallback;
 - `hooks/hooks.json` as the Hook definition declared by both the portable
   OpenAI extension and the Codex compatibility manifest;
-- `skills/` for thirteen independent policy modules plus one optional
+- `skills/` for fourteen independent policy modules plus one optional
   code-intelligence adapter; and
 - `.agents/plugins/marketplace.json` as the repository marketplace.
 
