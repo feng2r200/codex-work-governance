@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "task_id": "project-conversation-branch-routing-randomized",
+  "trial_kind": "project_routing",
+  "trace": {
+    "minimum_final_messages": 1,
+    "minimum_completed_commands": 1,
+    "boundary": {
+      "workspace_only": true,
+      "forbidden_executables": [
+        "workvcs"
+      ]
+    }
+  },
+  "required_files": [
+    "routing-decisions.json"
+  ],
+  "outcome_contract": {
+    "oracle_id": "runner.project-routing.v2",
+    "required_checks": [
+      "output.declared_scope_exact_and_workspace_symlink_free",
+      "routing.schema",
+      "routing.decision_set_exact",
+      "routing.independent_goal_separate",
+      "routing.parallel_independent_separate",
+      "routing.related_collaboration_shared",
+      "routing.condition_change_switch",
+      "routing.default_not_authoritative",
+      "routing.conflict_fail_closed",
+      "routing.record_currentness_enforced",
+      "routing.current_revision_only",
+      "routing.stale_record_excluded",
+      "routing.revoked_record_excluded",
+      "routing.terminal_record_excluded",
+      "routing.superseded_record_excluded",
+      "routing.outside_project_record_excluded",
+      "routing.authority_isolated",
+      "routing.unrelated_records_excluded"
+    ]
+  }
+}

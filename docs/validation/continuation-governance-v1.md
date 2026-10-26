@@ -65,7 +65,7 @@ historical threads and attachments remain provenance.
 | Listener cannot create a conversation | The bound listener may create one Work candidate for the monitored Work, but cannot create or rotate into another listener. |
 | Target can be an internal ID | Readiness requires a resolved stable `thread_id` for a normal, visible, auditable, interactive Work conversation under the exact Project. |
 | Every compaction triggers rotation | Compaction is one pressure signal. At least two independent pressure classes and all safety gates are required. |
-| Test with a huge artificial conversation | Use deterministic policy cases, historical replay, fake product outcomes, temporary stores, concurrency, and later natural pilots. |
+| Test with a huge artificial conversation | Use deterministic policy cases, historical replay, actual temporary-store provider execution, and later authorized natural pilots. |
 
 ## Architecture split
 
@@ -147,12 +147,14 @@ not sufficient.
 | --- | --- | --- |
 | Policy fixtures | deterministic admission and rejection reasons; no state side effect | conversation creation or Claim transfer |
 | Temporary-store protocol tests | exact-Project policy/revocation, roles, exact scope, idempotency, dispatch-time currentness, concurrency, immutable unknown and abort-only reconciliation, global target identity reservation, packet/message binding, target acceptance/reacceptance, abort, listener fencing, atomic Claim transfer, and bypass resistance | that Codex created a real user-visible conversation |
-| Fake product adapter | pre-call dispatch, actor-bound receipts, and reconciliation behavior around known, failed, and unknown creation outcomes | actual Project placement, clean-context use, or user interaction |
+| Stable runtime readiness execution | actual WorkVCS executable identity, exact policy/scope readback, protocol surface, revocation invalidation, and a fail-closed product boundary | product authorization, Project placement, or a created conversation |
+| Trusted product-adapter execution | pre-call dispatch and actor-bound product receipts correlated to an actual creation attempt | user visibility and target interaction until observed in the product |
 | Real product pilot | actual listener creates one visible normal Work in the exact Project; the target receives only the bounded packet, consumes it, accepts it, and remains interactable; natural resource behavior | universal or fixed Token savings |
 
-This delivery validates the first two layers. It does not install or activate
-the candidate, create a real conversation, send cross-conversation messages,
-archive a source conversation, Push, release, or deploy.
+This delivery validates the policy, provider protocol, and stable runtime
+readiness layers. It does not install or activate the candidate, create a real
+conversation, send cross-conversation messages, archive a source conversation,
+Push, release, or deploy.
 
 ## Resource test strategy
 
@@ -161,11 +163,14 @@ The test strategy intentionally avoids manufacturing a long conversation:
 - replay a small representation of historical pressure instead of entire
   transcripts;
 - vary one policy gate at a time around a nearest valid control;
-- use deterministic fake creation outcomes: known success, known failure, and
-  unknown result;
-- prove dispatch precedes the fake product call and that revocation or relevant
-  source/Handoff/dependency drift after admission prevents that call while
-  unrelated work remains admissible;
+- execute provider policy, exact-scope, revocation, and readback behavior in a
+  real isolated WorkVCS Store without treating caller-authored product fields
+  as authorization;
+- require a trusted adapter's actual product result before exercising known,
+  failed, or unknown creation reconciliation;
+- prove dispatch precedes the actual product call and that revocation or
+  relevant source/Handoff/dependency drift after admission prevents that call
+  while unrelated work remains admissible;
 - race two admissions against the same exact scope in a temporary Store;
 - verify that an unresolved attempt blocks a new identity and reconciles the
   original candidate, and that a created target identity cannot be reused or

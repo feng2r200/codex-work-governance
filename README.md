@@ -13,7 +13,7 @@ and durable state enter only when they add value.
 
 Created and maintained by [feng2r200](https://github.com/feng2r200).
 
-The current semantic plugin version is `2.7.0`. Release-impacting changes to
+The current semantic plugin version is `2.8.0`. Release-impacting changes to
 Skills, plugin metadata, packaging, installation, or release workflow must bump
 the version according to compatibility impact. Build timestamps and Git commits
 are provenance only; they do not replace a semantic version bump. The CI gate
@@ -163,9 +163,9 @@ the Plugin:
 
 ```sh
 scripts/install-hook-runtime.py package \
-  --expected-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
+  --expected-digest 4079c966b13c9c063f211def8620da6857e6ba207247486a2730e2749184ac20
 scripts/install-hook-runtime.py launcher \
-  --probe-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
+  --probe-digest 4079c966b13c9c063f211def8620da6857e6ba207247486a2730e2749184ac20
 ```
 
 During an upgrade, name the current digest with `--rollback-digest` and pass
@@ -198,11 +198,11 @@ unrelated Hook changes.
 
 ```sh
 scripts/install-hook-runtime.py user-hook install \
-  --expected-package-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
+  --expected-package-digest 4079c966b13c9c063f211def8620da6857e6ba207247486a2730e2749184ac20
 scripts/install-hook-runtime.py user-hook status \
-  --expected-package-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
+  --expected-package-digest 4079c966b13c9c063f211def8620da6857e6ba207247486a2730e2749184ac20
 scripts/install-hook-runtime.py user-hook rollback \
-  --expected-package-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
+  --expected-package-digest 4079c966b13c9c063f211def8620da6857e6ba207247486a2730e2749184ac20
 ```
 
 Use `/hooks` in a fresh local Codex session, require SessionStart, PreCompact,
@@ -218,7 +218,7 @@ remove older direct cache entries with:
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 2.7.0
+  --keep-version 2.8.0
 ```
 
 ## Example Behavior
@@ -372,6 +372,10 @@ uv sync --locked --all-groups
 uv run pytest
 uv run ruff check tests/test_policy_contract.py
 uv run ruff format --check tests/test_policy_contract.py
+uv run mypy --strict scripts/evaluate_goal_continuity.py \
+  scripts/run_behavior_trial.py scripts/evaluate_continuation_readiness.py \
+  plugins/work-governance/runtime/hook_runtime.py \
+  tests/test_goal_continuity_evaluator.py tests/test_continuation_readiness.py
 git diff --check
 ```
 

@@ -49,6 +49,35 @@ project state at a declared stage boundary and remains unchanged during normal
 in-stage execution. The provider may point to that snapshot while continuing
 to record later live state.
 
+## Conversation Work Selection
+
+Project ownership and current work selection are separate decisions. When the
+provider offers work branches, choose the branch from the relationships among
+Project conversations and the work they carry:
+
+- conversations continuing the same outcome may share a branch;
+- parallel or independent outcomes may use separate branches even inside one
+  Project;
+- related conversations may share a branch when they intentionally coordinate
+  the same state; and
+- a conversation may change branch when its outcome, continuation relation, or
+  shared-state requirement materially changes.
+
+A provider work branch is not a Git branch and must not be inferred from one.
+The Project's default provider binding identifies a project-level route, not
+the current conversation's work. Preserve the selected provider session,
+branch, task or focus, and authority as one routing tuple through recovery,
+mutation, readback, and handoff.
+
+Before admitting recovered material, classify it as project-shared truth or as
+task-specific instruction, acceptance, progress, or authority. Only the first
+class transfers across conversations by default. Resolve dependencies through
+their exact references; a nearby record with similar wording is not a
+dependency, and another task's pending action or approval does not authorize
+the current task. If routing evidence conflicts, stop provider writes for the
+affected path until the intended work is resolved, while safe independent work
+may continue.
+
 ## Authority And State Ownership
 
 Use project-native authority for content that future contributors and tools are
@@ -195,7 +224,8 @@ the payload remains current.
 
 Recover only what controls the current task:
 
-- current objective and relevant scope;
+- complete current objective and relevant scope;
+- achieved results, remaining delivery gaps, and actual blockers;
 - current status and last verified milestone;
 - prioritized next work and dependencies;
 - material constraints and prohibited actions;

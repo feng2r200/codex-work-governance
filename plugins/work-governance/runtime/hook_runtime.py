@@ -13,7 +13,9 @@ import fcntl
 import hashlib
 import json
 import os
+import pwd
 import stat
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -27,8 +29,10 @@ MAX_CONTINUATION_PACKET_BYTES = 8_192
 MAX_CONTINUATION_PACKET_ITEMS = 64
 MAX_CONTINUATION_PACKET_TOKEN_BUDGET = 4_096
 MAX_CONTINUATION_EVIDENCE_REFERENCES = 32
+MAX_PROVIDER_OUTPUT_BYTES = 131_072
 STATE_TTL_SECONDS = 7 * 24 * 60 * 60
 CONTINUATION_EVALUATOR_VERSION = "wg-continuation-v1"
+CONTINUATION_READINESS_VERSION = "wg-continuation-readiness-v1"
 CONTINUATION_PRESSURE_SIGNALS = (
     "context_pressure",
     "repeated_compaction",
@@ -328,6 +332,441 @@ def _canonical_digest(value: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _optional_digest(value: dict[str, object], field: str, label: str) -> str | None:
+    candidate = value.get(field)
+    if candidate is None:
+        return None
+    return _required_digest(value, field, label)
+
+
+def _stable_workvcs_path() -> Path:
+    """Return the user-owned stable WorkVCS entry without trusting caller PATH or HOME."""
+    account_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    executable = account_home / ".local" / "bin" / "workvcs"
+    try:
+        info = executable.lstat()
+    except FileNotFoundError:
+        raise RuntimeError(f"stable WorkVCS entry is missing: {executable}") from None
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise RuntimeError(f"stable WorkVCS entry is not a real regular file: {executable}")
+    if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o022:
+        raise RuntimeError(f"stable WorkVCS entry is not safely owner-controlled: {executable}")
+    if not os.access(executable, os.X_OK):
+        raise RuntimeError(f"stable WorkVCS entry is not executable: {executable}")
+    return executable
+
+
+def _validated_store_path(event: dict[str, object]) -> Path:
+    value = _required_identifier(event, "store_path", "event")
+    store = Path(value)
+    if not store.is_absolute():
+        raise RuntimeError("event.store_path must be absolute")
+    try:
+        info = store.lstat()
+    except FileNotFoundError:
+        raise RuntimeError(f"WorkVCS Store is missing: {store}") from None
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise RuntimeError(f"WorkVCS Store is not a real regular file: {store}")
+    if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o022:
+        raise RuntimeError(f"WorkVCS Store is not safely owner-controlled: {store}")
+    return store
+
+
+def _run_bounded_command(executable: Path, arguments: list[str]) -> str:
+    """Run one absolute, bounded provider query and retain no ambient PATH authority."""
+    completed = subprocess.run(
+        [str(executable), *arguments],
+        capture_output=True,
+        check=False,
+        cwd="/",
+        env={"HOME": pwd.getpwuid(os.getuid()).pw_dir, "PATH": "/usr/bin:/bin"},
+        text=True,
+        timeout=15,
+    )
+    output_size = len(completed.stdout.encode("utf-8")) + len(completed.stderr.encode("utf-8"))
+    if output_size > MAX_PROVIDER_OUTPUT_BYTES:
+        raise RuntimeError("WorkVCS query output exceeds the bounded output limit")
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip() or "no diagnostic"
+        raise RuntimeError(
+            f"WorkVCS query failed with exit {completed.returncode}: {detail[:2048]}"
+        )
+    return completed.stdout
+
+
+def _parse_json_output(output: str, label: str) -> dict[str, object]:
+    """Parse one native JSON object without inventing provider semantics."""
+    try:
+        value: object = json.loads(output)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"{label} is not valid JSON") from error
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise RuntimeError(f"{label} must be a JSON object")
+    return value
+
+
+def _native_object(value: dict[str, object], field: str) -> dict[str, object]:
+    """Return one required native readiness layer."""
+    candidate = value.get(field)
+    if not isinstance(candidate, dict) or not all(isinstance(key, str) for key in candidate):
+        raise RuntimeError(f"WorkVCS continuation readiness.{field} must be an object")
+    return candidate
+
+
+def _native_non_negative_int(value: dict[str, object], field: str, label: str) -> int:
+    """Return one native non-negative integer while rejecting booleans."""
+    candidate = value.get(field)
+    if isinstance(candidate, bool) or not isinstance(candidate, int) or candidate < 0:
+        raise RuntimeError(f"{label}.{field} must be a non-negative integer")
+    return candidate
+
+
+def _native_optional_identifier(value: dict[str, object], field: str, label: str) -> str | None:
+    """Return one optional provider identity after validating a present value."""
+    if value.get(field) is None:
+        return None
+    return _required_identifier(value, field, label)
+
+
+def _validate_session_layer(value: dict[str, object], label: str, *, carrier: bool) -> None:
+    """Validate the typed identity and lifecycle fields of one provider session."""
+    _required_identifier(value, "session_id", label)
+    _required_enum(
+        value,
+        "lifecycle_state",
+        {"active", "potentially_stale", "ended"},
+        label,
+    )
+    for field in (
+        "role",
+        "thread_id",
+        "active_workspace_id",
+        "active_branch_id",
+        "last_activity_at_us",
+    ):
+        if field == "last_activity_at_us":
+            if value.get(field) is not None:
+                _native_non_negative_int(value, field, label)
+        else:
+            _native_optional_identifier(value, field, label)
+    for field in ("thread_session_count", "historical_created_target_count"):
+        if value.get(field) is not None:
+            _native_non_negative_int(value, field, label)
+    if carrier:
+        _required_enum(
+            value,
+            "provenance",
+            {
+                "work",
+                "committed_work_candidate",
+                "invalid_work_candidate",
+                "invalid_role",
+            },
+            label,
+        )
+        _native_optional_identifier(value, "promotion_rotation_id", label)
+        _native_optional_identifier(value, "promotion_project_id", label)
+
+
+def _validate_native_readiness(
+    snapshot: dict[str, object], expected_scope_id: str
+) -> tuple[str, list[dict[str, str]]]:
+    """Validate the native aggregate schema without recomputing its decision."""
+    if snapshot.get("schema_version") != 1:
+        raise RuntimeError("WorkVCS continuation readiness.schema_version must be 1")
+    for field in (
+        "read_only",
+        "store_opened_readonly",
+        "provider_protocol_ready",
+        "product_membership_verified",
+        "product_dispatch_authorized",
+    ):
+        if not isinstance(snapshot.get(field), bool):
+            raise RuntimeError(f"WorkVCS continuation readiness.{field} must be boolean")
+    if snapshot["read_only"] is not True or snapshot["store_opened_readonly"] is not True:
+        raise RuntimeError("WorkVCS continuation readiness did not prove a read-only Store open")
+    if (
+        snapshot["product_membership_verified"] is not False
+        or snapshot["product_dispatch_authorized"] is not False
+    ):
+        raise RuntimeError(
+            "WorkVCS continuation readiness cannot assert product membership or dispatch authority"
+        )
+    currentness_digest = _required_digest(
+        snapshot, "currentness_digest", "WorkVCS continuation readiness"
+    )
+
+    scope = _native_object(snapshot, "scope")
+    for field in (
+        "scope_id",
+        "workspace_id",
+        "branch_id",
+        "task_entity_id",
+        "listener_session_id",
+        "carrier_session_id",
+        "carrier_claim_id",
+    ):
+        _required_identifier(scope, field, "WorkVCS continuation readiness.scope")
+    if scope["scope_id"] != expected_scope_id:
+        raise RuntimeError("WorkVCS continuation readiness.scope.scope_id does not match")
+    for field in ("listener_revision", "owner_epoch", "updated_at_us"):
+        _native_non_negative_int(scope, field, "WorkVCS continuation readiness.scope")
+    project_fields = (
+        scope.get("project_id"),
+        scope.get("project_policy_revision"),
+        scope.get("project_policy_receipt_digest"),
+        scope.get("project_binding_source"),
+    )
+    if any(value is None for value in project_fields) and not all(
+        value is None for value in project_fields
+    ):
+        raise RuntimeError("WorkVCS continuation readiness.scope has a partial Project binding")
+    if all(value is not None for value in project_fields):
+        _required_identifier(scope, "project_id", "WorkVCS continuation readiness.scope")
+        _native_non_negative_int(
+            scope,
+            "project_policy_revision",
+            "WorkVCS continuation readiness.scope",
+        )
+        if scope["project_policy_revision"] == 0:
+            raise RuntimeError(
+                "WorkVCS continuation readiness.scope.project_policy_revision must be positive"
+            )
+        _required_digest(
+            scope,
+            "project_policy_receipt_digest",
+            "WorkVCS continuation readiness.scope",
+        )
+        _required_enum(
+            scope,
+            "project_binding_source",
+            {"continuation.scope_bound"},
+            "WorkVCS continuation readiness.scope",
+        )
+
+    policy = _native_object(snapshot, "policy")
+    _required_enum(
+        policy,
+        "resolution",
+        {
+            "scope_binding",
+            "committed_work_candidate",
+            "project_binding_missing",
+            "project_policy_missing",
+        },
+        "WorkVCS continuation readiness.policy",
+    )
+    _native_non_negative_int(policy, "candidate_count", "WorkVCS continuation readiness.policy")
+    for field in ("project_id", "actor_session_id"):
+        _native_optional_identifier(policy, field, "WorkVCS continuation readiness.policy")
+    if policy.get("enabled") is not None and not isinstance(policy["enabled"], bool):
+        raise RuntimeError("WorkVCS continuation readiness.policy.enabled must be boolean or null")
+    for field in ("revision", "updated_at_us"):
+        if policy.get(field) is not None:
+            _native_non_negative_int(policy, field, "WorkVCS continuation readiness.policy")
+    if policy.get("receipt_digest") is not None:
+        _required_digest(policy, "receipt_digest", "WorkVCS continuation readiness.policy")
+    if all(value is not None for value in project_fields) and (
+        policy.get("resolution") != "scope_binding"
+        or policy.get("candidate_count") != 1
+        or policy.get("project_id") != scope.get("project_id")
+    ):
+        raise RuntimeError(
+            "WorkVCS continuation readiness policy does not match the scope-bound Project"
+        )
+    if (
+        all(value is not None for value in project_fields)
+        and policy.get("revision") == scope.get("project_policy_revision")
+        and policy.get("receipt_digest") != scope.get("project_policy_receipt_digest")
+    ):
+        raise RuntimeError(
+            "WorkVCS continuation readiness policy receipt conflicts at the scope revision"
+        )
+
+    _validate_session_layer(
+        _native_object(snapshot, "listener"),
+        "WorkVCS continuation readiness.listener",
+        carrier=False,
+    )
+    _validate_session_layer(
+        _native_object(snapshot, "carrier"),
+        "WorkVCS continuation readiness.carrier",
+        carrier=True,
+    )
+
+    claim = _native_object(snapshot, "claim")
+    for field in (
+        "claim_id",
+        "session_id",
+        "workspace_id",
+        "branch_id",
+        "task_entity_id",
+        "mode",
+    ):
+        _required_identifier(claim, field, "WorkVCS continuation readiness.claim")
+    if not isinstance(claim.get("active"), bool):
+        raise RuntimeError("WorkVCS continuation readiness.claim.active must be boolean")
+    if claim.get("last_activity_at_us") is not None:
+        _native_non_negative_int(
+            claim, "last_activity_at_us", "WorkVCS continuation readiness.claim"
+        )
+
+    branch = _native_object(snapshot, "branch")
+    for field in ("branch_id", "workspace_id", "lifecycle_state", "head_commit_id"):
+        _required_identifier(branch, field, "WorkVCS continuation readiness.branch")
+    _required_digest(branch, "head_state_digest", "WorkVCS continuation readiness.branch")
+    for field in ("projection_status", "projected_commit_id"):
+        _native_optional_identifier(branch, field, "WorkVCS continuation readiness.branch")
+    if branch.get("projection_state_digest") is not None:
+        _required_digest(
+            branch,
+            "projection_state_digest",
+            "WorkVCS continuation readiness.branch",
+        )
+    if not isinstance(branch.get("projection_current"), bool):
+        raise RuntimeError(
+            "WorkVCS continuation readiness.branch.projection_current must be boolean"
+        )
+
+    task = _native_object(snapshot, "task")
+    _required_identifier(task, "task_entity_id", "WorkVCS continuation readiness.task")
+    if not isinstance(task.get("current"), bool):
+        raise RuntimeError("WorkVCS continuation readiness.task.current must be boolean")
+    for field in ("entity_version_id", "status"):
+        _native_optional_identifier(task, field, "WorkVCS continuation readiness.task")
+    if task.get("state_digest") is not None:
+        _required_digest(task, "state_digest", "WorkVCS continuation readiness.task")
+
+    rotation = _native_object(snapshot, "rotation")
+    if not isinstance(rotation.get("active"), bool):
+        raise RuntimeError("WorkVCS continuation readiness.rotation.active must be boolean")
+    for field in (
+        "rotation_id",
+        "state",
+        "listener_session_id",
+        "candidate_session_id",
+    ):
+        _native_optional_identifier(rotation, field, "WorkVCS continuation readiness.rotation")
+    if rotation.get("scope_currentness_digest") is not None:
+        _required_digest(
+            rotation,
+            "scope_currentness_digest",
+            "WorkVCS continuation readiness.rotation",
+        )
+    if rotation.get("abort_only") is not None and not isinstance(rotation["abort_only"], bool):
+        raise RuntimeError(
+            "WorkVCS continuation readiness.rotation.abort_only must be boolean or null"
+        )
+    for field in ("listener_revision", "last_activity_at_us"):
+        if rotation.get(field) is not None:
+            _native_non_negative_int(rotation, field, "WorkVCS continuation readiness.rotation")
+
+    gaps_value = snapshot.get("gaps")
+    if not isinstance(gaps_value, list):
+        raise RuntimeError("WorkVCS continuation readiness.gaps must be an array")
+    gaps: list[dict[str, str]] = []
+    seen_codes: set[str] = set()
+    for index, candidate in enumerate(gaps_value):
+        label = f"WorkVCS continuation readiness.gaps[{index}]"
+        if not isinstance(candidate, dict) or not all(isinstance(key, str) for key in candidate):
+            raise RuntimeError(f"{label} must be an object")
+        code = _required_identifier(candidate, "code", label)
+        detail = _required_identifier(candidate, "detail", label)
+        if code in seen_codes:
+            raise RuntimeError("WorkVCS continuation readiness.gaps contains duplicate codes")
+        seen_codes.add(code)
+        gaps.append({"code": code, "detail": detail})
+    if snapshot["provider_protocol_ready"] is not (len(gaps) == 0):
+        raise RuntimeError(
+            "WorkVCS continuation readiness.provider_protocol_ready must equal gaps.is_empty"
+        )
+    return currentness_digest, gaps
+
+
+def _continuation_readiness_response(
+    snapshot: dict[str, object], scope_id: str, previous_digest: str | None
+) -> dict[str, object]:
+    """Validate one native aggregate and expose its product-adapter boundary."""
+    currentness_digest, provider_gaps = _validate_native_readiness(snapshot, scope_id)
+
+    if previous_digest is None:
+        change_status = "baseline"
+        meaningfully_changed: bool | None = None
+    elif previous_digest == currentness_digest:
+        change_status = "unchanged"
+        meaningfully_changed = False
+    else:
+        change_status = "changed"
+        meaningfully_changed = True
+
+    product_gaps = [
+        "trusted_product_adapter_unavailable",
+        "product_actor_authorization_unverified",
+        "exact_project_placement_unverified",
+        "normal_conversation_visibility_unverified",
+        "target_authored_acceptance_unavailable",
+    ]
+    return {
+        "readiness_version": CONTINUATION_READINESS_VERSION,
+        "read_only": True,
+        "provider_protocol_ready": snapshot["provider_protocol_ready"],
+        "automatic_rotation_ready": False,
+        "safe_to_dispatch_product_effect": False,
+        "provider_snapshot": snapshot,
+        "provider_snapshot_digest": currentness_digest,
+        "meaning_change": {
+            "status": change_status,
+            "meaningfully_changed": meaningfully_changed,
+            "requires_fresh_policy_evaluation": previous_digest != currentness_digest,
+        },
+        "product_adapter": {
+            "available": False,
+            "accepted_creation_method": "create_thread",
+            "requires_normal_visible_auditable_interactive_conversation": True,
+            "requires_exact_project_binding": True,
+            "requires_product_control_plane_actor_receipt": True,
+            "prohibited_substitutes": [
+                "codex_exec",
+                "hidden_task",
+                "caller_asserted_authorization",
+                "unresolved_client_thread_id",
+            ],
+        },
+        "provider_gaps": provider_gaps,
+        "product_gaps": product_gaps,
+        "gaps": [gap["code"] for gap in provider_gaps] + product_gaps,
+    }
+
+
+def inspect_continuation_readiness(event: dict[str, object]) -> dict[str, object]:
+    """Consume one native atomic provider snapshot and expose the product gap."""
+    if event.get("schema_version") != 1:
+        raise RuntimeError("continuation readiness schema_version must be 1")
+    allowed_fields = {
+        "schema_version",
+        "store_path",
+        "scope_id",
+        "previous_currentness_digest",
+    }
+    unexpected_fields = sorted(set(event).difference(allowed_fields))
+    if unexpected_fields:
+        raise RuntimeError(
+            "continuation readiness contains unsupported fields: " + ", ".join(unexpected_fields)
+        )
+    store = _validated_store_path(event)
+    scope_id = _required_identifier(event, "scope_id", "event")
+    previous_digest = _optional_digest(event, "previous_currentness_digest", "event")
+    executable = _stable_workvcs_path()
+    snapshot = _parse_json_output(
+        _run_bounded_command(
+            executable,
+            ["continuation", "readiness", str(store), "--scope-id", scope_id],
+        ),
+        "WorkVCS continuation readiness",
+    )
+    return _continuation_readiness_response(snapshot, scope_id, previous_digest)
+
+
 def _required_evidence_references(event: dict[str, object]) -> list[dict[str, str]]:
     candidate = event.get("evidence_references")
     if not isinstance(candidate, list) or not candidate:
@@ -550,6 +989,10 @@ def evaluate_continuation_policy(event: dict[str, object]) -> dict[str, object]:
         "action": action,
         "reasons": reasons if reasons else ["all_gates_satisfied"],
         "pressure_signal_count": pressure_count,
+        "decision_scope": "policy_recommendation",
+        "control_inputs_authoritative": False,
+        "requires_provider_readback_before_dispatch": True,
+        "requires_product_control_plane_authorization": True,
         "causes_product_effects": False,
         "evaluator_receipt": evaluator_receipt,
         "evaluator_receipt_digest": evaluator_receipt_digest,
@@ -607,6 +1050,12 @@ def main() -> int:
         return 0
     if args.handler == "evaluate-continuation":
         result = evaluate_continuation_policy(_read_event())
+        sys.stdout.buffer.write(
+            json.dumps(result, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+        )
+        return 0
+    if args.handler == "continuation-readiness":
+        result = inspect_continuation_readiness(_read_event())
         sys.stdout.buffer.write(
             json.dumps(result, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
         )

@@ -1,0 +1,45 @@
+{
+  "schema_version": 2,
+  "task_id": "goal-continuity-randomized-repeated-failure",
+  "trial_kind": "goal_continuity",
+  "trace": {
+    "minimum_final_messages": 1,
+    "minimum_completed_commands": 2,
+    "boundary": {
+      "workspace_only": true,
+      "forbidden_executables": [
+        "workvcs"
+      ]
+    }
+  },
+  "required_files": [
+    "delivery/summary.json",
+    "delivery/summary.md",
+    "delivery/summary-stage-receipt.json",
+    "delivery/decision-log.json",
+    "verify_delivery.py"
+  ],
+  "outcome_contract": {
+    "oracle_id": "runner.goal-delivery.v2",
+    "required_checks": [
+      "stimulus.repeated_failure_no_delta",
+      "output.declared_scope_exact_and_workspace_symlink_free",
+      "stimulus.local_json_stage_passed_with_markdown_gap",
+      "stimulus.remaining_delivery_continued_after_stage",
+      "discovery.runtime_observation_classified_non_blocking",
+      "delivery.summary_exact",
+      "delivery.markdown_exact",
+      "stimulus.route_changed_to_complete_outcome",
+      "validator.accepts_correct",
+      "validator.rejects_json_currency",
+      "validator.rejects_json_fulfilled_orders",
+      "validator.rejects_json_fulfilled_units",
+      "validator.rejects_json_net_revenue",
+      "validator.rejects_json_regions",
+      "validator.rejects_json_extra_field",
+      "validator.rejects_markdown_divergence",
+      "validator.rejects_changed_orders",
+      "validator.rejects_changed_contract"
+    ]
+  }
+}

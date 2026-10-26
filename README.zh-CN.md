@@ -8,7 +8,7 @@ Work Governance 帮助 Agent 发现真实目标，只引入任务确实需要的
 
 由 [feng2r200](https://github.com/feng2r200) 创建并维护。
 
-当前语义插件版本为 `2.7.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
+当前语义插件版本为 `2.8.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
 
 ## 为什么需要它
 
@@ -123,9 +123,9 @@ codex plugin add work-governance@work-governance-local
 
 ```sh
 scripts/install-hook-runtime.py package \
-  --expected-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
+  --expected-digest 4079c966b13c9c063f211def8620da6857e6ba207247486a2730e2749184ac20
 scripts/install-hook-runtime.py launcher \
-  --probe-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
+  --probe-digest 4079c966b13c9c063f211def8620da6857e6ba207247486a2730e2749184ac20
 ```
 
 升级时，必须用 `--rollback-digest` 指定当前包摘要，并在安装新版 Plugin 前通过
@@ -146,11 +146,11 @@ scripts/install-hook-runtime.py launcher \
 
 ```sh
 scripts/install-hook-runtime.py user-hook install \
-  --expected-package-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
+  --expected-package-digest 4079c966b13c9c063f211def8620da6857e6ba207247486a2730e2749184ac20
 scripts/install-hook-runtime.py user-hook status \
-  --expected-package-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
+  --expected-package-digest 4079c966b13c9c063f211def8620da6857e6ba207247486a2730e2749184ac20
 scripts/install-hook-runtime.py user-hook rollback \
-  --expected-package-digest fa6e2832ffd2f91305dc42c8e84cf9fee71b07322e25e845c39ee2d617cbdbb9
+  --expected-package-digest 4079c966b13c9c063f211def8620da6857e6ba207247486a2730e2749184ac20
 ```
 
 在新的本地 Codex 会话中使用 `/hooks`，确认 SessionStart、PreCompact 和 PostToolUse 三个事件出现后，再通过 Codex 审查并信任精确定义。不要把 trust bypass 作为已安装配置。Plugin 内置定义仍可用；但仅 Plugin 路径的 `Installed 0` 不会否定单独安装的用户级定义，两个采用面必须分别汇报。
@@ -160,7 +160,7 @@ scripts/install-hook-runtime.py user-hook rollback \
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 2.7.0
+  --keep-version 2.8.0
 ```
 
 ## 行为示例
@@ -215,6 +215,10 @@ uv sync --locked --all-groups
 uv run pytest
 uv run ruff check tests/test_policy_contract.py
 uv run ruff format --check tests/test_policy_contract.py
+uv run mypy --strict scripts/evaluate_goal_continuity.py \
+  scripts/run_behavior_trial.py scripts/evaluate_continuation_readiness.py \
+  plugins/work-governance/runtime/hook_runtime.py \
+  tests/test_goal_continuity_evaluator.py tests/test_continuation_readiness.py
 git diff --check
 ```
 

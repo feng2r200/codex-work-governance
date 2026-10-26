@@ -19,6 +19,12 @@ reconstructing tool output. Prefer:
 - the next action;
 - a decision, risk, or surprise that needs attention.
 
+Relate meaningful progress to the original requested result: which delivery
+gap closed, what remains, and what actual blocker determines the next action.
+Do not turn each local test, review, or commit into a completion claim or a
+request for renewed goal confirmation. Continue the authorized work while
+reporting at useful semantic boundaries.
+
 Do not emit a complete closeout after each mechanical slice. Non-blocking
 improvements and lessons may wait for the next useful checkpoint or final
 report.

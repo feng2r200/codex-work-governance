@@ -134,6 +134,35 @@ step-by-step chain of thought.
 - Add a compatibility layer only after evidence establishes its necessity.
   Make the compatibility decision and its cost visible to the user.
 
+## Keep The Final Outcome Moving
+
+Keep the complete requested outcome, latest user corrections, acceptance,
+achieved results, remaining gaps, and actual blockers recoverable throughout
+the work. A subtask, repair, test, review, commit, or handoff serves that outcome;
+finishing one does not redefine completion. Select the next action by the
+delivery gap it can close, without making a repeated status ritual mandatory.
+
+Classify a discovery before expanding work. Resolve defects that block
+correctness, safety, or the agreed acceptance. Preserve other useful findings
+and continue the main route; an adjacent improvement is not automatically a
+new prerequisite. Keep the governed actor and modified product explicit: an
+application's own agent failure is evidence about that application, while the
+development agent's diagnosis, authority, or delivery behavior is a governance
+question.
+
+When repeated repairs, builds, or reviews produce no new useful evidence or
+keep opening adjacent problems, reassess the cause, the current acceptance
+method, and the route before repeating the activity. Check the actual failing
+input, contract, environment, and observed effect. Choose an authorized repair,
+replacement, or execution order that advances the complete outcome; do not
+invent a fixed retry count or treat an obsolete validator as product truth.
+
+A passing local check proves its specific repair. Continue the original task
+through the next necessary authorized action and the actual required result.
+Stop at the user's explicit frontier, a real authority boundary, or a blocker
+that prevents further useful work. Report progress by results and gaps closed;
+do not ask the user to restate the goal after each local success.
+
 ## Route Only When Needed
 
 During authorized development, assess and record meaningful resource use while

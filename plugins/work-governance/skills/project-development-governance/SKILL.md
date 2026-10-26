@@ -90,11 +90,20 @@ eligible during a task, do it when the continuity need becomes clear:
    current fact.
 4. Recover a bounded current-state packet once, identified by the provider's
    current revision, head, cursor, or equivalent snapshot identity: current
-   objective, relevant scope and constraints, present status, prioritized next
-   work, pending decisions, any active task or stage decision-authority
+   complete objective, achieved results, remaining delivery gaps, actual blockers,
+   relevant scope and constraints, present status, prioritized next work,
+   pending decisions, any active task or stage decision-authority
    envelope, open risks, and acceptance evidence needed for this task.
 5. Read only the task-relevant authority documents named by the entry, then
    compare important claims with current artifacts or runtime evidence.
+
+Resolve current work separately from project ownership. When provider branches
+or cross-conversation state are relevant, apply
+[Conversation Work Selection](references/project-contract.md#conversation-work-selection).
+It owns flexible conversation-based Branch choice, independence from Git, and
+record-admission boundaries. Preserve its selected session, branch, task or
+focus, and authority through reads, writes, and handoff. Keep recovery bounded
+and support No-Plan work without manufacturing a Plan.
 
 Do not scan all project history at every start. Do not initialize a provider,
 bind an ambient workspace, or repair continuity records unless that mutation is

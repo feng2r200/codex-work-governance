@@ -167,11 +167,13 @@ revision before describing the rotation as complete.
 
 ## Report The Evidence Boundary
 
-Distinguish four outcomes:
+Distinguish five outcomes:
 
 - policy evaluation passed in deterministic fixtures;
-- a local adapter candidate passed Store and fake-actuator tests, including a
-  durable pre-call dispatch boundary and target-authored acceptance;
+- the stable provider runtime read actual policy and exact-scope state from an
+  isolated durable-provider Store and detected meaningful state changes;
+- a trusted product adapter completed durable pre-call dispatch, correlated
+  product creation, and acceptance authored by the actual target;
 - a real visible Work conversation was created and bound; and
 - a natural pilot demonstrated useful quality and resource behavior.
 

@@ -7,6 +7,41 @@ All notable changes to Work Governance are documented here. The project follows
 
 No unreleased changes.
 
+## 2.8.0 - 2026-10-26
+
+### Added
+
+- Randomized final-outcome continuity and Project-conversation routing trials
+  whose Runner owns the real Codex process, execution receipt, and private
+  post-process Oracle. Offline traces remain observational and cannot certify a
+  behavior pass.
+- A read-only continuation readiness handler that consumes the stable WorkVCS
+  native atomic JSON aggregate for one exact scope, including readonly-open,
+  policy, Session, Claim, Branch, Task, rotation, gap, and currentness evidence.
+- Runner-owned forward trials with source-bound Oracles, raw workspace-boundary
+  enforcement, complete delivery and routing conditions, adversarial validator
+  controls, repeated no-outcome stimulus, and duplicate-decision rejection.
+
+### Changed
+
+- Goal, Plan, project-development, and reporting governance now preserve the
+  user's final outcome across intermediate repair, validation, commit, and
+  handoff work, and distinguish blocking route changes from non-blocking
+  findings.
+- Work Branch selection follows Project conversation relationships independently
+  of Git branches, and shared Project truth no longer imports unrelated task
+  authority or default bindings into the active conversation.
+- Continuation evaluation is explicitly a non-authoritative policy
+  recommendation. Product dispatch remains unavailable until a trusted product
+  adapter proves actor authorization, exact Project placement, a normal visible
+  conversation, and target-authored acceptance.
+- Continuation readiness validates native exact-Project scope provenance and
+  current policy independently across policy revisions, rejects unknown Branch
+  lifecycle values as typed errors, and distinguishes persistent Store/WAL
+  invariants from SQLite SHM reader coordination. Explicit false product
+  membership and dispatch fields prevent provider readiness from becoming
+  product authority by omission.
+
 ## 2.7.0 - 2026-10-17
 
 ### Added

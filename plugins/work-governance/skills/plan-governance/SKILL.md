@@ -46,6 +46,14 @@ Capture only what controls execution and review:
 - acceptance evidence, semantic-event handling, confirmation gates, and stop
   or revision conditions.
 
+Retain the complete final outcome when decomposing work. Each active stage
+must have a useful relationship to a remaining delivery gap; passing a stage's
+local checks does not retire unmet original requirements. Keep the achieved
+results and actual blockers recoverable, and continue necessary authorized
+work after a stage succeeds. Apply the lifecycle's final-outcome judgment when
+repairs or reviews stop producing useful evidence; a Plan must not preserve an
+unproductive route merely because its steps were previously written down.
+
 Depth should match uncertainty and consequence. Do not manufacture phases,
 task hierarchies, roles, or test matrices to make the Plan look complete.
 
