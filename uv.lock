@@ -311,7 +311,7 @@ wheels = [
 
 [[package]]
 name = "work-governance"
-version = "2.8.0"
+version = "2.9.0"
 source = { virtual = "." }
 
 [package.dev-dependencies]

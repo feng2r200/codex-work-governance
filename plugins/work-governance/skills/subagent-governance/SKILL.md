@@ -22,6 +22,27 @@ mechanical integration, and work whose coordination cost exceeds its execution.
 - A SubAgent inherits the parent's goal, authority, and active Plan. It does not
   invent a second parent Plan or widen the action boundary.
 
+## Task Instance And Context
+
+Create a new SubAgent instance for each new delegated task. Once its task has
+finished, do not assign a new task to that instance. While its task remains
+open, communicate corrections, additional evidence, and work needed to finish
+that same task to its existing owner. A timeout alone does not end ownership.
+
+By default, start the new instance without the parent's conversation history
+and provide the task-specific context required by the delegation contract.
+When the available interface supports `fork_turns`, use `fork_turns="none"`.
+Include the applicable goal, user requirements, authority, relevant decisions,
+inputs, and exact evidence or artifact references; do not assume the new
+instance knows earlier work. System instructions, available tools, project
+rules, and material it reads can still enter its context.
+
+When correctness requires substantial parent conversation context that cannot
+be reliably conveyed or retrieved by reference, create a new instance with the
+necessary parent history; use `fork_turns="all"` where supported. This choice
+does not resume a completed SubAgent. Never invent history-clearing options or
+assume a new name resets an existing instance.
+
 ## Adaptive Delegation Contract
 
 Every delegation needs enough context to be executable:
