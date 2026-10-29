@@ -11,7 +11,7 @@ dev = [
   "pyyaml>=6.0.3",
   "pytest>=8.4.0",
   "ruff>=0.12.0",
-  "mypy>=1.19,<2",
+  "mypy>=1.19,<3",
 ]
 
 [tool.ruff]
