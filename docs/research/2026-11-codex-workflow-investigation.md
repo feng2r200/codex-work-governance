@@ -521,7 +521,11 @@ agent_buddy store 的 supersedes 链深度分布：
 
 源码确认：`validate_semantics` 在 `history/capture.rs:157` 定义，而 **`capture.rs:394` 的 capture 路径本身也调用同一校验**。capture 326 次 vs capture-validate 108 次（ratio 0.33）。
 
-**判定：capture-validate 是成功但冗余的往返。**
+**判定：`capture-validate` 是唯一的零写校验入口（`store_opened=false` /
+`registry_read=false` / `journal_written=false`），不是冗余往返。** 526 个 validate
+过的 manifest 全部随后被 capture（100% 配对），但 capture 自身的
+`validate_semantics()` 也在开 Store 前执行（`main.rs:31587`），故二者并非互为冗余。
+固定开销源于 `SKILL.md:149` 的无条件强制条款，详见 §9。
 
 ### 5.7 人机工学不对称（强证据）
 
@@ -740,7 +744,8 @@ codex exec --dangerously-bypass-hook-trust --skip-git-repo-check "..."
 | 10 | hook 失效是因为代码写错 | 正向对照实验跑通 | 确定性 |
 | 11 | `output/` 目录失控是 Token 主因 | 全部 `output/` 路径 28 calls / 62,356 B / **0.024%**；`harness-recovery` **0 calls** | 确定性 |
 | 12 | 「在错误路径上越走越远」是主因 | 76 条唯一用户消息中无事后纪偏；真因是子代理的约束蒸发 | 强证据 |
-| 13 | 压缩丢弃用户意图（主会话） | 主会话 10-31 压缩保留 8 条 user 消息；356 次为 0 均属子代理会话 | 确定性 |
+| 13 | 压缩丢弃用户意图（主会话） | 按 `agent_role` 分组：保留 0 条 user 的 48 次压缩**全部属子代理**，主会话 0 次 | 确定性 |
+| 14 | capture-validate 是冗余往返 | capture 自身的校验也在开 Store 前（`main.rs:31587`），但 validate 为唯一零写入口；固定开销源于 `SKILL.md:149` 强制条款 | 确定性 |
 
 ---
 
@@ -1014,6 +1019,127 @@ cat 2026/10/31/*.jsonl | jq -r 'select(.type=="compacted")
 无需改动；该 skill 历史加载仅 9 次。故关闭后无悬空引用。
 
 ---
+
+### 2026-11-04 — §5.4「死字段」判定成立，但「应删除」的执行路径不成立
+
+**当时为何认为是死字段（依据成立）**：`goal.rs:670` / `plan.rs:768` 的
+`require_empty_array` 对 `plan_refs`、`task_refs`、`subgoals`、`work_refs`
+**在解析时强制报错除非为空数组**（错误文本自述「is deferred and must be an
+empty array in Phase 3M」），而真实层级由 `relation` 表的 `contains` 承载。
+
+**本次复测确认两点**：
+
+| 口径 | 结果 |
+| --- | --- |
+| 含这四个字段的 `entity_version` | 119 |
+| 其中四字段任一非空 | **0** |
+| 各 store 的 `relation.contains` | 17 / 29 / 116 / 4 / 33 |
+
+即「结构上被禁止写入的并行表示」属实，字段确实永远为空。
+
+**但「应删除」的执行前提倒塌**：这四个字段进入 `to_canonical_value()`
+（`goal.rs:90/95/97`）→ 被 `state_digest` 覆盖，而解析器要求
+**`goal` 恰好 6 字段**（`goal.rs:582`）、**`plan` 恰好 8 字段**（`plan.rs:651`），
+且对未知字段直接报错（`goal.rs:633`、`plan.rs:712`）。仓内无 entity state 迁移
+机制（`control_plane/migration.rs` 仅 registry 迁移）。
+
+**不改会怎样**：四个字段持续占用每条 goal/plan state 的序列化体积与 digest
+输入，并保留一个误导性的并行层级表示（读者可能误以为层级在此而非 `relation`）。
+实测影响仅为每条 state 约 60 字节，**无功能性故障，无性能可观测影响**。
+
+**改了能带来什么**：移除误导性并行表示，使 `relation` 成为层级的唯一来源；消除
+`Phase 3M` / `Phase 3J` 这类已无上下文的阶段性错误文本。**代价是一次
+`state_schema_version` 1→2 的迁移，需覆盖 119 条现网版本及
+`knowledge_exposure.rs:959`、`checkpoint.rs:426`、`bundle.rs:1054/4993`、
+`genesis.rs:279-284` 全部 digest 比对点。**
+
+**结论**：收益是语义清晰度（非性能、非正确性），成本是带迁移的 schema 升版。
+是否值得做需用户裁定；在未裁定前不动。
+
+**复现**：
+
+```bash
+for f in ~/.codex/workvcs/stores/projects/*.sqlite; do
+  sqlite3 "$f" "select 1 from entity_version limit 1;" >/dev/null 2>&1 || continue
+  sqlite3 "$f" "select count(*) from entity_version where
+      coalesce(json_array_length(state_json,'\$.plan_refs'),0)>0
+   or coalesce(json_array_length(state_json,'\$.task_refs'),0)>0;"
+done
+```
+
+注意两个仪器陷阱：（1）SQLite `LIKE` 中 `_` 是单字符通配符，`'[_%'` 会匹配 `[]`，
+必须改用 `json_array_length`；（2）`stores/projects/` 下有 **0 字节同名 sidecar 文件**，
+查询报 `no such table`，属正常而非数据丢失。
+
+### 2026-11-04 — §5.6「capture-validate 冗余」判定推翻，根因在 Skill 强制条款
+
+**原判定（§5.6）**：`validate_semantics` 在 `capture.rs:157` 定义，`capture.rs:394`
+的 capture 路径也调用同一校验；capture 326 次 vs capture-validate 108 次
+（ratio 0.33）→ 判为「成功但冗余的往返」。
+
+**该判定的隐含前提是「同一 manifest 被 validate 之后又被 capture，故前者白跑」，
+但当时从未检验配对关系，只比了两个总数。** 本次按 manifest 路径做配对：
+
+| 口径 | 数量 |
+| --- | --- |
+| 唯一 validate 过的 manifest | 526 |
+| 唯一 capture 过的 manifest | 532 |
+| 交集（validate 后确实 capture） | **526 / 526 = 100%** |
+| 只 validate 从未 capture | **0** |
+
+配对确实成立，但「冗余」不成立，因为二者**口径不同**：
+
+- `main.rs:31587`：`capture` 的 `validate_semantics()` 在
+  `resolve_project_identity` / registry / Store 打开**之前**执行；
+- `main.rs:14055`：`capture-validate` 全程 `store_opened=false`、
+  `registry_read=false`、`journal_written=false`。
+
+即 capture 自身已能在零写阶段挡下同类错误，**capture-validate 并未提供 capture
+没有的保护**。实测 12 次 `record_invalid` 中，**9 次带 `workspace_id`（即已开 Store
+才报出，validate 根本没挡住）**，仅 3 次由 validate 阶段挡下。
+
+**真实根因**：`~/.agents/skills/workvcs/SKILL.md:149`「Before admitting newly
+authored cognition, run `workvcs capture-validate --manifest FILE`」是**无条件强制**
+条款，因此 526 个 manifest 全部先 validate 一次。成本为 696 次额外 shell 往返
+（命令字节 82,014）。这不是 CLI 设计冗余，是 Skill 条款造成的固定开销。
+
+**结论**：§5.6 的「冗余」归因错误，`capture-validate` 作为零写校验入口有独立价值
+（无 Store / 无项目注册时可用）。真正可议的是 SKILL.md 的无条件强制。是否放宽该
+条款需用户裁定，不在本次范围内。
+
+### 2026-11-04 — §4.1「压缩丢弃用户意图」的残余论据归因到子代理，第 2 项正式作废
+
+§9 已记载「摘要以加密形式存在」推翻了「摘要全空」。残余论据是
+「`user_messages` 保留 0 条 356/395」。本次按 `agent_role` 分组复测：
+
+| 会话类型 | 保留 0 条 user 的压缩次数 |
+| --- | --- |
+| 主会话（无 `agent_role`） | **0** |
+| 子代理会话（`agent_role=worker_deep` 等） | **48** |
+
+2026-10-28 的 48 次中 **41 次集中在单个子代理会话**
+（`rollout-2026-10-28T23-37-15`，`agent_role=worker_deep`、
+`parent_thread_id=01a181b8-…`、`multi_agent_version=v2`）。主会话实测保留
+1/3/9/10 条 user 消息不等，从未为 0。
+
+**含义**：「压缩丢用户意图」是子代理会话特有现象（子代理无真实 user 输入），
+已随关闭多 Agent 一并消除。**第 2 项（压缩交接要求上提）失去全部论据，正式作废**，
+不写入根 `AGENTS.md`。
+
+**复现**：
+
+```bash
+cd ~/.codex/sessions/2026/10/28
+for f in *.jsonl; do
+  n=$(jq -r 'select(.type=="compacted")|[.payload.replacement_history_metadata[]
+     |select(.retained_source.id.role=="user")]|length' "$f" | grep -c '^0$')
+  [ "$n" = "0" ] && continue
+  jq -r 'select(.type=="session_meta")|.payload.agent_role // "MAIN"' "$f" | head -1
+done | sort | uniq -c
+```
+
+注意：`replacement_history_metadata` 是**数组**，直接取
+`.user_messages` 恒得 `null`，会误判为「全部保留 0 条」。
 
 ## 10. 当前已知未决项
 
