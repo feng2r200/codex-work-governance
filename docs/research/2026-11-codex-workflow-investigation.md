@@ -730,7 +730,7 @@ codex exec --dangerously-bypass-hook-trust --skip-git-repo-check "..."
 |---|---|---|---|
 | 1 | WorkVCS 是 Token 主因 | 1.7% | 确定性 |
 | 2 | 截图/图片是主因 | 2.74%（仅 8 次调用） | 确定性 |
-| 3 | 多 Agent 是主因 | 0.03%（含 fork_turns 仅 0.22%） | 确定性 |
+| 3 | ~~多 Agent 是主因~~ **此条作废，反转为成立** | 0.03% 是委派工具回执字节数，口径错误；按会话计费为 **72.8%**，见 §9 与案例 E | 已推翻 |
 | 4 | capture-validate 大量失败 | 错误码近乎为零 | 确定性 |
 | 5 | WorkVCS 占用 tool schema | 62 个嵌套工具中 0 个 | 确定性 |
 | 6 | PreCompact 可注入 additionalContext | schema `additionalProperties:false` | 确定性 |
@@ -738,6 +738,9 @@ codex exec --dangerously-bypass-hook-trust --skip-git-repo-check "..."
 | 8 | WorkVCS 层级完全缺失 | relation 表有 contains 29 条 | 确定性 |
 | 9 | 建议给 knowledge 加 `--cwd`（自我证伪） | 根因是准入规则非 CLI 表面 | 确定性 |
 | 10 | hook 失效是因为代码写错 | 正向对照实验跑通 | 确定性 |
+| 11 | `output/` 目录失控是 Token 主因 | 全部 `output/` 路径 28 calls / 62,356 B / **0.024%**；`harness-recovery` **0 calls** | 确定性 |
+| 12 | 「在错误路径上越走越远」是主因 | 76 条唯一用户消息中无事后纪偏；真因是子代理的约束蒸发 | 强证据 |
+| 13 | 压缩丢弃用户意图（主会话） | 主会话 10-31 压缩保留 8 条 user 消息；356 次为 0 均属子代理会话 | 确定性 |
 
 ---
 
@@ -893,6 +896,84 @@ cat 2026/10/31/*.jsonl | jq -r 'select(.type=="compacted")
 §2 的结论（轮次 8 倍 × 单轮上下文 3.84 倍；`exec` 占工具输出 99.46%；
 文件读取与搜索类 ≈ 34.2%）仍属历史观测，但**不得再作为当前归因使用**，
 需在 defer 生效后的负载上重新采样。
+
+---
+
+### 2026-11-04 — 真因定位：子代理会话占 72.8% 计费（确定性）
+
+前面所有归因都在单个会话内部找原因。按会话归属重新聚合后方向变了。
+划分口径：会话内真实 `role=="user"` 消息 ≥ 5 条为主会话，其余为子代理会话。
+
+| 类别 | turns | 压缩次数 | 计费 Token | 占比 |
+| --- | --- | --- | --- | --- |
+| 主会话 | 13,543 | 40 | 33,691,464 | 27.2% |
+| 子代理会话 | 33,541 | 356 | 90,187,441 | **72.8%** |
+
+单会话极端值：`10-28T23-37` 4,977 turns / 41 次压缩 / 10,331,849；
+`10-29T00-13` 4,225 / 39 / 9,748,615；`10-28T21-14` 1,879 / 28 / 7,226,293。
+
+三重放大机制（均有直接证据）：
+
+1. **全量历史分叉**——151 次 spawn 中 `fork_turns="all"` 105 次、省略（默认即
+   `all`）32 次，合计 **137/151（90.7%）携带全量父历史**；`none` 仅 14 次。
+   子代理首轮（尚未开工）input 中位数 **149,540**、均值 196,568、最大 404,169。
+2. **压缩时无用户意图可保留**——子代理不接收用户消息，故 356 次子代理压缩
+   `retained_context.user_messages` 全为 0 条。对照主会话：10-31 那次压缩完整
+   保留 8 条 user 消息（含「停在方案确认门」等关键约束）。父历史里的用户意图
+   在子代理的第一次压缩后永久消失。
+3. **孙代理递归**——跑了 4,977 轮的那个子代理自身文本中 `spawn_agent` 出现
+   378 次；系统提示明写「Child agents can also spawn their own sub-agents」
+   与「4 available concurrency slots」。
+
+这解释了「Token 大但没进展」：不是走错路，是**约束蒸发**。子代理拿一份静态
+任务描述出生，第一次压缩后连父历史也丢，然后在数千轮里自循环，用户既看不到
+它也无法中途纠偏。主会话压缩完全正常，所以异常从未出现在可观测的位置。
+
+由此修正两个旧结论：
+
+- **「多 Agent 只占 0.03%」作废**——那是委派工具自身回执的字节数，不是被派发
+  工作的成本。已立为 AGENTS.md 案例 E / R9。
+- **「user_messages 356/395 次为 0」不是压缩缺陷**——该读数成立，但成因是这 356
+  次均发生在本就没有 user 消息的子代理会话里。
+
+**复现**：按会话遍历，以 `select((.payload.type//.type)=="message" and
+(.payload.role//.role)=="user")` 计数划分主/子，再聚合
+`.payload.info.last_token_usage` 的 `(input-cached)+output`。
+
+### 2026-11-04 — 已关闭多 Agent 能力（已执行）
+
+关闭前做了四项验证，没有按命名推断直接改：
+
+1. **配置键权威性**——二进制中 `[agents]` 结构体仅 6 个字段
+   （`max_concurrent_threads_per_session`、`max_depth`、`default_subagent_model`、
+   `default_subagent_reasoning_effort`、`job_max_runtime_seconds`、
+   `interrupt_message`），**字面上找不到 `enabled`**，故不能假定已有的
+   `enabled = true` 有效。
+2. **类型错误探针 + 同表控制组**——先测得未知键被静默忽略、已知键写错类型
+   会报 `invalid data`。首次用 `[features]` 下的伪造键做控制组，得到「伪造键也被
+   接受」而判定探针失效；将控制组移回 `[agents]` 同表后结论清晰：
+   `[agents].bogus_xyz` 被 **拒绝**（`deny_unknown_fields`）而 `[agents].enabled`
+   被接受且按 bool 校验 → `enabled` 是真字段。`[features]` 为开放映射，不可作门。
+   （此次失误已立为 R10。）
+3. **行为验证 + 正向对照**——隔离 `CODEX_HOME`、空工作目录、「禁止使用任何工具」
+   提示。`enabled=false` 侧会话文件内六个多代理工具名 **0 次**、
+   `"multi_agent_mode":{}` 为空；`enabled=true` 侧则 `spawn_agent`、`followup_task`、
+   `wait_agent`、`send_message`、`list_agents` 均各现 1 次，
+   `"multi_agent_mode":{"mode":"explicitRequestOnly",...}`。正向对照证明装置有效。
+4. **收益口径**——多代理工具 schema 5,245 B；同一提示下首轮 input
+   13,801（true）vs 12,273（false）= **每轮约 1,528 tokens**。主收益不在 schema，
+   而在消除 137 次全量历史分叉与 33,541 轮子代理执行。
+
+**变更**：`~/.codex/config.toml` 的 `[agents].enabled` 置 `false`，并在原处写入证据
+与回滚注释。备份：`~/.codex/config.toml.bak-20261104-agents`。回滚：置回 `true`。
+
+**关闭后复验**：真实 `CODEX_HOME` 下 `codex doctor` 配置 `✓ loaded`；新会话
+`grep` 六个多代理工具名 0 命中、`"multi_agent_mode":{}` 为空。
+
+**悬空引用排查**：根 `AGENTS.md`、项目 `AGENTS.md`、`config.toml` 均无主动委派
+指令，也无 `worker_deep` 等角色自定义（角色来自内置）。`work-lifecycle` 对
+`subagent-governance` 的转派带条件（「before multi-agent delegation」），自门控，
+无需改动；该 skill 历史加载仅 9 次。故关闭后无悬空引用。
 
 ---
 

@@ -111,6 +111,14 @@ route; an agent that can read the probe's own definition will appear to confirm
 a channel that never delivered anything. Isolate the environment, remove
 incidental access, and re-run.
 
+Hold a control at the same scope as the thing it controls for. Validation
+strictness is rarely uniform across a system: one section may reject every
+unrecognised entry while its neighbour accepts anything, so a control placed in
+the neighbouring section reports a false verdict about the probe itself. When a
+control says the instrument cannot discriminate, suspect the control's
+placement before abandoning the instrument, and re-site it in the exact
+section, shape, and value type under test.
+
 ## Consult The Authoritative Contract
 
 When behavior depends on an interface, read the contract the implementation
@@ -143,6 +151,26 @@ value. Check whether its activation condition was ever met in the observed
 window before concluding it is unnecessary; a condition that was met and did not
 activate indicts the detection, and removal would discard a working capability
 and keep the defect.
+
+## Follow The Cost To Where The Work Ran
+
+A mechanism that hands work off carries almost none of that work's cost in its
+own return value. Delegation, task submission, background execution, and
+scheduling all answer with a short handle, so measuring the handle measures the
+gesture rather than the labour. Charge each execution body to the mechanism that
+created it, and report the dispatch overhead and the dispatched cost as two
+named quantities.
+
+Where the cost lands also determines where evidence lands. Work that runs in its
+own transcript, process, or log is absent from the parent record, so a ranking
+built only on the parent sees a rounding error and concludes the mechanism is
+innocent. Enumerate the children first, then aggregate across them on the
+billed or measured unit that the budget is actually spent in.
+
+A detached execution body also loses the constraints that were never written
+into its brief. Check what instructions reached it and what survived its own
+context handling, because an executor that retains the task but not the limits
+produces fluent, expensive, unsupervised output that no participant observes.
 
 ## Confirm The Mechanism, Not Only The Correlation
 
