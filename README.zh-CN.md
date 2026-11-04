@@ -84,8 +84,8 @@ work-lifecycle 路由器
 | --- | --- |
 | `work-lifecycle` | 小型路由器与安全内核 |
 | `goal-discovery` | 目标澄清与最小决策边界 |
+| `causal-attribution` | 改动之前先用证据确认真实成因 |
 | `plan-governance` | Plan 准入、No-Plan 演进和实质性修订 |
-| `subagent-governance` | 委派价值、所有权和整合 |
 | `git-change-governance` | 分支、worktree、commit 和远端边界 |
 | `code-intelligence` | 结构化源码路由与按活动 checkout 保持 CodeGraph 就绪且最新 |
 | `problem-discovery` | 尽早、分阶段构造反例与设计验证 |
@@ -96,10 +96,6 @@ work-lifecycle 路由器
 | `project-archive-curation` | 保留位置与归档就绪判断 |
 | `work-reporting` | 进度、交接和完成汇报 |
 | `resource-observation` | 消耗评估与记录、真实额度边界及后续增强候选 |
-| `continuation-governance` | 只在收益明确时接续 Work，并避免会话碎片化 |
-
-[会话接续治理验证档案](docs/validation/continuation-governance-v1.md)记录了设计来源、
-纠偏历史、确定性测试策略，以及“本地候选能力”和“真实可见 Work 会话”之间的证据边界。
 
 ## 安装
 
@@ -216,9 +212,9 @@ uv run pytest
 uv run ruff check tests/test_policy_contract.py
 uv run ruff format --check tests/test_policy_contract.py
 uv run mypy --strict scripts/evaluate_goal_continuity.py \
-  scripts/run_behavior_trial.py scripts/evaluate_continuation_readiness.py \
+  scripts/run_behavior_trial.py \
   plugins/work-governance/runtime/hook_runtime.py \
-  tests/test_goal_continuity_evaluator.py tests/test_continuation_readiness.py
+  tests/test_goal_continuity_evaluator.py
 git diff --check
 ```
 

@@ -80,7 +80,9 @@ on a trusted product adapter that supplies exact Project membership and user
 authorization, normal visible non-fork conversation creation, target-authored
 acceptance, and atomic Claim takeover. The verified stable readiness report
 correctly returns `automatic_rotation_ready=false` and performs no product
-effect. See [the runtime boundary](continuation-runtime-readiness-v1.md).
+effect. The former `continuation-runtime-readiness-v1.md` dossier was removed
+when continuation governance was retired; see `docs/research/` for the
+evidence that conversation rotation was never executable.
 
 This stage completed local source integration, installation, and bounded real
 acceptance. It performed no Push, public release, deployment, Buddy business

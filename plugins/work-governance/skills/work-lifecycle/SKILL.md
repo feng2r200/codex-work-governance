@@ -74,7 +74,7 @@ step-by-step chain of thought.
 - Infer routine details from available context and continue while the goal and
   safe next action are clear. Ask only when a user-owned answer can change the
   direction, final result, authority boundary, or an irreversible action.
-- Before a stage proposal, agent delegation, or mutation commits to a material
+- Before a stage proposal or mutation commits to a material
   solution assumption, separate the requested outcome from the proposed means.
   Inspect cheap facts, then route unresolved user-owned choices to goal
   discovery; do not bury them in later feasibility or implementation checks.
@@ -82,7 +82,7 @@ step-by-step chain of thought.
   coordination. Do not make process setup a prerequisite for already-actionable
   work.
 - In sustained coordination, let a semantic event trigger only the review,
-  reread, agent delegation, or durable update its impact warrants. An unchanged
+  reread, or durable update its impact warrants. An unchanged
   status alone is not a reason to repeat them; unknown status still needs
   resolution.
 - Reuse one verified, bounded provider snapshot while its logical owner,
@@ -186,8 +186,6 @@ model capability, reasoning, or failure visibility.
   or acceptance choice.
 - Load `work-governance:plan-governance` when deciding whether a Plan adds
   value, admitting one, or materially revising one.
-- Load `work-governance:subagent-governance` before multi-agent delegation or
-  when diagnosing delegation overhead, ownership, or handoff quality.
 - Load `work-governance:git-change-governance` for branch, worktree, staging,
   commit, push, or Git cleanup decisions.
 - Load `work-governance:code-intelligence` when source-code work needs
@@ -223,11 +221,6 @@ model capability, reasoning, or failure visibility.
 - Load `work-governance:project-archive-curation` when deciding what completed
   project material should be retained, consolidated, or retired, and where it
   should live.
-- Load `work-governance:continuation-governance` during sustained Work when
-  context pressure, repeated compaction, unchanged replay, or coordination drag
-  may justify continuing the exact Work in a new normal conversation. One
-  compaction alone is insufficient; SubAgent, side-chat, and listener-self
-  rotation remain prohibited.
 - Load scene- or tool-specific Skills only when their actual scenario or tool
   is in scope. Their operating details do not belong in this lifecycle router.
 
@@ -264,5 +257,5 @@ evidence that undermines correctness, safety, or a completion claim, and it
 never widens a claim beyond the validation performed.
 
 If review finds no meaningful change, reuse current evidence and continue. Do
-not repeat broad reads, independent review, agent delegation, reporting, Plan
+not repeat broad reads, independent review, reporting, Plan
 updates, or durable writes merely to document that nothing changed.

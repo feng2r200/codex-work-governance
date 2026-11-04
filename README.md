@@ -118,8 +118,8 @@ Existing tools and project-specific Skills
 | --- | --- |
 | `work-lifecycle` | Small router and safety kernel |
 | `goal-discovery` | Goal clarification and minimal decision frontiers |
+| `causal-attribution` | Evidence-based cause confirmation before changing anything |
 | `plan-governance` | Plan admission, No-Plan evolution, and material revision |
-| `subagent-governance` | Delegation value, ownership, and integration |
 | `git-change-governance` | Branches, worktrees, commits, and remote boundaries |
 | `code-intelligence` | Structural source routing and current per-checkout CodeGraph readiness |
 | `problem-discovery` | Early, stage-appropriate falsification and validation design |
@@ -130,12 +130,6 @@ Existing tools and project-specific Skills
 | `project-archive-curation` | Retention placement and archive readiness |
 | `work-reporting` | Progress, handoff, and completion communication |
 | `resource-observation` | Consumption assessment, binding limits, and later efficiency candidates |
-| `continuation-governance` | Evidence-based conversation rotation without Work fragmentation |
-
-The [continuation-governance validation dossier](docs/validation/continuation-governance-v1.md)
-records the design lineage, correction history, deterministic test strategy,
-and the boundary between a local candidate and a real product-visible Work
-conversation.
 
 ## Install
 
@@ -373,9 +367,9 @@ uv run pytest
 uv run ruff check tests/test_policy_contract.py
 uv run ruff format --check tests/test_policy_contract.py
 uv run mypy --strict scripts/evaluate_goal_continuity.py \
-  scripts/run_behavior_trial.py scripts/evaluate_continuation_readiness.py \
+  scripts/run_behavior_trial.py \
   plugins/work-governance/runtime/hook_runtime.py \
-  tests/test_goal_continuity_evaluator.py tests/test_continuation_readiness.py
+  tests/test_goal_continuity_evaluator.py
 git diff --check
 ```
 

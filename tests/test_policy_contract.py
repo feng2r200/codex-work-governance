@@ -15,9 +15,9 @@ PLUGIN = ROOT / "plugins" / "work-governance"
 SKILLS = PLUGIN / "skills"
 SKILL_NAMES = {
     "work-lifecycle",
+    "causal-attribution",
     "goal-discovery",
     "plan-governance",
-    "subagent-governance",
     "git-change-governance",
     "code-intelligence",
     "problem-discovery",
@@ -27,7 +27,6 @@ SKILL_NAMES = {
     "project-archive-curation",
     "work-reporting",
     "resource-observation",
-    "continuation-governance",
     "frontend-governance",
 }
 

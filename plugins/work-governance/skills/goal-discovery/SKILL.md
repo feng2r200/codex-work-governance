@@ -55,7 +55,7 @@ Before a stage or implementation contract fixes one path:
    evidence.
 4. If the choice remains unresolved and those effects matter, route it through
    its current owner. In the default mode, keep it as a user-owned decision and
-   place confirmation before the first design, agent delegation, or mutation
+   place confirmation before the first design or mutation
    that commits to one path. Under explicit decision delegation, select and
    proceed when the choice is inside the active envelope. Continue work that is
    genuinely independent of any still-gated choice.

@@ -1,35 +1,16 @@
 {
-  "name": "work-governance",
-  "version": "2.9.0",
-  "description": "Composable governance for adaptive decisions, safe conversation continuation, problem discovery, frontend delivery, planning, delegation, Git, resource observation, optional code intelligence, validation, long-running project continuity, project truth, archive curation, and reporting.",
   "author": {
     "name": "feng2r200"
   },
-  "license": "Apache-2.0",
-  "keywords": [
-    "codex",
-    "governance",
-    "planning",
-    "validation",
-    "delegation"
-  ],
-  "skills": "./skills/",
+  "description": "Composable governance for adaptive decisions, causal attribution, problem discovery, frontend delivery, planning, Git, resource observation, optional code intelligence, validation, long-running project continuity, project truth, archive curation, and reporting.",
   "hooks": "./hooks/hooks.json",
   "interface": {
-    "displayName": "Work Governance",
-    "shortDescription": "Adaptive governance with optional tool adapters.",
-    "longDescription": "Work Governance helps Codex align goals, evidence, decisions, and authority before acting; design risk-driven validation that exposes important problems early; connect frontend references, required behavior, product copy, and acceptance evidence; adapt execution when semantic events change the route; use Plans and SubAgents only when valuable; protect Git and action boundaries; establish optional structural code intelligence safely; keep long-running project development recoverable; assess and record consumption without invented development budgets; validate proportionally; and report work completely. Explicit decision delegation remains bounded, core policy stays independent of storage and tool choices, and optional adapters activate only for matching scenarios.",
-    "developerName": "feng2r200",
-    "category": "Productivity",
-    "websiteURL": "https://github.com/feng2r200/codex-work-governance",
-    "privacyPolicyURL": "https://github.com/feng2r200/codex-work-governance/blob/main/PRIVACY.md",
-    "termsOfServiceURL": "https://github.com/feng2r200/codex-work-governance/blob/main/TERMS.md",
     "capabilities": [
       "Goal discovery",
+      "Causal attribution",
       "Adaptive decision and review",
       "Problem discovery",
       "Planning",
-      "SubAgent governance",
       "Validation",
       "Governance",
       "Git boundaries",
@@ -39,11 +20,29 @@
       "Project archive curation",
       "Work reporting",
       "Resource observation",
-      "Conversation continuation governance",
       "Frontend delivery governance"
     ],
+    "category": "Productivity",
     "defaultPrompt": [
       "Use $work-governance:work-lifecycle to align evidence and authority, then adapt execution at meaningful change."
-    ]
-  }
+    ],
+    "developerName": "feng2r200",
+    "displayName": "Work Governance",
+    "longDescription": "Work Governance helps Codex align goals, evidence, decisions, and authority before acting; confirm the real cause of an observed symptom before changing anything; design risk-driven validation that exposes important problems early; connect frontend references, required behavior, product copy, and acceptance evidence; adapt execution when semantic events change the route; use Plans only when valuable; protect Git and action boundaries; establish optional structural code intelligence safely; keep long-running project development recoverable; assess and record consumption without invented development budgets; validate proportionally; and report work completely. Explicit decision delegation remains bounded, core policy stays independent of storage and tool choices, and optional adapters activate only for matching scenarios.",
+    "privacyPolicyURL": "https://github.com/feng2r200/codex-work-governance/blob/main/PRIVACY.md",
+    "shortDescription": "Adaptive governance with optional tool adapters.",
+    "termsOfServiceURL": "https://github.com/feng2r200/codex-work-governance/blob/main/TERMS.md",
+    "websiteURL": "https://github.com/feng2r200/codex-work-governance"
+  },
+  "keywords": [
+    "codex",
+    "governance",
+    "planning",
+    "validation",
+    "delegation"
+  ],
+  "license": "Apache-2.0",
+  "name": "work-governance",
+  "skills": "./skills/",
+  "version": "2.9.0"
 }
