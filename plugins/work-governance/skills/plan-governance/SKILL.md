@@ -46,6 +46,13 @@ Capture only what controls execution and review:
 - acceptance evidence, semantic-event handling, confirmation gates, and stop
   or revision conditions.
 
+For each material solution strategy, keep what would show it wrong recorded
+alongside what would show it worked, using the lifecycle's
+[refutable route](../work-lifecycle/SKILL.md) items. A strategy marked
+confirmed or evidenced states the evidence that confirmed it; one marked gated
+states the observation that would retire it. A Plan that records only intended
+outcomes cannot detect that its own route has failed.
+
 Retain the complete final outcome when decomposing work. Each active stage
 must have a useful relationship to a remaining delivery gap; passing a stage's
 local checks does not retire unmet original requirements. Keep the achieved
@@ -112,7 +119,9 @@ Revise the Plan when evidence changes the confirmed goal, Plan contract, data
 strategy, delivery form, material solution strategy, feasibility boundary,
 acceptance, stage dependency, or another choice that invalidates the active
 route. Record the cause, prior route, new route, affected work, and revalidation
-needed through the available Plan tool.
+needed through the available Plan tool. Withdraw the stages that depended on a
+fallen premise rather than weakening them into a reduced form, and record the
+retired route so it is not reproposed.
 
 New evidence, a failed material assumption, validation failure, milestone,
 scope or relevant external-state change, and a receipt mismatch are semantic

@@ -115,7 +115,7 @@ Existing tools and project-specific Skills
 
 | Skill | Owns |
 | --- | --- |
-| `work-lifecycle` | Small router and safety kernel |
+| `work-lifecycle` | Small router, safety kernel, and refutable-route gate |
 | `goal-discovery` | Goal clarification and minimal decision frontiers |
 | `causal-attribution` | Evidence-based cause confirmation before changing anything |
 | `plan-governance` | Plan admission, No-Plan evolution, and material revision |

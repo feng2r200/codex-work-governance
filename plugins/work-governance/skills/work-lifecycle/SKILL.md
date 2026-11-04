@@ -32,6 +32,42 @@ Route each uncertainty by ownership:
 This alignment applies to No-Plan and Plan work alike. It is not a requirement
 to create a Plan or ask questions when the next slice is already clear.
 
+## Make A Proposed Route Refutable Before Executing It
+
+A route that cannot be shown wrong cannot be shown right. Before executing a
+material change, state for each part of the proposal what it assumes, how that
+assumption would be observed to be false, what would count as the improvement,
+and how to get back. Write these as four distinct items rather than one
+confidence statement; a part missing any of them is not ready to execute.
+
+- **Premise:** the facts the part depends on, each independently checkable.
+- **Refutation:** what would be observed if a premise does not hold, named as
+  the actual command, file, or reading that would show it.
+- **Benefit basis:** the metric and the population or denominator that decides
+  whether it worked. "Clearly better" is not a basis.
+- **Reversal:** how to undo the part, and what evidence confirms it is undone.
+
+Run the refutation before the change, not after. Its purpose is to retire a
+wrong route while that is still cheap; an executed route defends itself.
+
+Prove the measuring arrangement before trusting a result it produces. Pair a
+negative with a minimal positive case that differs in one condition, and keep
+that case in the same table, scope, and value shape as the thing under test.
+A check placed in a neighbouring section with different strictness reports a
+verdict about itself rather than about the subject.
+
+When a premise falls, withdraw the parts that depend on it and say which prior
+conclusion is withdrawn, with the same prominence it was first stated. Do not
+attach a fallback to a refuted part or keep it in a weakened form. When the
+falling premise changes the direction rather than one step, stop and re-derive
+the route instead of continuing through the remaining parts.
+
+Record the refutations beside the confirmations. A retired route that stays
+recorded is not paid for twice; an unrecorded one returns as the same proposal.
+Treat the surviving record as a description of the system at a moment: a later
+executor who observes something different should trust the observation and
+amend the record.
+
 If the user explicitly requests analysis, a proposal, or a stop at the
 confirmation frontier, treat that as an execution boundary for the proposed
 next stage. Do not mutate files, create or update durable provider state or a
@@ -206,7 +242,8 @@ model capability, reasoning, or failure visibility.
   an explicit delivery contract. Keep its implementation and browser mechanics
   with the relevant project and tool Skills.
 - Load `work-governance:independent-validation` only when a separate challenge
-  adds meaningful confidence.
+  adds meaningful confidence, including when a proposed route's own refutation
+  was designed by the same party that proposed it.
 - Load `work-governance:project-development-governance` when an explicitly
   enrolled project or ongoing development across tasks, sessions, or phases
   needs a durable entry contract, bounded recovery, live-state reconciliation,

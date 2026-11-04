@@ -82,7 +82,7 @@ work-lifecycle 路由器
 
 | Skill | 负责的判断 |
 | --- | --- |
-| `work-lifecycle` | 小型路由器与安全内核 |
+| `work-lifecycle` | 小型路由器、安全内核与方案证伪闸门 |
 | `goal-discovery` | 目标澄清与最小决策边界 |
 | `causal-attribution` | 改动之前先用证据确认真实成因 |
 | `plan-governance` | Plan 准入、No-Plan 演进和实质性修订 |
