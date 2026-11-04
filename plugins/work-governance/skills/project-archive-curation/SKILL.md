@@ -1,6 +1,6 @@
 ---
 name: project-archive-curation
-description: Use when reviewing completed project work or conversations for archival, deciding what knowledge must be retained first, and separating durable work records, shared project context, project authority, and raw history. Do not use for ordinary file backup or storage cleanup.
+description: Use when reviewing completed project work, investigations, or conversations for archival, deciding what knowledge must be retained first, consolidating findings into durable form, and separating durable work records, shared project context, project authority, and raw history.
 ---
 
 # Project Archive Curation

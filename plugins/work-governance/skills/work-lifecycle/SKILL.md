@@ -194,6 +194,10 @@ model capability, reasoning, or failure visibility.
   structural symbol, call-path, impact, affected-test, or cross-layer
   understanding, including safe per-checkout CodeGraph readiness. Keep literal
   text, prose, logs, and configuration on native inspection routes.
+- Load `work-governance:causal-attribution` when an observed symptom in a
+  running system needs a confirmed cause before anything is changed, including
+  cost or performance blowups, a capability that never activates, a channel
+  that appears to carry nothing, or a suspicion that one component is to blame.
 - Load `work-governance:problem-discovery` when designing or reviewing how
   tests, validation, or evidence should expose important defects early across
   observation environments, state transitions, integrations, side effects, and
@@ -215,7 +219,10 @@ model capability, reasoning, or failure visibility.
   phase handoff, or a full completion report.
 - Load `work-governance:resource-observation` when assessing or recording
   meaningful consumption, reviewing a proposed resource restriction, or scoping
-  a later efficiency enhancement. Ordinary work needs no separate resource audit.
+  a later efficiency enhancement.
+- Load `work-governance:project-archive-curation` when deciding what completed
+  project material should be retained, consolidated, or retired, and where it
+  should live.
 - Load `work-governance:continuation-governance` during sustained Work when
   context pressure, repeated compaction, unchanged replay, or coordination drag
   may justify continuing the exact Work in a new normal conversation. One

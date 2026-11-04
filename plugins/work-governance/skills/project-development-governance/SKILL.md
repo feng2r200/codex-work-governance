@@ -1,6 +1,6 @@
 ---
 name: project-development-governance
-description: Use when an explicitly enrolled project or ongoing software or product development spans multiple tasks, sessions, or phases and needs a durable project contract, bounded startup recovery, or end-of-task state reconciliation. Do not use for isolated edits or one-off investigations outside an enrolled project.
+description: Use when an explicitly enrolled project or ongoing software or product development spans multiple tasks, sessions, or phases and needs a durable project contract, bounded startup recovery, or end-of-task state reconciliation.
 ---
 
 # Project Development Governance

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Causal Attribution"
+  short_description: "Find and confirm the real cause before changing anything"
+  default_prompt: >-
+    Use $work-governance:causal-attribution to measure, falsify, and
+    confirm the actual cause of this symptom before proposing a fix.

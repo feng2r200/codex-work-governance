@@ -1,6 +1,7 @@
 .venv/
 /.work-governance/
 /.worktree/
+/.pi/
 .codegraph/
 .mypy_cache/
 .ruff_cache/

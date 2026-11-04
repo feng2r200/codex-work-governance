@@ -1,6 +1,6 @@
 ---
 name: resource-observation
-description: Use when development needs resource-use assessment or recording, a proposed Token or monetary limit may constrain delivery, or evidence suggests a later efficiency enhancement. Ordinary work does not require a separate resource audit.
+description: Use when development needs resource-use assessment or recording, when a cost, Token, or performance distribution must be measured or explained, when a proposed Token or monetary limit may constrain delivery, or when evidence suggests a later efficiency enhancement.
 ---
 
 # Resource Observation
