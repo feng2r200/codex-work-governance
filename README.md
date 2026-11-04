@@ -40,9 +40,8 @@ than a monolithic process engine.
   because a task is large or important.
 - **Tool-neutral governance core:** the lifecycle and policy modules do not
   contain a state engine or require one specific CLI. When justified, optional
-  deterministic adapters, including bundled Hook definitions or installation
-  scripts, may ship with the Plugin; they remain isolated, scenario-triggered,
-  and able to degrade without blocking unrelated work.
+  deterministic adapters may ship with the Plugin; they remain isolated,
+  scenario-triggered, and able to degrade without blocking unrelated work.
 - **Authority-aware:** authorization to change repository content includes
   coherent, validated, non-rewriting local commits by default, while pushes,
   releases, deployments, production actions, history rewriting, and destructive
@@ -150,61 +149,6 @@ codex plugin add work-governance@work-governance-local
 
 Open a new Codex task after installing or updating. Existing tasks can retain
 the Skill content that was loaded when they started.
-
-The optional hooks use a separately installed stable launcher, never a Plugin
-cache path. Install and read back the immutable runtime package before updating
-the Plugin:
-
-```sh
-scripts/install-hook-runtime.py package \
-  --expected-digest 4079c966b13c9c063f211def8620da6857e6ba207247486a2730e2749184ac20
-scripts/install-hook-runtime.py launcher \
-  --probe-digest 4079c966b13c9c063f211def8620da6857e6ba207247486a2730e2749184ac20
-```
-
-During an upgrade, name the current digest with `--rollback-digest` and pass
-both the current and candidate digests with `--probe-digest` before installing
-the new Plugin. The installer verifies the current launcher first and, if the
-candidate fails, restores the previous launcher and internally re-probes the
-rollback digest. A rollback-probe failure is reported separately. Trust the
-new exact Hook hash through Codex only after the old Hook still runs and the
-candidate package probe succeeds. Hook trust is not inferred from installation.
-The runtime is passive until a Hook invokes it, emits nothing when no explicit
-context packet changed, and does not install a background service.
-
-```sh
-scripts/install-hook-runtime.py launcher \
-  --rollback-digest <CURRENT_DIGEST> \
-  --probe-digest <CURRENT_DIGEST> \
-  --probe-digest <CANDIDATE_DIGEST>
-```
-
-For stable user-level adoption, install the same exact definition into
-`$HOME/.codex/hooks.json`. The installer preserves unrelated user Hooks, replaces
-only prior Work Governance definitions, writes atomically, and restores the
-previous configuration if its own readback fails. It never writes a Plugin cache
-path or trusts a Hook on the user's behalf. A successful install writes an
-owner-private rollback receipt containing the exact candidate and prior managed
-definitions, prior package digests, and whether a user configuration existed.
-The explicit rollback uses compare-and-swap protection: it refuses a changed
-managed definition, verifies each prior immutable package, and preserves
-unrelated Hook changes.
-
-```sh
-scripts/install-hook-runtime.py user-hook install \
-  --expected-package-digest 4079c966b13c9c063f211def8620da6857e6ba207247486a2730e2749184ac20
-scripts/install-hook-runtime.py user-hook status \
-  --expected-package-digest 4079c966b13c9c063f211def8620da6857e6ba207247486a2730e2749184ac20
-scripts/install-hook-runtime.py user-hook rollback \
-  --expected-package-digest 4079c966b13c9c063f211def8620da6857e6ba207247486a2730e2749184ac20
-```
-
-Use `/hooks` in a fresh local Codex session, require SessionStart, PreCompact,
-and PostToolUse to appear, then review and trust their exact definitions through
-Codex. Do not use trust bypass as the installed configuration. The Plugin-bundled
-definition remains available, but a Plugin-only `Installed 0` result does not
-invalidate the separately installed user-level definition; report each adoption
-surface independently.
 
 After local adoption, verify the enabled version with `codex plugin list` and
 remove older direct cache entries with:
@@ -348,8 +292,6 @@ The distributable plugin lives in `plugins/work-governance` and uses:
 
 - `plugin.json` as the portable Agent Plugins manifest;
 - `.codex-plugin/plugin.json` as the Codex compatibility fallback;
-- `hooks/hooks.json` as the Hook definition declared by both the portable
-  OpenAI extension and the Codex compatibility manifest;
 - `skills/` for fourteen independent policy modules plus one optional
   code-intelligence adapter; and
 - `.agents/plugins/marketplace.json` as the repository marketplace.
@@ -368,7 +310,6 @@ uv run ruff check tests/test_policy_contract.py
 uv run ruff format --check tests/test_policy_contract.py
 uv run mypy --strict scripts/evaluate_goal_continuity.py \
   scripts/run_behavior_trial.py \
-  plugins/work-governance/runtime/hook_runtime.py \
   tests/test_goal_continuity_evaluator.py
 git diff --check
 ```

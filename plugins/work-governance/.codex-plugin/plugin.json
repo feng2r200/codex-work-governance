@@ -3,7 +3,6 @@
     "name": "feng2r200"
   },
   "description": "Composable governance for adaptive decisions, causal attribution, problem discovery, frontend delivery, planning, Git, resource observation, optional code intelligence, validation, long-running project continuity, project truth, archive curation, and reporting.",
-  "hooks": "./hooks/hooks.json",
   "interface": {
     "capabilities": [
       "Goal discovery",
@@ -38,8 +37,7 @@
     "codex",
     "governance",
     "planning",
-    "validation",
-    "delegation"
+    "validation"
   ],
   "license": "Apache-2.0",
   "name": "work-governance",

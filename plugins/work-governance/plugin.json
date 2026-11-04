@@ -18,11 +18,10 @@
   ],
   "extensions": {
     "com.openai": {
-      "hooks": "./hooks/hooks.json",
       "interface": {
         "displayName": "Work Governance",
         "shortDescription": "Adaptive governance with optional tool adapters.",
- "longDescription": "Work Governance helps Codex align goals, evidence, decisions, and authority before acting; confirm the real cause of an observed symptom before changing anything; design risk-driven validation that exposes important problems early; connect frontend references, required behavior, product copy, and acceptance evidence; adapt execution when semantic events change the route; use Plans only when valuable; protect Git and action boundaries; establish optional structural code intelligence safely; keep long-running project development recoverable; assess and record consumption without invented development budgets; validate proportionally; and report work completely. Explicit decision delegation remains bounded, core policy stays independent of storage and tool choices, and optional adapters activate only for matching scenarios.",
+        "longDescription": "Work Governance helps Codex align goals, evidence, decisions, and authority before acting; confirm the real cause of an observed symptom before changing anything; design risk-driven validation that exposes important problems early; connect frontend references, required behavior, product copy, and acceptance evidence; adapt execution when semantic events change the route; use Plans only when valuable; protect Git and action boundaries; establish optional structural code intelligence safely; keep long-running project development recoverable; assess and record consumption without invented development budgets; validate proportionally; and report work completely. Explicit decision delegation remains bounded, core policy stays independent of storage and tool choices, and optional adapters activate only for matching scenarios.",
         "developerName": "feng2r200",
         "category": "Productivity",
         "websiteURL": "https://github.com/feng2r200/codex-work-governance",
@@ -30,11 +29,11 @@
         "termsOfServiceURL": "https://github.com/feng2r200/codex-work-governance/blob/main/TERMS.md",
         "capabilities": [
           "Goal discovery",
-   "Causal attribution",
-   "Adaptive decision and review",
+          "Causal attribution",
+          "Adaptive decision and review",
           "Problem discovery",
           "Planning",
-   "Validation",
+          "Validation",
           "Governance",
           "Git boundaries",
           "Optional code intelligence",

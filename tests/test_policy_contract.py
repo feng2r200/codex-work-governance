@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import shlex
 import tomllib
 from pathlib import Path
 
@@ -132,36 +131,11 @@ def test_plugin_manifests_describe_one_portable_interface() -> None:
     assert portable["author"]["name"] == compatibility["author"]["name"]
     assert portable["license"] == compatibility["license"] == project["project"]["license"]
     assert portable["extensions"]["com.openai"]["interface"] == compatibility["interface"]
-    assert compatibility["hooks"] == "./hooks/hooks.json"
-    assert portable["extensions"]["com.openai"]["hooks"] == "./hooks/hooks.json"
+    assert "hooks" not in compatibility
     assert "hooks" not in portable
+    assert "hooks" not in portable["extensions"]["com.openai"]
     assert "mcpServers" not in compatibility
     assert "mcp.json" not in portable
-
-
-def test_hook_manifest_uses_only_the_stable_user_launcher() -> None:
-    """Hook entries must use the installed stable launcher rather than cache paths."""
-    manifest = json.loads(read(PLUGIN / "hooks" / "hooks.json"))
-    hooks = manifest.get("hooks")
-    assert isinstance(hooks, dict) and hooks
-    commands: list[str] = []
-    for groups in hooks.values():
-        assert isinstance(groups, list)
-        for group in groups:
-            assert isinstance(group, dict)
-            entries = group.get("hooks")
-            assert isinstance(entries, list)
-            for entry in entries:
-                assert isinstance(entry, dict)
-                command = entry.get("command")
-                assert isinstance(command, str)
-                commands.append(command)
-
-    assert commands
-    for command in commands:
-        argv = shlex.split(command)
-        assert argv[0] == "$HOME/.local/bin/work-governance-hook"
-        assert not any(part.lower() in {"latest", "current"} for part in argv)
 
 
 def test_external_workflow_actions_are_pinned_to_commit_shas() -> None:
