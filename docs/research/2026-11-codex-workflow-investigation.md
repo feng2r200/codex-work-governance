@@ -801,6 +801,99 @@ UserPromptSubmit 读注入是唯一正确分工。
 比率必须用同一事件总体作分母。把两个触发频率量级不同的事件放进同一个分母，
 会制造出完全虚假的异常。
 
+### 2026-11-04 — §3 的 626M schema 浪费已被上游修复，第 1 项作废
+
+**原记载**：`exec` 工具 description 76,214 B，内部通告 62 个嵌套工具，其中 54 个
+零调用；`mcp__codex_app__*` 49 个 schema 共 48,714 B。按此估算累计浪费 ≈ 626M tokens，
+并得出「第 1 项：`enabled_tools` 白名单，约省 535M」。
+
+**实测结果：该浪费已不存在。Codex 现已延迟加载（defer）嵌套工具。**
+
+按会话逐日比对 `exec` description：
+
+| 日期 | `exec` description | 内含 `codex_app` |
+| --- | --- | --- |
+| 2026-10-27 → 10-29 | 数万 B | 是（最多 4158 行） |
+| 2026-10-31 起至 11-02 | **26,352 B** | **零** |
+
+当前 description 明文写着：
+
+> Some deferred nested tools may be omitted from this description. They are
+> still available on the global `tools` object and listed in `ALL_TOOLS`.
+> To find one, filter `ALL_TOOLS` by `name` and `description`.
+
+二进制中存在对应的 feature flag：`tool_search`、`tool_search_always_defer_mcp_tools`、
+`deferred_tool_world_state`、`code_mode_tool_search`。即工具按需检索而非全量注入。
+
+另外，`codex-app-tools` 的 `.mcp.json` 中 `codex_app` 本身已是 `"enabled": false`；
+且该文件位于 Plugin 缓存路径，按项目约束不得依赖。
+
+**复现**：
+
+```bash
+cd ~/.codex/sessions
+for f in $(find 2026/10 2026/11 -name '*.jsonl' | sort); do
+  D=$(jq -r '[..|objects|select(.name=="exec" and (.description|type=="string"))
+       |.description]|max_by(length)' "$f" 2>/dev/null)
+  [ -n "$D" ] && [ "$D" != "null" ] && printf "%-20s len=%-7s codex_app=%s\n" \
+    "$(basename $f|cut -c9-24)" "$(printf '%s' "$D"|wc -c)" \
+    "$(printf '%s' "$D"|grep -c codex_app)"
+done
+```
+
+**对方案的影响：第 1 项整项作废。**
+原本排序最高、收益最大的一项已由上游解决，不需要任何本地配置改动。
+若强行写入 `enabled_tools` 白名单，只会在已经正确的行为上叠加冗余配置。
+
+### 2026-11-04 — §4.1 的「摘要全空」是读数错误，第 2 项前提动摇
+
+**原记载**：395 次压缩的生成式摘要 `message` 全部为空（0.0%），因此判定 Codex
+原生压缩是「残缺保全」。
+
+**实测结果：`message` 确实为空，但摘要并未丢失——它以加密形式存在。**
+
+`replacement_history` 中每次压缩都含一个 `type=="compaction"` 项，其字段为
+`{encrypted_content, id, internal_chat_message_metadata_passthrough, type}`。
+
+| 日期 | 压缩次数 | 带 compaction 项 | 平均 `encrypted_content` |
+| --- | --- | --- | --- |
+| 2026-10-28 | 326 | 326 | 51,257 B |
+| 2026-10-29 | 44 | 44 | 42,184 B |
+| 2026-10-31 | 1 | 1 | 19,256 B |
+
+覆盖率 100%。摘要存在于服务端加密载荷（配合 `compaction_response_id`、
+`remote_compaction_v2` flag），客户端明文 `message` 空属正常设计，不是缺失。
+
+**复现**：
+
+```bash
+cd ~/.codex/sessions
+cat 2026/10/31/*.jsonl | jq -r 'select(.type=="compacted")
+  |.payload.replacement_history[]|select(.type=="compaction")|keys|@csv'
+```
+
+**对方案的影响：第 2 项（压缩阈值 450K → 200K）失去原有论据，暂停。**
+原论据是「Codex 压缩保全残缺，因此应少装多压」。既然保全并不残缺，该推论不再成立。
+降阈值反而会提高压缩频率，在每次压缩都有固定开销的前提下可能适得其反。
+若仍要调整，正确配置键为 `model_auto_compact_token_limit`（配合
+`model_auto_compact_token_limit_scope`、`model_post_turn_compact_threshold_percent`），
+但必须先用实测建立新论据。
+
+### 2026-11-04 — §2 的 Token 归因需重测
+
+上述两项证明平台已在调研期间发生结构性变化。平均 input/turn 实测：
+
+| 日期 | turns | 平均 input |
+| --- | --- | --- |
+| 2026-10-28 | 37,589 | 188,384 |
+| 2026-10-29 | 4,891 | 174,090 |
+| 2026-11-02 | 350 | 224,362 |
+
+11-02 样本量太小（350 turns）且工作负载不同，不足以评估 defer 的净效应。
+§2 的结论（轮次 8 倍 × 单轮上下文 3.84 倍；`exec` 占工具输出 99.46%；
+文件读取与搜索类 ≈ 34.2%）仍属历史观测，但**不得再作为当前归因使用**，
+需在 defer 生效后的负载上重新采样。
+
 ---
 
 ## 10. 当前已知未决项
