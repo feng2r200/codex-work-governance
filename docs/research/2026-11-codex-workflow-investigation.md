@@ -748,6 +748,44 @@ codex exec --dangerously-bypass-hook-trust --skip-git-repo-check "..."
 
 > 执行时发现与本记录不符的，追加到这里。格式：日期 / 差异描述 / 复现方式 / 对方案的影响。
 
+### 2026-11-04 — hook 机制整体移除（写入端从未接线）
+
+**判定**：work-governance 的 hook 是一套实现正确但三条链全部断开的管道，已整体移除。
+
+| 环节 | 现场证据 | 结论 |
+| --- | --- | --- |
+| 写入端 `stage-context` | 全仓 grep 仅命中自身定义；它不是 hook 事件，须显式调用 | 零调用者 |
+| 输出端 `additionalContext` | `packets/` 空目录；`emitted/` 真实记录 0（仅一个 0 字节 `.lock`） | 3408 次调用吐出 0 字节 |
+| 观测端 `observations.jsonl` | 3408 行 / 752K；除 runtime 自身写入外全仓无读取方 | 无消费者 |
+
+`_load_packet` 恒返回 `None` → `_context_output` 恒 `return b""`。
+
+**成本**：实测单次 dispatch **18ms**（runtime 内部 `elapsed_us` 中位数仅 21µs，
+差额为 Python 进程启动），挂在每次 Bash/Write/Edit 后的同步路径；另需维护三段
+digest 链与每次变更后的人工重新信任。
+
+**口径修正（R9）**：前一轮曾用「`stage-context` 调用计数 0」作证据，该计数不成立——
+`probe` 与 `stage-context` 均在 `_append_observation` **之前** return，本就不会被记录。
+有效证据是 `packets/` 为空，结论不变但证据站更换。
+
+**WorkVCS 无依赖**：对 `work-governance-hook` / `stage-context` / `wg-hook-v1` 零引用；
+自身不含 Codex hook 机制（`SessionStartOptions` 为同名不同物）；其 SKILL.md 仅一处
+提及 Hook 且明示 `remains deferred`。
+
+**证据等级**：写入端零调用者 + `packets/` 空 + `emitted/` 0 = 确定性；
+「无读取方」基于全仓 grep = 强证据。
+
+**复现**：
+```sh
+ls ~/.local/state/work-governance-hook/v1/{packets,emitted}/
+jq -r '.handler' ~/.local/state/work-governance-hook/v1/observations.jsonl | sort | uniq -c
+```
+（现场已随本次移除清理，证据保留在备份目录
+`~/.codex/work-governance-hook-removal-20261104-203626/`）
+
+**连带影响**：`hook_runtime.py` L74/L194 两条 blocking lint 随文件删除消失，
+原「lint 规则 vs 契约测试」冲突无需再裁决。测试 56 → 29，耗时 26.68s → 1.76s。
+
 ### 2026-11-04 — §4.5 的 trusted_hash 推论被证伪
 
 **原记载**：pre_compact 触发率仅 6.8%，强证据推论为 `trusted_hash` 因 `--package-digest`
