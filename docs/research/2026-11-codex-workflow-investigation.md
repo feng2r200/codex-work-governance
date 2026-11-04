@@ -1056,6 +1056,9 @@ empty array in Phase 3M」），而真实层级由 `relation` 表的 `contains` 
 **结论**：收益是语义清晰度（非性能、非正确性），成本是带迁移的 schema 升版。
 是否值得做需用户裁定；在未裁定前不动。
 
+**后续（2026-11-04，用户裁定「改」，已落地）**：上文「需覆盖 119 条现网版本
+及全部 digest 比对点」的迁移成本估算**被实测推翻**，实际零数据重写。详见下一条。
+
 **复现**：
 
 ```bash
@@ -1140,6 +1143,64 @@ done | sort | uniq -c
 
 注意：`replacement_history_metadata` 是**数组**，直接取
 `.user_messages` 恒得 `null`，会误判为「全部保留 0 条」。
+
+### 2026-11-04 — 死字段已移除：写 v2 读 v1+v2，零数据重写（确定性）
+
+用户裁定「改」。上一条估算的「需覆盖 119 条现网版本的迁移」**未发生**，原因是
+迁移成本估算错了一个关键事实。
+
+**为何无需重写历史数据（决定性证据）**：
+
+| 环节 | 实际行为 |
+| --- | --- |
+| commit 级 `state_digest` | `canonical/hash.rs:23-43` 的 `work_state_mapping_digest` 只哈希 `(entity_id, version_id)` 与 `(relation_id, version_id)` 对，**不含 state 内容** |
+| `entity_version.state_digest` | 由该行**已存储的 JSON 字节**推导，老行保持原样即自洽 |
+| replay 校验 | `integrity.rs:100-132` 只比对 `replayed.state_digest != head.state_digest`，即上述 ID 级 digest |
+
+因此 state 字段集变化不触达任何既有 digest。实测：改后读旧库，
+`goal list` 仍返回 `goals=6`，`goal.0.goal_state_digest=1495bc90…` 与改前基线
+**逐字节一致**；8 个现网 store `doctor` 全部 `ok`（含 319 commits 的主库）。
+
+**落地形状**：goal state 由 6 字段收窄为 3（`description` / `status` /
+`terminal_rationale`），plan state 由 8 收窄为 5（`completion_rationale` /
+`constraints` / `description` / `status` / `strategy`）。两者 schema 版本升至 2，
+读侧同时接受 v1 与 v2（字段数容忍 3/6 与 5/8，六个死字段仍走
+`require_empty_array`）。错误文本去掉无上下文的 `Phase 3M` / `Phase 3J`。
+
+**过程中发现的真实缺陷（原方案未预见）**：写入 `entity_version` 的
+`state_schema_version` 原本是 `entity.rs:21` 的**单一全局常量**，为 12 种 entity
+kind 共用，故 goal/plan 无法独立升版——首次活体探针写出的行是
+`goal|1|{3 字段}`，即**版本号与形状不一致**。已改为按 entity kind 解析
+(`state_schema_version_for`)，并让 `receipt.rs` 中与 kind 无关的通用读取器接受
+「该 kind 的当前版本或原始版本」。
+
+**验证**：`cargo test --release` **1220 passed / 0 failed**；`cargo clippy
+--all-targets` 0 告警；活体探针确认混合版本共存——
+`goal|2`、`plan|2`、`record|1` 同库并存且三类均可读回，`doctor ok`。
+提交 `3005987`（WorkVCS 仓）。
+
+**仪器纪律**：统计 cargo 失败不能只 grep `test result: FAILED`，须用
+`grep -E "failed;" | grep -v "0 failed"`，否则 66 个测试二进制中的单点失败会被漏判。
+
+**复现**：
+
+```bash
+cd /tmp && rm -rf p && mkdir p
+B=/Users/ld/Repositories/CLI/WorkVCS/target/release/workvcs
+$B init /tmp/p/s.sqlite
+BR=$($B workspace create --display-name p /tmp/p/s.sqlite | grep -m1 ^branch_id= | cut -d= -f2)
+hd(){ sqlite3 /tmp/p/s.sqlite "select lower(hex(head_commit_id)) from branch limit 1;" \
+  | sed -E 's/(.{8})(.{4})(.{4})(.{4})(.{12})/\1-\2-\3-\4-\5/'; }
+$B goal create --branch $BR --head $(hd) --description d /tmp/p/s.sqlite
+$B plan create --branch $BR --head $(hd) --description d --strategy s /tmp/p/s.sqlite
+$B record finding --branch $BR --head $(hd) --statement "probe statement" \
+  --scope-json '{"kind":"probe"}' /tmp/p/s.sqlite
+sqlite3 /tmp/p/s.sqlite "select entity.entity_kind, ev.state_schema_version
+  from entity_version ev join entity on entity.object_id=ev.entity_id;"
+```
+
+注意 `workvcs init` 只建库，必须先 `workspace create` 才有 branch 与 head；
+`record finding` 的参数是 `--scope-json` 而非 `--scope`。
 
 ## 10. 当前已知未决项
 
