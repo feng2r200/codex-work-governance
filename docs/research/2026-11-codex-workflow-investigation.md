@@ -1202,6 +1202,46 @@ sqlite3 /tmp/p/s.sqlite "select entity.entity_kind, ev.state_schema_version
 注意 `workvcs init` 只建库，必须先 `workspace create` 才有 branch 与 head；
 `record finding` 的参数是 `--scope-json` 而非 `--scope`。
 
+### 2026-11-04 — 证伪条款补三个缺失半边（源于本轮自身偏差）
+
+用本轮死字段迁移当样本，检验「Make A Proposed Route Refutable Before
+Executing It」能否提前捕获实际发生的三次偏差。结论是三次都捕获不到，
+且三处都是现有条款的**缺失半边**（与 #35 同型），而非兜底或重复状态机。
+
+| 缺口 | 现有半边 | 缺失半边 | 本轮实证 |
+| --- | --- | --- | --- |
+| A 仪器对称性 | `causal-attribution:93` 负面结果需证明仪器 | 正向绿灯**全仓 0 命中** | 1220 passed 时产物仍是 `goal\|1\|{3 字段}` |
+| B 证伪时效 | 执行前证伪 | 执行期新事实不回头质询原方案 | `receipt.rs` 通用读取器矛盾执行前不可见 |
+| C 成本口径 | Benefit basis 要求指标和分母 | Cost basis **无任何约束** | 「119 条迁移」实为零重写，高估一个数量级 |
+
+缺口 A 的判定来自一次正负对照：搜「负面结果需证明仪器」命中 1 条，搜同形的
+「通过/绿灯需证明仪器」**命中 0 条**。`problem-discovery:164` 虽有「A compiled
+target, non-skipped test, or green helper proves only its own boundary」，但那
+约束的是**声明范围**，未要求在真实产物上复验。
+
+**落地**：`work-lifecycle` 四件套扩为五件套（新增 **Cost basis**），并新增
+两段——「通过结果适用与失败结果相同标准，需在目的地直读产物」与「执行期保持
+可证伪，新事实回头重推原方案而非就地打补丁」。`causal-attribution` 只补其缺的
+方向（「向有利方向倒塌的前提仍是倒塌的前提」）并**链接继承**，不复制原文。
+
+**验证中的自应用（决定性）**：按新写的缺口 A 条款反查自己，向 `work-lifecycle`
+末尾追加一行损坏哨兵后重跑套件，仍为 **29 passed**。即该套件只覆盖 frontmatter、
+`agents/openai.yaml` 与链接，**不读正文**，故「29 passed」对本次改动零信息量。
+改用 diff 与渲染段落直读核验；哨兵已清除（残留 0）。
+
+**复现**：
+
+```bash
+cd plugins/work-governance/skills
+grep -rn "negative result is only informative" --include=SKILL.md .
+grep -rniE "passing (result|check|suite)|green (check|suite|run)" --include=SKILL.md .
+```
+
+注意：该套件为契约测试，对 Skill 正文无断言；判定正文改动须直读产物，
+并用 `git stash` 对比行宽基线（两文件超宽行数量与位置均与基线一致）。
+
+提交 `ef7facf`。
+
 ## 10. 当前已知未决项
 
 | 项 | 状态 |
