@@ -1,0 +1,6 @@
+interface:
+  display_name: "Execution Kernel"
+  short_description: "Refutable routes and authority boundaries"
+  default_prompt: >-
+    Use $work-governance:execution-kernel to make the proposed route
+    refutable and keep authority boundaries explicit.

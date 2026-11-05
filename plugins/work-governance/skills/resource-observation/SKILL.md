@@ -1,6 +1,7 @@
 ---
 name: resource-observation
 description: Use when development needs resource-use assessment or recording, when a cost, Token, or performance distribution must be measured, counted, or reported, when a proposed Token or monetary limit may constrain delivery, or when evidence suggests a later efficiency enhancement. Explaining an already-anomalous total belongs to causal attribution.
+disable-model-invocation: true
 ---
 
 # Resource Observation

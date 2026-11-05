@@ -60,19 +60,20 @@ Work Governance 会在执行路线被固化前，区分可调查事实、普通�
       v
 work-lifecycle 路由器
       |
+      +-- 执行内核（始终）
       +-- 目标发现
       +-- Plan 治理
-      +-- SubAgent 治理
       +-- Git 边界
       +-- 代码智能（可选适配）
+      +-- 成因归因
       +-- 问题发现
       +-- 前端交付
       +-- 独立验证
       +-- 项目开发连续性
       +-- 项目事实
+      +-- 资源观测
       +-- 归档整理
       +-- 工作汇报
-      +-- 会话接续治理
       |
       v
 现有工具与项目专用 Skill
@@ -82,7 +83,8 @@ work-lifecycle 路由器
 
 | Skill | 负责的判断 |
 | --- | --- |
-| `work-lifecycle` | 小型路由器、安全内核与方案证伪闸门 |
+| `work-lifecycle` | 小型路由器，只挑选当前工作真正需要的模块 |
+| `execution-kernel` | 方案证伪闸门、授权边界、工作契约与语义纠偏 |
 | `goal-discovery` | 目标澄清与最小决策边界 |
 | `causal-attribution` | 改动之前先用证据确认真实成因 |
 | `plan-governance` | Plan 准入、No-Plan 演进和实质性修订 |

@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "work-governance",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Composable governance for adaptive decisions, causal attribution, problem discovery, frontend delivery, planning, Git, resource observation, optional code intelligence, validation, long-running project continuity, project truth, archive curation, and reporting.",
   "author": {
     "name": "feng2r200",
@@ -31,6 +31,7 @@
           "Goal discovery",
           "Causal attribution",
           "Adaptive decision and review",
+          "Execution kernel",
           "Problem discovery",
           "Planning",
           "Validation",

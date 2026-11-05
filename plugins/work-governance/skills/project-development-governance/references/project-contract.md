@@ -111,19 +111,19 @@ decision-authority envelope and its current execution effects in the single
 execution-state provider; do not establish a second permission ledger.
 
 At minimum, a delegated envelope identifies the authorized goal and scope,
-applicable target and environment, decision classes Codex may own, any guarded
-actions explicitly included, and its task or stage expiry. Never infer it from
-silence, urgency, credentials, or an older task. The latest user instruction
-may narrow or revoke it.
+applicable target and environment, decision classes the agent may own, any
+guarded actions explicitly included, and its task or stage expiry. Never infer
+it from silence, urgency, credentials, or an older task. The latest user
+instruction may narrow or revoke it.
 
 Activation, revocation, scope change, and a material autonomous route change
 are semantic checkpoints. Record the decision, evidence, reason, and execution
 impact, not hidden reasoning or a step-by-step chain of thought. New evidence,
 a failed material assumption, validation failure, milestone completion, scope
 or relevant external-state change, and a receipt mismatch trigger only the
-bounded review their impact warrants. With active delegation, Codex may correct
-or replan inside the envelope; beyond it, restore the confirmation gate. No
-semantic change means no repeated read, review, report, or provider write.
+bounded review their impact warrants. With active delegation, the agent may
+correct or replan inside the envelope; beyond it, restore the confirmation gate.
+No semantic change means no repeated read, review, report, or provider write.
 
 If the project opens with an accepted stage baseline but no relevant state in
 its required provider, reconstruct only the state the baseline supports. Record

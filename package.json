@@ -1,0 +1,22 @@
+{
+  "name": "work-governance",
+  "version": "3.1.0",
+  "description": "Composable governance for adaptive decisions, causal attribution, problem discovery, frontend delivery, planning, Git, resource observation, optional code intelligence, validation, long-running project continuity, project truth, archive curation, and reporting.",
+  "license": "Apache-2.0",
+  "author": "feng2r200",
+  "homepage": "https://github.com/feng2r200/codex-work-governance",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/feng2r200/codex-work-governance.git"
+  },
+  "keywords": [
+    "agent-governance",
+    "planning",
+    "validation"
+  ],
+  "pi": {
+    "skills": [
+      "./plugins/work-governance/skills"
+    ]
+  }
+}

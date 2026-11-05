@@ -1,12 +1,14 @@
 ---
 name: git-change-governance
 description: Use when choosing or changing Git branches and worktrees, protecting dirty state, staging or committing local work, deciding push boundaries, or cleaning up Git workspaces.
+disable-model-invocation: true
 ---
 
 # Git Change Governance
 
 This skill owns only the Git boundary. Use `work-governance:work-lifecycle` for
-the broader goal, authority, and completion claim.
+routing and `work-governance:execution-kernel` for the authority boundary and
+the completion claim.
 
 ## Isolation
 
@@ -18,8 +20,8 @@ When a new worktree is needed, choose its location in this order:
 
 1. the current attached or already managed worktree;
 2. an explicit user or project path;
-3. the worktree root configured by the current Codex environment;
-4. Codex's official default, `$CODEX_HOME/worktrees`.
+3. the worktree root configured by the current agent host;
+4. the host's documented default worktree root.
 
 Do not create a project-local governance directory merely to hold worktrees.
 Placement does not choose branch semantics: verify the repository, start point,
@@ -71,6 +73,18 @@ data-changing action it triggers.
 Clean up only an exact registered worktree after checking its dirty, locked,
 and branch state. Removing a worktree, removing its branch, and deleting
 untracked data are separate decisions.
+
+Also establish whether the target contains the current session's working
+directory. Git may allow removing such a worktree, but doing so can disrupt
+the session. Before authorized removal, ensure the session and any dependent
+processes no longer need that directory, such as by safely relocating or
+ending them. If that cannot be established, report the session-safety blocker
+separately from the repository's worktree state.
+
+A refusal from a host-managed workspace interface proves only that the managed
+path is unavailable. It is not evidence that the worktree is unmerged, in use,
+or protected by the repository itself. Re-derive the state from the repository
+before reporting a cleanup result.
 
 Report the repository, branch or detached state, isolation choice, committed
 boundary and hash when applicable, validation evidence, excluded dirty files,

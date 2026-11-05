@@ -1,6 +1,7 @@
 ---
 name: code-intelligence
 description: Use when software work needs structural source-code understanding, such as symbol discovery, callers or callees, call paths, change impact, affected tests, or cross-layer tracing, and CodeGraph readiness may need to be established or refreshed for the active checkout. Do not use for literal text search, prose, logs, configuration-only inspection, or non-code work. A source-read-only task does not suppress local derived-index refresh when current graph state is needed.
+disable-model-invocation: true
 ---
 
 # Code Intelligence

@@ -1,6 +1,7 @@
 ---
 name: goal-discovery
 description: Use when a request starts from a proposed solution, vague idea, or incomplete requirement and unresolved product intent, data strategy, delivery form, material solution or feasibility strategy, acceptance, or user-owned tradeoff could materially change the right path.
+disable-model-invocation: true
 ---
 
 # Goal Discovery
@@ -27,8 +28,8 @@ is clear, proceed.
 ## Establish Decision Authority
 
 Material choices are user-owned by default. Explicit decision delegation lets
-Codex own only the choices inside a stated task or stage envelope. It must come
-from the user's direct instruction and must not be inferred from silence,
+the agent own only the choices inside a stated task or stage envelope. It must
+come from the user's direct instruction and must not be inferred from silence,
 urgency, available credentials, or authority from another task or stage.
 
 When delegation is active, compare the same material effects required for a

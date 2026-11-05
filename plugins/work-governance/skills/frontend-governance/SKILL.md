@@ -1,6 +1,7 @@
 ---
 name: frontend-governance
 description: Use when creating, changing, or reviewing rendered frontend surfaces and reference fidelity, functional controls, product copy, or interaction acceptance matters. Covers Demo-driven implementation and existing UI changes; not backend-only work or discussion without a frontend deliverable.
+disable-model-invocation: true
 ---
 
 # Frontend Governance

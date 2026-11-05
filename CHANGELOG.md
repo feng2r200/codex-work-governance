@@ -7,6 +7,64 @@ All notable changes to Work Governance are documented here. The project follows
 
 No unreleased changes.
 
+## 3.1.0 - 2026-11-05
+
+### Added
+
+- An `execution-kernel` module that owns the refutable-route gate, explicit
+  decision delegation, the working contract, final-outcome continuity, and
+  semantic review and correction. These constraints are not selected by
+  scenario, so the lifecycle router loads this module before any decision,
+  proposal, or mutation that can constrain the route.
+- A portable package manifest at the repository root so hosts that discover
+  Skills through a package declaration can install this plugin without a
+  host-specific adapter.
+- A policy test that fails when any policy module names a specific agent host,
+  and a release test that requires the shipped version to have a changelog
+  entry.
+
+### Changed
+
+- The `work-lifecycle` module is now a router only. It decides which module the
+  current work needs and no longer carries the execution constraints itself,
+  which keeps one module per judgment.
+- Scenario modules no longer advertise themselves for autonomous selection.
+  The router's routing table is the single trigger surface, which removes the
+  duplicated trigger text that previously competed with it.
+- Routing entries for project development, project truth, resource observation,
+  and archive curation now state observable triggers instead of preconditions
+  that suppressed them, after measurement showed those four modules were never
+  selected.
+- Policy modules and their references are host-neutral. Worktree placement
+  follows the current host's configured root and documented default, and code
+  intelligence registration documents both the installer route and a direct
+  stdio MCP registration.
+- Worktree cleanup protects active sessions separately from Git worktree state
+  and distinguishes a host-managed interface refusal from repository evidence.
+
+## 3.0.0 - 2026-11-05
+
+### Added
+
+- A `causal-attribution` module for confirming causes of observed symptoms.
+- A refutability contract requiring premises, refutations, benefit, cost, and
+  reversal before executing a proposed route.
+
+### Changed
+
+- Resource observation and causal attribution are separated by timing:
+  measuring and recording what authorized work costs stays with resource
+  observation, and only an anomalous total that needs a confirmed driver before
+  a change goes to causal attribution.
+
+### Removed
+
+- Sub-agent and conversation-continuation governance, after delegated sessions
+  were measured at 72.8% of billed tokens and the continuation entry point
+  recorded zero calls.
+- The inert hook runtime and its installation surface. The plugin now ships one
+  portable interface with no hooks.
+
 ## 2.8.0 - 2026-10-26
 
 ### Added

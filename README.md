@@ -93,19 +93,20 @@ User goal and authority
           v
   work-lifecycle router
           |
+          +-- execution kernel (always)
           +-- goal discovery
           +-- Plan governance
-          +-- SubAgent governance
           +-- Git boundaries
           +-- code intelligence (optional adapter)
+          +-- causal attribution
           +-- problem discovery
           +-- frontend delivery
           +-- independent validation
           +-- project development continuity
           +-- project truth
+          +-- resource observation
           +-- archive curation
           +-- work reporting
-          +-- continuation governance
           |
           v
 Existing tools and project-specific Skills
@@ -115,7 +116,8 @@ Existing tools and project-specific Skills
 
 | Skill | Owns |
 | --- | --- |
-| `work-lifecycle` | Small router, safety kernel, and refutable-route gate |
+| `work-lifecycle` | Small router that selects the modules the work needs |
+| `execution-kernel` | Refutable-route gate, authority boundary, working contract, and semantic correction |
 | `goal-discovery` | Goal clarification and minimal decision frontiers |
 | `causal-attribution` | Evidence-based cause confirmation before changing anything |
 | `plan-governance` | Plan admission, No-Plan evolution, and material revision |

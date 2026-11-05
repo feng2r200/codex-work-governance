@@ -32,14 +32,25 @@ For MCP use, also require a currently available CodeGraph tool. If MCP is
 absent but the CLI query commands are available, the CLI remains a valid local
 route. If the CLI is missing or incompatible, use native inspection and report
 the degraded route. Global installation, upgrade, and MCP configuration are
-separate actions:
+separate actions, and the registration route depends on the host.
+
+When the installer recognizes the host, it writes that host's MCP
+configuration:
 
 ```sh
-codegraph install --target codex --location global --yes
+codegraph install --target <host> --location global --yes
 ```
 
-The installation command is reference material, not standing authority to run
-it.
+When it does not, register the same stdio server through the host's own MCP
+configuration instead:
+
+```sh
+<agent> mcp add codegraph -- codegraph serve --mcp
+```
+
+Verify the resulting route by its reported connection and tool list rather than
+by assuming either command applies. Both are reference material, not standing
+authority to run them.
 
 ## Check And Prepare Project Readiness
 

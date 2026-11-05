@@ -14,6 +14,7 @@ PLUGIN = ROOT / "plugins" / "work-governance"
 SKILLS = PLUGIN / "skills"
 SKILL_NAMES = {
     "work-lifecycle",
+    "execution-kernel",
     "causal-attribution",
     "goal-discovery",
     "plan-governance",
@@ -119,6 +120,16 @@ def test_governance_core_has_no_provider_command_dependency() -> None:
         assert forbidden not in contents
 
 
+def test_governance_core_names_no_specific_agent_host() -> None:
+    """Policy modules stay host-neutral so one host is not a precondition for all work."""
+    policy_files = list(SKILLS.rglob("*.md")) + list(SKILLS.rglob("*.yaml"))
+    for forbidden in ["codex", "claude", "opencode"]:
+        offenders = [
+            str(path.relative_to(ROOT)) for path in policy_files if forbidden in read(path).lower()
+        ]
+        assert not offenders, f"{forbidden!r} appears in {offenders}"
+
+
 def test_plugin_manifests_describe_one_portable_interface() -> None:
     """Compatibility and portable manifests must agree on identity and UI behavior."""
     compatibility = json.loads(read(PLUGIN / ".codex-plugin" / "plugin.json"))
@@ -166,6 +177,24 @@ def test_release_metadata_is_machine_consistent() -> None:
     assert package["version"] == project["project"]["version"]
     assert project["project"]["dependencies"] == []
     assert "/.work-governance/" in read(ROOT / ".gitignore").splitlines()
+    assert f"## {version} - " in read(ROOT / "CHANGELOG.md")
+
+
+def test_package_manifest_agrees_with_the_plugin_manifests() -> None:
+    """The package manifest must describe the same release and ship the real Skills directory."""
+    package = json.loads(read(ROOT / "package.json"))
+    portable = json.loads(read(PLUGIN / "plugin.json"))
+
+    assert package["name"] == portable["name"]
+    assert package["version"] == portable["version"]
+    assert package["license"] == portable["license"]
+    assert package["description"] == portable["description"]
+
+    declared = package["pi"]["skills"]
+    assert declared == [f"./{SKILLS.relative_to(ROOT).as_posix()}"]
+    for entry in declared:
+        assert (ROOT / entry).is_dir()
+    assert "changelogPath" not in package["pi"]
 
 
 def test_behavior_scenarios_have_independent_non_vacuous_outcome_contracts() -> None:

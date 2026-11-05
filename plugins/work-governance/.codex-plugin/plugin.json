@@ -16,6 +16,7 @@
       "Goal discovery",
       "Causal attribution",
       "Adaptive decision and review",
+      "Execution kernel",
       "Problem discovery",
       "Planning",
       "Validation",
@@ -42,5 +43,5 @@
   "license": "Apache-2.0",
   "name": "work-governance",
   "skills": "./skills/",
-  "version": "3.0.0"
+  "version": "3.1.0"
 }

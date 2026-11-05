@@ -1,6 +1,7 @@
 ---
 name: plan-governance
 description: Use when deciding whether a task needs a Plan, creating or admitting a Plan, promoting No-Plan work into one, coordinating dependent stages, or deciding whether new evidence requires a material Plan revision.
+disable-model-invocation: true
 ---
 
 # Plan Governance
@@ -47,8 +48,8 @@ Capture only what controls execution and review:
   or revision conditions.
 
 For each material solution strategy, keep what would show it wrong recorded
-alongside what would show it worked, using the lifecycle's
-[refutable route](../work-lifecycle/SKILL.md) items. A strategy marked
+alongside what would show it worked, using the kernel's
+[refutable route](../execution-kernel/SKILL.md) items. A strategy marked
 confirmed or evidenced states the evidence that confirmed it; one marked gated
 states the observation that would retire it. A Plan that records only intended
 outcomes cannot detect that its own route has failed.
@@ -89,7 +90,7 @@ reversible implementation details remain agent-owned and must not create a
 confirmation ceremony.
 
 If explicit decision delegation covers the material choice, the Plan may mark
-that choice as Codex-owned within the stated task or stage envelope instead of
+that choice as agent-owned within the stated task or stage envelope instead of
 creating a user gate. Compare the material effects, select an evidence-backed
 route, and preserve the decision and its impact. Delegation never expands Plan
 scope or authorizes a target, environment, or guarded action not named in the
@@ -127,7 +128,7 @@ New evidence, a failed material assumption, validation failure, milestone,
 scope or relevant external-state change, and a receipt mismatch are semantic
 events. In the default mode, reopen a compact user confirmation frontier when
 the required revision changes a user-owned route or contract. Under explicit
-decision delegation, Codex may decide the review depth and evolve the Plan,
+decision delegation, the agent may decide the review depth and evolve the Plan,
 replace or reorder the route, or expand validation without asking while the
 change remains inside the active decision-authority envelope. Preserve the
 cause, prior route, new route, affected work, and revalidation needed.

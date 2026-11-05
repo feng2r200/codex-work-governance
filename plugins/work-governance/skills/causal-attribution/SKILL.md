@@ -1,6 +1,7 @@
 ---
 name: causal-attribution
 description: Use when an observed symptom in an existing system needs a trustworthy cause before changing anything, including cost or performance blowups, a capability that silently never activates, a channel that appears to carry nothing, or a suspicion that some component is to blame. Applies whenever acting on the wrong cause would be expensive or hard to reverse.
+disable-model-invocation: true
 ---
 
 # Causal Attribution
@@ -218,7 +219,7 @@ and an estimate that decided against a route deserves the same scrutiny as one
 that decided for it. Withdraw the superseded figure in the record instead of
 quietly proceeding because the news was good. For how a proposed route states
 and checks its cost and benefit before execution, follow
-`work-governance:work-lifecycle`.
+`work-governance:execution-kernel`.
 
 ## Change The Evidence Route Early When A Tool Misbehaves
 
