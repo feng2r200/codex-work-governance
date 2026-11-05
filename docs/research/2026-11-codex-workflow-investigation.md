@@ -1242,6 +1242,61 @@ grep -rniE "passing (result|check|suite)|green (check|suite|run)" --include=SKIL
 
 提交 `ef7facf`。
 
+### 2026-11-04 — 模块划分证伪：CA/RO 边界不明确（确定性）
+
+用本轮真实发生的 5 个判断当探针，检验 14 个模块能否各自唯一承接。
+
+**整体结构成立**：星型单路由，`work-lifecycle` 出向转派覆盖全部 13 个模块，
+其余模块出向 0–3 条且无环；**14 个模块入向转派均 ≥ 1**，无孤立模块。
+
+**唯一缺陷（P1 探针判定）**：`causal-attribution` 与 `resource-observation`
+覆盖同一场景且无法消歧。
+
+| 证据 | 改前 |
+| --- | --- |
+| CA description | `cost or performance blowups` 命中 |
+| RO description | `cost, Token, or performance distribution must be measured or explained` 命中 |
+| 路由表 | 两条均命中 |
+| 互相转派 | **0 条** |
+| 消歧语句 | **0 条** |
+| 正文重叠 | RO `L80` 「attribute … to the observed process」 vs CA 整节 `Follow The Cost To Where The Work Ran` |
+| 时机区分 | CA `before changing anything` / RO `when development needs assessment` —— **不互斥** |
+
+本轮「Token 72.8% 归因子代理」正好落在该重叠区，当时无任何条款可定向。
+
+**对照组（证伪不成立，不需改）**：持久化三件 PT / AC / PDG 看似重复，实则靠
+**时机互斥**——PT 随时判定「哪个来源现在治理此事实」，AC 限于
+`reviewing completed project work` 收尾，PDG 管跨会话契约。此切分已被证伪有效，
+故成为 CA/RO 修法的同构范式。
+
+**撤回的中间结论**：曾据 `grep -c "owns"` 得出「5 个模块无所有权声明」，
+复查后**撤回**——所有权由 frontmatter `description` 的触发条件承载，`owns`
+仅是部分模块的额外措辞，不是契约形式。属仪器误判。
+
+**落地**（用户裁定方案 1 按时机切分）：RO = 授权工作进行中的计量、计数、记录；
+CA = 已异常且须在改动前确认驱动因。双向转派各 1 条，路由表同步，RO `L80`
+改写为「对已知单位的记账，非因果主张」。
+
+**验证中捕获的自相矛盾**：RO 的 `description` 仍写 `measured or explained`，
+与新正文「不拥有解释异常」直接冲突。因 `description` 是路由第一依据，已改为
+`measured, counted, or reported` 并追加指向 CA 的尾句。
+
+**复现**：
+
+```bash
+cd plugins/work-governance/skills
+for d in */; do n=${d%/}
+  r=$(grep -ohE "work-governance:[a-z-]+" $n/SKILL.md | sort -u \
+      | sed "s/work-governance://" | grep -v "^$n$" | tr '\n' ' ')
+  printf "%-34s → %s\n" "$n" "${r:-（无出向转派）}"
+done
+```
+
+仍适用「套件不读正文」仪器警示：29 passed 对本次改动零信息量，判定靠 diff
+与探针复测（P1 正例→CA、纯计量负例→RO，均唯一命中）。
+
+提交 `4f0fbff`。
+
 ## 10. 当前已知未决项
 
 | 项 | 状态 |
