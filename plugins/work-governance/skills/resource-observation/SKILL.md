@@ -1,6 +1,6 @@
 ---
 name: resource-observation
-description: Use when development needs resource-use assessment or recording, when a cost, Token, or performance distribution must be measured or explained, when a proposed Token or monetary limit may constrain delivery, or when evidence suggests a later efficiency enhancement.
+description: Use when development needs resource-use assessment or recording, when a cost, Token, or performance distribution must be measured, counted, or reported, when a proposed Token or monetary limit may constrain delivery, or when evidence suggests a later efficiency enhancement. Explaining an already-anomalous total belongs to causal attribution.
 ---
 
 # Resource Observation
@@ -8,6 +8,13 @@ description: Use when development needs resource-use assessment or recording, wh
 Assess and record consumption while advancing the authorized capability and its
 acceptance. Resource observation supports judgment; it does not create a budget,
 permission gate, or second execution-state system.
+
+This Skill owns measuring, counting, and recording resource use during
+authorized work, and reviewing a proposed restriction. It does not own
+explaining an anomaly. When a measured cost, latency, or resource total is
+itself the symptom to be explained before a change, load
+`work-governance:causal-attribution` and give it the measurements; stay here
+when the task is to quantify and record what the agreed work consumes.
 
 ## Keep Capability Development Moving
 
@@ -78,8 +85,10 @@ Keep the scope and measurement method visible:
   pricing or missing telemetry remains unknown, not zero or a reason to invent
   a cap; and
 - attribute elapsed time, requests, memory, storage, or concurrency to the
-  observed process, task, sample, or time window. One counter does not establish
-  total cost, avoidable waste, or savings.
+  observed process, task, sample, or time window that produced them. This is
+  bookkeeping against a known unit, not a causal claim: one counter does not
+  establish total cost, avoidable waste, or savings, and naming the driver
+  behind an anomalous total is attribution work.
 
 ## Record The Smallest Useful Assessment
 

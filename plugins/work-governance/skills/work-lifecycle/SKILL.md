@@ -279,7 +279,9 @@ model capability, reasoning, or failure visibility.
   phase handoff, or a full completion report.
 - Load `work-governance:resource-observation` when assessing or recording
   meaningful consumption, reviewing a proposed resource restriction, or scoping
-  a later efficiency enhancement.
+  a later efficiency enhancement. Measuring and recording what authorized work
+  costs stays here; an anomalous total that must have a confirmed driver
+  before a change goes to causal attribution.
 - Load `work-governance:project-archive-curation` when deciding what completed
   project material should be retained, consolidated, or retired, and where it
   should live.

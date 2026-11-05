@@ -15,6 +15,14 @@ Use it with `work-governance:problem-discovery` when the work also needs a
 strategy for exposing future defects. Discovery designs challenges for behavior
 that has not failed yet; attribution explains a failure already in hand.
 
+Use it with `work-governance:resource-observation` when the work also needs
+consumption measured or recorded as it proceeds. Observation reports what the
+authorized work costs while it runs; attribution is for a cost, latency, or
+resource symptom that is already anomalous and must have a confirmed driver
+before anything is changed. A distribution that only needs counting and a
+checkpoint belongs to observation, and an observed total that someone intends
+to act on belongs here until its cause is established.
+
 ## Separate The Symptom From The Suspected Cause
 
 Write the symptom as an observable with a magnitude, and write each candidate
