@@ -37,14 +37,20 @@ to create a Plan or ask questions when the next slice is already clear.
 A route that cannot be shown wrong cannot be shown right. Before executing a
 material change, state for each part of the proposal what it assumes, how that
 assumption would be observed to be false, what would count as the improvement,
-and how to get back. Write these as four distinct items rather than one
-confidence statement; a part missing any of them is not ready to execute.
+what it costs, and how to get back. Write these as five distinct items rather
+than one confidence statement; a part missing any of them is not ready to
+execute.
 
 - **Premise:** the facts the part depends on, each independently checkable.
 - **Refutation:** what would be observed if a premise does not hold, named as
   the actual command, file, or reading that would show it.
 - **Benefit basis:** the metric and the population or denominator that decides
   whether it worked. "Clearly better" is not a basis.
+- **Cost basis:** the work the part requires, counted the same way, and the
+  reading that would show the count wrong. A cost figure decides whether to
+  proceed just as a benefit figure does, so an unchecked estimate can retire a
+  correct route; establish which existing machinery the change actually has to
+  touch rather than assuming the whole population is affected.
 - **Reversal:** how to undo the part, and what evidence confirms it is undone.
 
 Run the refutation before the change, not after. Its purpose is to retire a
@@ -55,6 +61,25 @@ negative with a minimal positive case that differs in one condition, and keep
 that case in the same table, scope, and value shape as the thing under test.
 A check placed in a neighbouring section with different strictness reports a
 verdict about itself rather than about the subject.
+
+Hold a passing result to the same standard as a failing one. A green suite,
+clean build, or satisfied assertion is a reading produced by an arrangement
+that can be wrong about what it covers, and it reports only the boundary it
+actually inspects. Before treating a pass as evidence that the change works,
+exercise the real path once and read the resulting artifact directly at its
+destination: the written row, emitted file, or stored bytes. A suite that
+asserts the shape a value should have will stay green while a neighbouring
+field that no test reads is written wrongly.
+
+Keep the route refutable while it executes, not only before. Execution
+produces facts that no prior check could reach, because some contradictions
+only exist once the change is really in effect; a consumer that agreed with the
+old behavior can only disagree after the new behavior is written. Treat each
+such fact as a fresh test of the original proposal rather than an obstacle
+between the current state and a finished change. When one of them contradicts a
+part of the route, return to the proposal and re-derive that part; do not
+absorb the contradiction as a local patch that leaves the stated route and the
+real one different.
 
 When a premise falls, withdraw the parts that depend on it and say which prior
 conclusion is withdrawn, with the same prominence it was first stated. Do not

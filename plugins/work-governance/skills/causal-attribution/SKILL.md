@@ -203,6 +203,15 @@ unavailable where it was assumed, the replacement is usually a different
 division of responsibility across available facilities rather than a
 reconstruction of the unavailable one.
 
+A premise that falls in the convenient direction is still a fallen premise.
+Evidence that the cost, blast radius, or difficulty is far smaller than the
+attribution assumed invalidates that estimate exactly as a larger one would,
+and an estimate that decided against a route deserves the same scrutiny as one
+that decided for it. Withdraw the superseded figure in the record instead of
+quietly proceeding because the news was good. For how a proposed route states
+and checks its cost and benefit before execution, follow
+`work-governance:work-lifecycle`.
+
 ## Change The Evidence Route Early When A Tool Misbehaves
 
 When a tool corrupts, truncates, or misrepresents evidence, switch to a
