@@ -13,7 +13,7 @@ and durable state enter only when they add value.
 
 Created and maintained by [feng2r200](https://github.com/feng2r200).
 
-The current semantic plugin version is `3.1.3`. Release-impacting changes to
+The current semantic plugin version is `3.2.0`. Release-impacting changes to
 Skills, plugin metadata, packaging, installation, or release workflow must bump
 the version according to compatibility impact. Build timestamps and Git commits
 are provenance only; they do not replace a semantic version bump. The CI gate
@@ -146,6 +146,10 @@ Start a new Pi session or reload resources after changes. The router and
 execution kernel are advertised for automatic selection; scenario modules can
 also be invoked explicitly, for example `/skill:git-change-governance`.
 
+The root package installs Skills only. An optional [local CodeGraph adapter](integrations/pi-codegraph/README.md)
+can be explicitly installed to a stable user-owned directory and configured with
+your existing CLI's absolute entry. It is not loaded or required by governance.
+
 ### Codex
 
 Add the GitHub repository as a Codex plugin marketplace, then install the
@@ -172,7 +176,7 @@ preview removal of older direct cache entries with:
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 3.1.3 --dry-run
+  --keep-version 3.2.0 --dry-run
 ```
 
 Review the preview and verify the retained version before separately authorizing

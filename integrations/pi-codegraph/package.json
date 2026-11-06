@@ -1,0 +1,14 @@
+{
+  "name": "@work-governance/pi-codegraph-local",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Optional explicit-install Pi adapter for an existing local CodeGraph CLI",
+  "pi": { "extensions": ["./index.ts"] },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "scripts": { "test": "node --test core.test.mjs" }
+}

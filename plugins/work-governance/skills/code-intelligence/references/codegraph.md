@@ -23,10 +23,25 @@ root only when it is unambiguous. Never infer a broad parent directory.
 
 ## Check Global Capability
 
+Select the user's installed CLI through an explicit stable absolute entry, not
+ambient PATH. The placeholder below must be replaced by that verified entry;
+all later direct CLI examples reuse it.
+
 ```sh
-command -v codegraph
-codegraph version
+CODEGRAPH_BIN="/absolute/user-owned/codegraph"
+case "$CODEGRAPH_BIN" in /*) ;; *) exit 1 ;; esac
+test -x "$CODEGRAPH_BIN"
+"$CODEGRAPH_BIN" --version
+"$CODEGRAPH_BIN" explore --help
 ```
+
+Read the help content: it must describe the `explore` command itself. A zero
+exit with only top-level help does not prove command support. For a host tool,
+inspect the CLI identity and capability at its actual subprocess boundary;
+a shell probe may resolve a different installation. An explicitly installed
+host adapter may own this check, but must not silently fall back to another
+CLI, install/upgrade it, or treat command failure as an empty graph. Recheck
+after a CLI/host change; keep the entry and observed version with the evidence.
 
 For MCP use, also require a currently available CodeGraph tool. If MCP is
 absent but the CLI query commands are available, the CLI remains a valid local
@@ -38,14 +53,14 @@ When the installer recognizes the host, it writes that host's MCP
 configuration:
 
 ```sh
-codegraph install --target <host> --location global --yes
+"$CODEGRAPH_BIN" install --target <host> --location global --yes
 ```
 
 When it does not, register the same stdio server through the host's own MCP
 configuration instead:
 
 ```sh
-<agent> mcp add codegraph -- codegraph serve --mcp
+<agent> mcp add codegraph -- "$CODEGRAPH_BIN" serve --mcp
 ```
 
 Verify the resulting route by its reported connection and tool list rather than
@@ -55,7 +70,7 @@ authority to run them.
 ## Check And Prepare Project Readiness
 
 ```sh
-codegraph status --json "$PROJECT_ROOT"
+"$CODEGRAPH_BIN" status --json "$PROJECT_ROOT"
 ```
 
 For a healthy route, verify at least:
@@ -80,8 +95,8 @@ When the result says `initialized: false`, initialize only if all parent-Skill
 gates pass:
 
 ```sh
-codegraph init --yes "$PROJECT_ROOT"
-codegraph status --json "$PROJECT_ROOT"
+"$CODEGRAPH_BIN" init --yes "$PROJECT_ROOT"
+"$CODEGRAPH_BIN" status --json "$PROJECT_ROOT"
 ```
 
 The second command is mandatory readback. Success means the exact checkout now
@@ -92,8 +107,8 @@ Use incremental synchronization first, regardless of whether the source task is
 read-only:
 
 ```sh
-codegraph sync "$PROJECT_ROOT"
-codegraph status --json "$PROJECT_ROOT"
+"$CODEGRAPH_BIN" sync "$PROJECT_ROOT"
+"$CODEGRAPH_BIN" status --json "$PROJECT_ROOT"
 ```
 
 If the status readback still reports stale state, an extraction-version
@@ -102,8 +117,8 @@ freshness failure, or if incremental synchronization fails for that ordinary
 staleness condition, perform the full index refresh and read status back again:
 
 ```sh
-codegraph index "$PROJECT_ROOT"
-codegraph status --json "$PROJECT_ROOT"
+"$CODEGRAPH_BIN" index "$PROJECT_ROOT"
+"$CODEGRAPH_BIN" status --json "$PROJECT_ROOT"
 ```
 
 Only use CodeGraph after the final readback proves the index is current. If a
@@ -128,13 +143,13 @@ parameters can evolve.
 Direct CLI equivalents include:
 
 ```sh
-codegraph explore --path "$PROJECT_ROOT" "trace the request from route to storage"
-codegraph query --path "$PROJECT_ROOT" --json "symbol_name"
-codegraph node --path "$PROJECT_ROOT" "symbol_name"
-codegraph callers --path "$PROJECT_ROOT" --json "symbol_name"
-codegraph callees --path "$PROJECT_ROOT" --json "symbol_name"
-codegraph impact --path "$PROJECT_ROOT" --json "symbol_name"
-codegraph affected --path "$PROJECT_ROOT"
+"$CODEGRAPH_BIN" explore --path "$PROJECT_ROOT" "trace the request from route to storage"
+"$CODEGRAPH_BIN" query --path "$PROJECT_ROOT" --json "symbol_name"
+"$CODEGRAPH_BIN" node --path "$PROJECT_ROOT" "symbol_name"
+"$CODEGRAPH_BIN" callers --path "$PROJECT_ROOT" --json "symbol_name"
+"$CODEGRAPH_BIN" callees --path "$PROJECT_ROOT" --json "symbol_name"
+"$CODEGRAPH_BIN" impact --path "$PROJECT_ROOT" --json "symbol_name"
+"$CODEGRAPH_BIN" affected --path "$PROJECT_ROOT"
 ```
 
 Start with `explore` for an area or flow. Use the narrower commands to answer
@@ -149,16 +164,16 @@ the incremental refresh and mandatory readback above. Do not defer this because
 the source task is read-only.
 
 ```sh
-codegraph sync "$PROJECT_ROOT"
-codegraph status --json "$PROJECT_ROOT"
+"$CODEGRAPH_BIN" sync "$PROJECT_ROOT"
+"$CODEGRAPH_BIN" status --json "$PROJECT_ROOT"
 ```
 
 Use a full rebuild only when the readback shows incremental synchronization did
 not repair the index or the status explicitly recommends reindexing:
 
 ```sh
-codegraph index "$PROJECT_ROOT"
-codegraph status --json "$PROJECT_ROOT"
+"$CODEGRAPH_BIN" index "$PROJECT_ROOT"
+"$CODEGRAPH_BIN" status --json "$PROJECT_ROOT"
 ```
 
 Do not run `codegraph uninit`, `codegraph unlock`, force flags, or repeated

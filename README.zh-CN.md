@@ -8,7 +8,7 @@ Work Governance 帮助 Agent 发现真实目标，只引入任务确实需要的
 
 由 [feng2r200](https://github.com/feng2r200) 创建并维护。
 
-当前语义插件版本为 `3.1.3`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
+当前语义插件版本为 `3.2.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
 
 ## 为什么需要它
 
@@ -112,6 +112,10 @@ pi install "$(pwd -P)"
 修改后新建 Pi 会话或重新加载资源。路由器和执行内核可被自动选择；
 场景模块也可显式调用，例如 `/skill:git-change-governance`。
 
+根 Package 只安装 Skills。可选的[本地 CodeGraph 适配器](integrations/pi-codegraph/README.md)
+须显式安装到用户拥有的稳定目录，并配置现有 CLI 的绝对入口；治理核心不自动加载、
+也不依赖该扩展。它只负责 Pi 工具桥接，不重复实现索引引擎。
+
 ### Codex
 
 先将 GitHub 仓库添加为 Codex Plugin marketplace，再安装 Plugin：
@@ -135,7 +139,7 @@ codex plugin add work-governance@work-governance-local
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 3.1.3 --dry-run
+  --keep-version 3.2.0 --dry-run
 ```
 
 检查预览并确认保留版本后，须另行授权才能去掉 `--dry-run` 执行清理。

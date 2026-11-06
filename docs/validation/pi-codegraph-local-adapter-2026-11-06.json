@@ -1,0 +1,168 @@
+{
+  "observed_at": "2026-11-06T09:05:22.060Z",
+  "host_version": "1.5.0",
+  "node_version": "v24.11.0",
+  "cli": {
+    "path": "/Users/ld/.volta/bin/codegraph",
+    "version": "1.6.2"
+  },
+  "unit": {
+    "passed": 33,
+    "failed": 0,
+    "skipped": 0
+  },
+  "governance": {
+    "passed": 49,
+    "failed": 0
+  },
+  "typecheck": {
+    "passed": true,
+    "scope": "index.ts against installed host peer declarations"
+  },
+  "host": {
+    "passed": true,
+    "mode": "real SDK loader and ctx.executeTool with synthetic assistant fixture; no model prompt",
+    "events": 20,
+    "actions": [
+      {
+        "action": "diagnose",
+        "isError": false
+      },
+      {
+        "action": "help",
+        "isError": false
+      },
+      {
+        "action": "explore",
+        "isError": true
+      },
+      {
+        "action": "unlock",
+        "isError": true
+      },
+      {
+        "action": "init",
+        "isError": false
+      },
+      {
+        "action": "status",
+        "isError": false
+      },
+      {
+        "action": "explore",
+        "isError": false
+      },
+      {
+        "action": "node",
+        "isError": false
+      },
+      {
+        "action": "node",
+        "isError": false
+      },
+      {
+        "action": "search",
+        "isError": false
+      },
+      {
+        "action": "files",
+        "isError": false
+      },
+      {
+        "action": "callers",
+        "isError": false
+      },
+      {
+        "action": "callees",
+        "isError": false
+      },
+      {
+        "action": "impact",
+        "isError": false
+      },
+      {
+        "action": "affected",
+        "isError": false
+      },
+      {
+        "action": "explore",
+        "isError": true
+      },
+      {
+        "action": "sync",
+        "isError": false
+      },
+      {
+        "action": "node",
+        "isError": false
+      },
+      {
+        "action": "index",
+        "isError": false
+      },
+      {
+        "action": "status",
+        "isError": false
+      }
+    ],
+    "source": "/Users/ld/.local/share/work-governance/pi-codegraph/index.ts"
+  },
+  "root_package_isolation": {
+    "observed_at": "2026-11-06T09:12:56.139Z",
+    "passed": true,
+    "root_package_only": true,
+    "registered_codegraph_count": 0
+  },
+  "installed_sha256": {
+    "package.json": "d1e3a867222ca71cc3402c0f54c4fdf7d32ca3b3417a5df85b8b29a673db2118",
+    "index.ts": "fb8bbd3830e84908a0f411843cc956c80b82bbac14bb65b9e6324bdbf6c6f444",
+    "core.mjs": "1faa8ccc1d3fcf9c799a686ae5c358ba530d2d7cf86757c8ed6bdbe347a25e57",
+    "core.d.mts": "f7bc2c8e5477048fc260ab3629ea06124c62fd8d8958aecd433991d6cb4c31a5",
+    "config.json": "acf7e906df30935c3b3af8429466e584ec33869be1d9d42eb5c8f3eb0d173ac8"
+  },
+  "uninstall": {
+    "status": "completed",
+    "observed_at": "2026-11-06T09:08:39.693Z",
+    "removed_package": "npm:@bopstack/pi-codegraph",
+    "old_declaration_present": false,
+    "old_package_directory_present": false,
+    "local_package_source": "../../.local/share/work-governance/pi-codegraph",
+    "actual_settings_host_smoke_passed": true,
+    "actual_settings_host_events": 20,
+    "registered_codegraph_count": 1,
+    "registered_source": "/Users/ld/.local/share/work-governance/pi-codegraph/index.ts",
+    "existing_sessions_reloaded": false
+  },
+  "old_cli_cleanup": {
+    "observed_at": "2026-11-06T09:20:23.592Z",
+    "removed_prefix": "/Users/ld/.volta/tools/image/node/24.11.0",
+    "removed_version": "0.9.5",
+    "removed_npm_packages": 2,
+    "old_package_present": false,
+    "old_bin_present": false,
+    "bare_cli_version": "1.6.2",
+    "configured_cli_version": "1.6.2",
+    "other_global_packages_unchanged": true,
+    "codex_and_pi_configuration_unchanged": true,
+    "post_cleanup_pi_smoke_passed": true,
+    "post_cleanup_pi_smoke_events": 20,
+    "post_cleanup_policy_tests_passed": 49
+  },
+  "codex_compatibility": {
+    "observed_at": "2026-11-06T09:25:40.620Z",
+    "codex_version": "0.167.0",
+    "plugin_enabled_version": "3.1.3",
+    "cached_codegraph_reference_contains_new_cli_guidance": false,
+    "pi_extension_registered_by_codex_manifest": false,
+    "mcp_config_command": "codegraph",
+    "mcp_config_args": ["serve", "--mcp"],
+    "fresh_mcp_handshake_passed": true,
+    "mcp_server_version": "1.6.2",
+    "default_listed_tools": ["codegraph_explore"],
+    "positive_control_process_only_allowlist": "explore,node,status",
+    "positive_control_listed_tools": ["codegraph_node", "codegraph_explore", "codegraph_status"],
+    "config_edited": false,
+    "existing_sessions_restarted": false,
+    "model_behavior_tested": false
+  }
+}

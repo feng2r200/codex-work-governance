@@ -7,6 +7,18 @@ All notable changes to Work Governance are documented here. The project follows
 
 No unreleased changes.
 
+## 3.2.0 - 2026-11-06
+
+### Added
+
+- An optional, explicitly installed Pi adapter for an existing CodeGraph CLI,
+  with local validation and host integration evidence.
+
+### Changed
+
+- Verify and reuse an explicit CodeGraph executable in structural code
+  intelligence guidance.
+
 ## 3.1.3 - 2026-11-06
 
 ### Changed
