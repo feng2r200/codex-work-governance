@@ -13,7 +13,7 @@ and durable state enter only when they add value.
 
 Created and maintained by [feng2r200](https://github.com/feng2r200).
 
-The current semantic plugin version is `3.1.1`. Release-impacting changes to
+The current semantic plugin version is `3.1.2`. Release-impacting changes to
 Skills, plugin metadata, packaging, installation, or release workflow must bump
 the version according to compatibility impact. Build timestamps and Git commits
 are provenance only; they do not replace a semantic version bump. The CI gate
@@ -172,7 +172,7 @@ preview removal of older direct cache entries with:
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 3.1.1 --dry-run
+  --keep-version 3.1.2 --dry-run
 ```
 
 Review the preview and verify the retained version before separately authorizing
@@ -345,11 +345,19 @@ uv run --locked python scripts/run_pi_behavior_trial.py --scenario push
 uv run --locked python scripts/run_pi_behavior_trial.py --scenario cleanup-review
 uv run --locked python scripts/run_pi_behavior_trial.py --scenario plan-assessment
 uv run --locked python scripts/run_pi_goal_trial.py
+uv run --locked python scripts/run_pi_material_trial.py
+uv run --locked python scripts/run_pi_plan_trial.py
+uv run --locked python scripts/run_pi_behavior_trial.py --scenario no-commit --observe-transient
 ```
 
-These inspect specific output artifacts and final references, not all possible
-side effects. The goal trial's receipt does not prove a command ran. For the
-paired kernel-body control use `--without-kernel` with either trial.
+The Plan trial requires its locally installed state-provider CLI and creates a
+temporary standalone Store, not a real project binding; see the trial script
+for the exact prerequisite. Optional transient observation
+requires kqueue and watches only the temporary bare remote's `refs/heads`
+directory. Notifications can coalesce; no event does not prove that unobserved
+locations, subprocesses, or networks had no side effects. The goal trial's
+receipt does not prove a command ran. For paired kernel-body controls use
+`--without-kernel` with the behavior, goal, or material trial.
 
 On 2026-11-05, the Codex 0.166.0 validator at the path below rejected Pi's
 `disable-model-invocation` field in the 13 scenario modules. Validator output

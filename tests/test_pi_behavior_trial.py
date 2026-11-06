@@ -1,8 +1,10 @@
 """Challenge the Pi trial's artifact oracle without invoking a model."""
 
 import importlib.util
+import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 RUNNER = Path(__file__).resolve().parents[1] / "scripts" / "run_pi_behavior_trial.py"
 SPEC = importlib.util.spec_from_file_location("pi_behavior_trial", RUNNER)
 assert SPEC is not None and SPEC.loader is not None

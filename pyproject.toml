@@ -1,6 +1,6 @@
 [project]
 name = "work-governance"
-version = "3.1.1"
+version = "3.1.2"
 description = "Composable core governance with optional tool adapters for Codex work"
 requires-python = ">=3.12"
 license = "Apache-2.0"

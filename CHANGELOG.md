@@ -7,6 +7,13 @@ All notable changes to Work Governance are documented here. The project follows
 
 No unreleased changes.
 
+## 3.1.2 - 2026-11-06
+
+### Added
+
+- Bounded Pi trials for real temporary WorkVCS Plan creation and recovery,
+  material code changes, and opt-in local Git reference directory observation.
+
 ## 3.1.1 - 2026-11-06
 
 ### Fixed

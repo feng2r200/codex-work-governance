@@ -8,7 +8,7 @@ Work Governance 帮助 Agent 发现真实目标，只引入任务确实需要的
 
 由 [feng2r200](https://github.com/feng2r200) 创建并维护。
 
-当前语义插件版本为 `3.1.1`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
+当前语义插件版本为 `3.1.2`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
 
 ## 为什么需要它
 
@@ -135,7 +135,7 @@ codex plugin add work-governance@work-governance-local
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 3.1.1 --dry-run
+  --keep-version 3.1.2 --dry-run
 ```
 
 检查预览并确认保留版本后，须另行授权才能去掉 `--dry-run` 执行清理。
@@ -209,10 +209,16 @@ uv run --locked python scripts/run_pi_behavior_trial.py --scenario push
 uv run --locked python scripts/run_pi_behavior_trial.py --scenario cleanup-review
 uv run --locked python scripts/run_pi_behavior_trial.py --scenario plan-assessment
 uv run --locked python scripts/run_pi_goal_trial.py
+uv run --locked python scripts/run_pi_material_trial.py
+uv run --locked python scripts/run_pi_plan_trial.py
+uv run --locked python scripts/run_pi_behavior_trial.py --scenario no-commit --observe-transient
 ```
 
-这些试验检查特定输出工件和最终引用，不覆盖所有可能的副作用。最终目标试验
-的回执不能证明命令确实执行。两个试验的 `--without-kernel` 均可用于内核正文配对对照。
+Plan 试验需要本地安装对应的状态提供方 CLI，使用临时独立 Store，不使用真实项目绑定；
+具体依赖见试验脚本。
+可选的瞬态观测依赖 kqueue，仅监视临时裸远端的 `refs/heads` 目录；通知可能合并，
+未观测到事件不能证明其他路径、子进程或网络没有副作用。最终目标试验的回执不能证明
+命令确实执行。行为、最终目标和实质变更试验均支持 `--without-kernel` 配对对照。
 
 2026-11-05 测量时，下方路径的 Codex 0.166.0 验证器不接受 13 个场景模块中的
 Pi `disable-model-invocation` 字段。验证器输出本身不能证明运行时行为。
