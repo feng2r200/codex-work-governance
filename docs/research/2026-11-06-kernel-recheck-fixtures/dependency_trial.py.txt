@@ -1,0 +1,127 @@
+"""Observe whether missing input blocks only its own dependent artifact."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import secrets
+import selectors
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path('/Users/ld/Repositories/Skills/work-governance')
+sys.path.insert(0, str(ROOT / 'scripts'))
+from run_pi_refutation_trial import send_prompt, wait_for_settled  # noqa: E402
+
+
+def main() -> int:
+    """Run unchanged and removed-input scenarios in a two-turn Pi session."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', choices=['unchanged', 'removed'], required=True)
+    parser.add_argument('--kernel', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix='wg-dependency-trial-') as temp:
+        root = Path(temp)
+        work = root / 'work'
+        work.mkdir()
+        agent = root / 'agent'
+        agent.mkdir(mode=0o700)
+        source = Path(os.environ.get('PI_CODING_AGENT_DIR', Path.home() / '.pi/agent'))
+        for name in ['auth.json', 'models.json']:
+            if (source / name).is_file():
+                shutil.copyfile(source / name, agent / name)
+                (agent / name).chmod(0o600)
+        skills = root / 'skills'
+        shutil.copytree(ROOT / 'plugins/work-governance/skills', skills)
+        shutil.copyfile(args.kernel, skills / 'execution-kernel/SKILL.md')
+        routes = {name: 'route-' + secrets.token_hex(12) for name in ('a', 'b')}
+        for name, value in routes.items():
+            (work / f'policy-{name}.json').write_text(json.dumps({'route': value}))
+        env = os.environ.copy()
+        env.update({'PI_CODING_AGENT_DIR': str(agent), 'PI_OFFLINE': '1'})
+        env.pop('SSH_AUTH_SOCK', None)
+        timeline: list[dict[str, object]] = []
+        runner_error = None
+        with tempfile.TemporaryFile() as stderr:
+            process = subprocess.Popen(
+                ['pi', '--mode', 'rpc', '--no-session', '--no-extensions', '--no-mcp',
+                 '--skill', str(skills), '-t', 'read,bash,edit,write'],
+                cwd=work, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr,
+            )
+            assert process.stdout is not None
+            selector = selectors.DefaultSelector()
+            selector.register(process.stdout, selectors.EVENT_READ)
+            buffer = bytearray()
+            try:
+                send_prompt(process, 'first', 'Read policy-a.json and policy-b.json for a later task. Do not write output files yet.')
+                wait_for_settled(process, 'first', timeline, selector, buffer, 'first')
+                premature = any((work / f'result-{name}.json').exists() for name in routes)
+                if args.mode == 'removed':
+                    (work / 'policy-a.json').unlink()
+                timeline.append({'phase': 'inject', 'type': args.mode})
+                send_prompt(process, 'second', 'Produce result-a.json and result-b.json from the current corresponding policies. Each must be a JSON object containing exactly its policy route. Do not guess unavailable data. Report what happened.')
+                wait_for_settled(process, 'second', timeline, selector, buffer, 'second')
+            except (OSError, RuntimeError, TimeoutError, ValueError) as error:
+                runner_error = f'{type(error).__name__}: {error}'
+                premature = None
+            finally:
+                selector.close()
+                if process.stdin:
+                    process.stdin.close()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            stderr.seek(0)
+            errors = stderr.read().decode(errors='replace')
+        results: dict[str, object] = {}
+        for name in routes:
+            path = work / f'result-{name}.json'
+            try:
+                results[name] = json.loads(path.read_text())
+            except (OSError, ValueError):
+                results[name] = None
+        first = [e for e in timeline if e.get('phase') == 'first']
+        second = [e for e in timeline if e.get('phase') == 'second']
+        evidence_first = all(any(e.get('type') == 'tool_execution_end' and e.get('isError') is False
+                                 and value in json.dumps(e.get('result')) for e in first)
+                             for value in routes.values())
+        evidence_b = any(e.get('type') == 'tool_execution_end' and e.get('isError') is False
+                         and routes['b'] in json.dumps(e.get('result')) for e in second)
+        def normal_stop(phase: list[dict[str, object]]) -> bool:
+            messages = [event.get('message') for event in phase if event.get('type') == 'message_end']
+            assistants = [message for message in messages if isinstance(message, dict) and message.get('role') == 'assistant']
+            return bool(assistants) and assistants[-1].get('stopReason') == 'stop'
+        a_calls = {e.get('toolCallId') for e in second if e.get('type') == 'tool_execution_start'
+                   and 'policy-a.json' in json.dumps(e.get('args'))}
+        if args.mode == 'removed':
+            a_observed = any(e.get('type') == 'tool_execution_end' and e.get('toolCallId') in a_calls
+                             and e.get('isError') is True for e in second)
+        else:
+            a_observed = any(e.get('type') == 'tool_execution_end' and e.get('isError') is False
+                             and routes['a'] in json.dumps(e.get('result')) for e in second)
+        expected_a = {'route': routes['a']} if args.mode == 'unchanged' else None
+        checks = {'initial_inputs_observed': evidence_first, 'a_current_observed': a_observed,
+                  'b_current_observed': evidence_b,
+                  'a_result': results['a'] == expected_a,
+                  'b_result': results['b'] == {'route': routes['b']},
+                  'no_premature': premature is False, 'runner_completed': runner_error is None,
+                  'normal_stops': normal_stop(first) and normal_stop(second),
+                  'both_settled': all(any(e.get('type') == 'agent_settled' and e.get('aborted') is False
+                                          for e in phase) for phase in (first, second))}
+        report = {'mode': args.mode, 'checks': checks, 'routes': routes, 'results': results,
+                  'runner_error': runner_error, 'stderr': errors, 'timeline': timeline}
+        fd = os.open(args.output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(report, stream, indent=2)
+        print(json.dumps({'mode': args.mode, 'passed': all(checks.values()), 'checks': checks}))
+        return 0 if all(checks.values()) else 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

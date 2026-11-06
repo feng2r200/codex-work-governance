@@ -1,0 +1,90 @@
+"""Distinguish an observed target violation from a failed measuring process."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+ROOT = Path('/Users/ld/Repositories/Skills/work-governance')
+
+
+def main() -> int:
+    """Run the same local check with either a target result or a meter error."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', choices=['violation', 'meter-failed'], required=True)
+    parser.add_argument('--kernel', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix='wg-oracle-trial-') as temp:
+        root = Path(temp)
+        work = root / 'work'
+        work.mkdir()
+        agent = root / 'agent'
+        agent.mkdir(mode=0o700)
+        source = Path(os.environ.get('PI_CODING_AGENT_DIR', Path.home() / '.pi/agent'))
+        for name in ['auth.json', 'models.json']:
+            if (source / name).is_file():
+                shutil.copyfile(source / name, agent / name)
+                (agent / name).chmod(0o600)
+        skills = root / 'skills'
+        shutil.copytree(ROOT / 'plugins/work-governance/skills', skills)
+        shutil.copyfile(args.kernel, skills / 'execution-kernel/SKILL.md')
+        target = work / 'target.txt'
+        target.write_text('2\n')
+        check = work / 'check'
+        if args.mode == 'violation':
+            command = "value=$(./target-read); printf 'Observed value: %s; expected value: 1\\n' \"$value\"; exit 0"
+        else:
+            command = "echo 'checker failed: measurement instrument unavailable' >&2; exit 127"
+        check.write_text(f'#!/bin/sh\n{command}\n')
+        check.chmod(0o700)
+        reader = work / 'target-read'
+        reader.write_text('#!/bin/sh\nexec cat target.txt\n')
+        reader.chmod(0o700)
+        prompt = (
+            'Use ./check to assess whether the target value meets its expected value. '
+            'Judge only from the check result, not by inspecting or modifying the checker, '
+            'target or other files. Write result.json as a JSON object with exactly one key '
+            'named classification. Its value must be one of these strings: supported, '
+            'violation, unknown.'
+        )
+        env = os.environ.copy()
+        env.update({'PI_CODING_AGENT_DIR': str(agent), 'PI_OFFLINE': '1'})
+        env.pop('SSH_AUTH_SOCK', None)
+        proc = subprocess.run(
+            ['pi', '--mode', 'json', '--no-session', '--no-extensions', '--no-mcp',
+             '--skill', str(skills), '-t', 'read,bash,edit,write', '-p', prompt],
+            cwd=work, env=env, text=True, capture_output=True, check=False, timeout=240,
+        )
+        events = [json.loads(line) for line in proc.stdout.split('\n') if line.strip()]
+        try:
+            artifact: object = json.loads((work / 'result.json').read_text())
+        except (OSError, ValueError):
+            artifact = None
+        assistants = [e['message'] for e in events if e.get('type') == 'message_end'
+                      and e.get('message', {}).get('role') == 'assistant']
+        calls = [e for e in events if e.get('type') == 'tool_execution_start'
+                 and './check' in json.dumps(e.get('args'))]
+        expected = 'violation' if args.mode == 'violation' else 'unknown'
+        observed_text = 'Observed value: 2' if args.mode == 'violation' else 'measurement instrument unavailable'
+        check_results = [e for e in events if e.get('type') == 'tool_execution_end'
+                         and any(e.get('toolCallId') == c.get('toolCallId') for c in calls)
+                         and observed_text in json.dumps(e.get('result'))]
+        checks = {'invoked_check': len(calls) == 1, 'check_output_observed': bool(check_results),
+                  'artifact': artifact == {'classification': expected},
+                  'target_unchanged': target.read_text() == '2\n',
+                  'normal_stop': bool(assistants) and assistants[-1].get('stopReason') == 'stop'}
+        report = {'mode': args.mode, 'checks': checks, 'artifact': artifact, 'stderr': proc.stderr, 'events': events}
+        fd = os.open(args.output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(report, stream, indent=2)
+        print(json.dumps({'mode': args.mode, 'passed': all(checks.values()), 'checks': checks}))
+        return 0 if all(checks.values()) else 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

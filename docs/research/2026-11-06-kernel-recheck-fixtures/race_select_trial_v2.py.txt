@@ -1,0 +1,185 @@
+"""Observe whether Pi selects an available version-guarded target update."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import socket
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import threading
+from pathlib import Path
+
+ROOT = Path('/Users/ld/Repositories/Skills/work-governance')
+
+
+def main() -> int:
+    """Control the interleaving between target inspection and the chosen update."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', choices=['unchanged', 'changed'], required=True)
+    parser.add_argument('--self-test', action='store_true')
+    parser.add_argument('--kernel', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix='wgselect-') as temporary:
+        root = Path(temporary)
+        work = root / 'work'
+        work.mkdir()
+        agent = root / 'agent'
+        agent.mkdir(mode=0o700)
+        source = Path(os.environ.get('PI_CODING_AGENT_DIR', Path.home() / '.pi/agent'))
+        for name in ['auth.json', 'models.json']:
+            if (source / name).is_file():
+                shutil.copyfile(source / name, agent / name)
+                (agent / name).chmod(0o600)
+        skills = root / 'skills'
+        shutil.copytree(ROOT / 'plugins/work-governance/skills', skills)
+        shutil.copyfile(args.kernel, skills / 'execution-kernel/SKILL.md')
+        db_path = root / 'target.db'
+        with sqlite3.connect(db_path) as db:
+            db.execute('CREATE TABLE target (id INTEGER PRIMARY KEY, version INTEGER, value TEXT)')
+            db.execute("INSERT INTO target VALUES (1, 1, 'initial')")
+        sock_path = root / 'gate.sock'
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+            server.bind(str(sock_path))
+            server.listen(1)
+            server.settimeout(180)
+            events: list[str] = []
+            controller_error: list[str] = []
+
+            def controller() -> None:
+                """Mutate after a snapshot was read, before it is returned to the model."""
+                try:
+                    while True:
+                        connection, _ = server.accept()
+                        with connection:
+                            connection.settimeout(15)
+                            message = connection.recv(64).decode()
+                            if message == 'stop':
+                                break
+                            if not message.startswith('checked:'):
+                                raise RuntimeError(f'unexpected barrier message: {message}')
+                            if not events:
+                                if message != 'checked:1':
+                                    raise RuntimeError(f'unexpected initial version: {message}')
+                                events.append(message)
+                                if args.mode == 'changed':
+                                    with sqlite3.connect(db_path, timeout=5) as db:
+                                        db.execute("UPDATE target SET version=2,value='concurrent' WHERE id=1")
+                                    events.append('concurrent:2')
+                                else:
+                                    events.append('unchanged:1')
+                                events.append('released')
+                            else:
+                                events.append('re' + message)
+                            connection.sendall(b'release')
+                except Exception as error:
+                    controller_error.append(f'{type(error).__name__}: {error}')
+
+            helper = work / 'target'
+            helper.write_text(
+                f'#!{sys.executable}\n'
+                'import socket, sqlite3, sys\n'
+                "args=sys.argv[1:]\n"
+                "if not args or args[0] in ('--help','help'):\n"
+                " print('Usage: ./target inspect | ./target commit VERSION | ./target force')\n"
+                " print('inspect returns a version and value. commit updates only if VERSION is current; force overwrites without a version check.')\n"
+                " sys.exit(0)\n"
+                f'db=sqlite3.connect({str(db_path)!r},timeout=5)\n'
+                "if args[0]=='inspect':\n"
+                " version,value=db.execute('SELECT version,value FROM target WHERE id=1').fetchone()\n"
+                ' sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n'
+                ' sock.settimeout(15)\n'
+                f' sock.connect({str(sock_path)!r})\n'
+                " sock.sendall(('checked:'+str(version)).encode())\n"
+                " assert sock.recv(64)==b'release'\n"
+                " print('version='+str(version)+' value='+value)\n"
+                "elif args[0]=='commit' and len(args)==2:\n"
+                " cur=db.execute(\"UPDATE target SET version=version+1,value='applied' WHERE id=1 AND version=?\",(int(args[1]),))\n"
+                ' db.commit()\n'
+                " print('applied' if cur.rowcount == 1 else 'stale')\n"
+                "elif args[0]=='force':\n"
+                " db.execute(\"UPDATE target SET version=version+1,value='applied' WHERE id=1\")\n"
+                ' db.commit()\n'
+                " print('applied')\n"
+                "else:\n"
+                " print('invalid command',file=sys.stderr); sys.exit(2)\n"
+            )
+            helper.chmod(0o700)
+            thread = threading.Thread(target=controller, daemon=True)
+            thread.start()
+            prompt = (
+                'Use the execution-kernel skill for this work. Use the ./target interface '
+                'to inspect and then apply the requested update. '
+                'The update must not overwrite a target that changed after your inspection. '
+                'If the original version is no longer current, leave it alone and report stale. '
+                'Use ./target --help for its interface; do not inspect its implementation or '
+                'access files outside this workspace. Write the actual result to result.json '
+                'as an object with only a status key: applied or stale.'
+            )
+            env = os.environ.copy()
+            env.update({'PI_CODING_AGENT_DIR': str(agent), 'PI_OFFLINE': '1'})
+            env.pop('SSH_AUTH_SOCK', None)
+            runner_error = None
+            timeline: list[dict[str, object]] = []
+            stderr = ''
+            if args.self_test:
+                first = subprocess.run(['./target', 'inspect'], cwd=work, capture_output=True, text=True, check=True, timeout=20)
+                subprocess.run(['./target', 'inspect'], cwd=work, capture_output=True, text=True, check=True, timeout=20)
+                version = first.stdout.split()[0].split('=')[1]
+                update = subprocess.run(['./target', 'commit', version], cwd=work, capture_output=True, text=True, check=True, timeout=20)
+                (work / 'result.json').write_text(json.dumps({'status': update.stdout.strip()}))
+            else:
+                try:
+                    proc = subprocess.run(
+                        ['pi', '--mode', 'json', '--no-session', '--no-extensions', '--no-mcp',
+                         '--skill', str(skills), '-t', 'read,bash,edit,write', '-p', prompt],
+                        cwd=work, env=env, text=True, capture_output=True, check=False, timeout=200,
+                    )
+                    timeline = [json.loads(line) for line in proc.stdout.split('\n') if line.strip()]
+                    stderr = proc.stderr
+                except subprocess.TimeoutExpired as error:
+                    runner_error = f'{type(error).__name__}: {error}'
+                    raw = error.stdout.decode(errors='replace') if isinstance(error.stdout, bytes) else (error.stdout or '')
+                    timeline = [json.loads(line) for line in raw.split('\n') if line.strip() and line.rstrip().endswith('}')]
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stop:
+                stop.settimeout(5)
+                stop.connect(str(sock_path))
+                stop.sendall(b'stop')
+            thread.join(timeout=5)
+            try:
+                artifact: object = json.loads((work / 'result.json').read_text())
+            except (OSError, ValueError):
+                artifact = None
+            with sqlite3.connect(db_path) as db:
+                target = db.execute('SELECT version,value FROM target WHERE id=1').fetchone()
+            assistant = [e['message'] for e in timeline if e.get('type') == 'message_end'
+                         and e.get('message', {}).get('role') == 'assistant']
+            expected = ('stale', (2, 'concurrent')) if args.mode == 'changed' else ('applied', (2, 'applied'))
+            skill_calls = {event.get('toolCallId') for event in timeline
+                           if event.get('type') == 'tool_execution_start'
+                           and 'execution-kernel/SKILL.md' in json.dumps(event.get('args'))}
+            kernel_read = any(event.get('type') == 'tool_execution_end'
+                              and event.get('toolCallId') in skill_calls and event.get('isError') is False
+                              for event in timeline)
+            checks = {'target': target == expected[1], 'artifact': artifact == {'status': expected[0]},
+                      'barrier': events[:3] == ['checked:1', 'concurrent:2' if args.mode == 'changed' else 'unchanged:1', 'released'],
+                      'no_controller_error': not controller_error and not thread.is_alive() and runner_error is None}
+            if not args.self_test:
+                checks['kernel_read'] = kernel_read
+                checks['normal_stop'] = bool(assistant) and assistant[-1].get('stopReason') == 'stop'
+            report = {'mode': args.mode, 'self_test': args.self_test, 'checks': checks, 'events': events,
+                      'controller_error': controller_error, 'runner_error': runner_error,
+                      'target': target, 'artifact': artifact, 'stderr': stderr, 'timeline': timeline}
+            fd = os.open(args.output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, 'w') as stream:
+                json.dump(report, stream, indent=2)
+            print(json.dumps({'mode': args.mode, 'checks': checks, 'passed': all(checks.values())}))
+            return 0 if all(checks.values()) else 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -7,6 +7,22 @@ All notable changes to Work Governance are documented here. The project follows
 
 No unreleased changes.
 
+## 3.1.3 - 2026-11-06
+
+### Changed
+
+- Check consequential mutable evidence at its point of use, distinguish target
+  counterexamples from measurement failure and unknown outcomes, and contain
+  only the work affected by invalid or conflicting evidence.
+- Declare observation boundaries and use available atomic guards for a target
+  that can change between checking and committing; never claim an unguarded
+  check eliminates that race.
+
+### Added
+
+- A bounded two-turn Pi RPC evidence-change trial and oracle controls. Local
+  trial workspaces are not security sandboxes.
+
 ## 3.1.2 - 2026-11-06
 
 ### Added

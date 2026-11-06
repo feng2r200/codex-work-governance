@@ -1,0 +1,80 @@
+"""Demonstrate a controlled post-check change in a temporary SQLite target."""
+
+import json
+import sqlite3
+import tempfile
+import threading
+from pathlib import Path
+
+
+def run_case(*, change: bool, guarded: bool) -> dict[str, object]:
+    """Pause a writer after reading a version; optionally change before its write."""
+    with tempfile.TemporaryDirectory(prefix="wg-race-control-") as directory:
+        path = Path(directory) / "state.sqlite"
+        with sqlite3.connect(path) as db:
+            db.execute("CREATE TABLE state (id INTEGER PRIMARY KEY, version INTEGER, value TEXT)")
+            db.execute("INSERT INTO state VALUES (1, 1, 'initial')")
+        checked = threading.Event()
+        release = threading.Event()
+        events: list[str] = []
+        result: dict[str, object] = {}
+
+        def writer() -> None:
+            """Use the same captured version with or without an atomic guard."""
+            try:
+                with sqlite3.connect(path, timeout=3) as db:
+                    row = db.execute("SELECT version FROM state WHERE id=1").fetchone()
+                    assert row is not None
+                    version = row[0]
+                    events.append("writer_checked")
+                    checked.set()
+                    if not release.wait(timeout=5):
+                        raise TimeoutError("release barrier not reached")
+                    if guarded:
+                        cursor = db.execute(
+                            "UPDATE state SET value='writer', version=version+1 "
+                            "WHERE id=1 AND version=?", (version,)
+                        )
+                    else:
+                        cursor = db.execute("UPDATE state SET value='writer', version=version+1 WHERE id=1")
+                    result["rows"] = cursor.rowcount
+                    events.append("writer_committed")
+            except Exception as error:
+                result["error"] = f"{type(error).__name__}: {error}"
+                checked.set()
+
+        thread = threading.Thread(target=writer)
+        thread.start()
+        if not checked.wait(timeout=5):
+            raise TimeoutError("check barrier not reached")
+        if change:
+            with sqlite3.connect(path, timeout=3) as db:
+                db.execute("UPDATE state SET value='concurrent', version=version+1 WHERE id=1")
+            events.append("concurrent_committed")
+        else:
+            events.append("no_change")
+        release.set()
+        thread.join(timeout=6)
+        if thread.is_alive():
+            raise TimeoutError("writer did not terminate")
+        with sqlite3.connect(path) as db:
+            final = db.execute("SELECT version, value FROM state WHERE id=1").fetchone()
+        result.update({"guarded": guarded, "change": change, "events": events, "final": final})
+        return result
+
+
+def main() -> None:
+    """Emit same-shape valid, guarded-stale and unguarded-stale controls."""
+    controls = [
+        run_case(change=False, guarded=True),
+        run_case(change=True, guarded=True),
+        run_case(change=True, guarded=False),
+    ]
+    print(json.dumps(controls, indent=2))
+    assert controls[0]["rows"] == 1 and controls[0]["final"] == (2, "writer")
+    assert controls[1]["rows"] == 0 and controls[1]["final"] == (2, "concurrent")
+    assert controls[2]["rows"] == 1 and controls[2]["final"] == (3, "writer")
+
+
+if __name__ == "__main__":
+    main()

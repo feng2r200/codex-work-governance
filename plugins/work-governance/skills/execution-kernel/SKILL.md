@@ -30,13 +30,35 @@ execute.
 - **Reversal:** how to undo the part, and what evidence confirms it is undone.
 
 Run the refutation before the change, not after. Its purpose is to retire a
-wrong route while that is still cheap; an executed route defends itself.
+wrong route while that is still cheap; an executed route defends itself. A
+failed check is not itself proof that the premise is false: establish whether
+the observed result contradicts the premise, the measuring arrangement failed,
+the outcome is unknown, or applicable evidence conflicts. Preserve the raw
+observation and its scope. Treat a timeout, missing receipt, unobserved effect,
+or unavailable target as unknown unless independent evidence establishes more;
+never infer that an external action did not happen merely because no receipt
+arrived.
 
 Prove the measuring arrangement before trusting a result it produces. Pair a
 negative with a minimal positive case that differs in one condition, and keep
 that case in the same table, scope, and value shape as the thing under test.
 A check placed in a neighbouring section with different strictness reports a
-verdict about itself rather than about the subject.
+verdict about itself rather than about the subject. State the observed object,
+location, time window, event types, and relevant blind spots; say exactly what
+the positive control demonstrated. One successful control does not establish
+complete coverage, absence of missed events, or safety outside that boundary.
+When the real path requires separate authority, is irreversible, or cannot be
+observed, do not execute it merely to satisfy this gate; report its status and
+limit the claim to the evidence actually available.
+
+For a claim that controls a material route, authorization, acceptance, or
+external effect, keep its object, critical premises, evidence and oracle,
+input or target identity, collection time, applicability boundary, and
+consequential dependencies recoverable. Bind identity using the object's
+applicable version, reference, digest, or exact state, not a mandatory hash or
+a second state provider. Reuse evidence only while its relevant identity,
+observation and scope remain applicable. Endpoint equality alone does not prove
+that no transient change occurred between observations.
 
 Hold a passing result to the same standard as a failing one. A green suite,
 clean build, or satisfied assertion is a reading produced by an arrangement
@@ -220,9 +242,25 @@ do not ask the user to restate the goal after each local success.
 
 A semantic event is new evidence, a failed material assumption, a validation
 failure, a milestone completion, a scope or relevant external-state change, or
-a mismatch between a receipt and observed state. Contain the affected work,
-separate the observed fact from possible causes, and review only the goal,
-route, priority, Plan, validation, or delivery claims the event can affect.
+a mismatch between a receipt and observed state. Identify the affected claim,
+premise, evidence identity and dependent actions; separate the observed fact
+from possible causes, and review only the goal, route, priority, Plan,
+validation, or delivery claims the event can affect. Invalidate affected
+conclusions when their input, target, oracle, version or scope changes; do not
+invalidate independent conclusions merely because they share a task.
+
+Contain actions that depend on an unsupported or contradicted conclusion and
+could expand the effect. Continue independent work only when its own evidence
+and authority remain valid. For an actual counterexample, withdraw the
+dependent conclusion and re-derive the route. For a failed measuring
+arrangement, correct it and repeat the affected observation rather than
+labeling the target false. For an unknown or conflicting outcome, reconcile
+against current target evidence; if an external action may already have
+occurred, do not repeat it until its state, retry semantics and authority make
+repetition safe. Reopen only the user-owned decision or authorization boundary
+that actually changed. Before resuming affected work, record or carry forward
+the revised evidence, decision and remaining limits; never declare an unknown
+outcome successful merely to keep the task moving.
 
 A Plan exit or replacement is also a semantic event when Tasks depend on that
 Plan for currentness, ownership, or execution entry. Use
@@ -251,3 +289,7 @@ never widens a claim beyond the validation performed.
 If review finds no meaningful change, reuse current evidence and continue. Do
 not repeat broad reads, independent review, reporting, Plan
 updates, or durable writes merely to document that nothing changed.
+
+## Check Evidence At The Point Of Use
+
+Before a consequential action or final artifact relies on a mutable external input, identify its actual authoritative source and check the current relevant content at the point of use. A past observation or absence of a change notification does not establish currentness. Re-read the relevant source or verify a genuinely immutable identity bound to the actual input. If currentness cannot be established, contain the dependent action and report the uncertainty. For a target that may change between checking and committing, use an available atomic condition or version guard; otherwise do not claim the check eliminated that race.

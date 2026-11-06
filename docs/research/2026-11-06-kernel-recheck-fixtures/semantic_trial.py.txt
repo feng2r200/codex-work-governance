@@ -1,0 +1,82 @@
+"""Probe bounded conflict and observation-scope judgments using local evidence."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import secrets
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+ROOT = Path('/Users/ld/Repositories/Skills/work-governance')
+
+
+def main() -> int:
+    """Create one evidence case, ask for a classification, and retain raw events."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--case', choices=['consistent', 'conflict', 'outside-seen', 'outside-unknown'], required=True)
+    parser.add_argument('--kernel', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix='wg-semantic-trial-') as temp:
+        root = Path(temp)
+        work = root / 'work'
+        work.mkdir()
+        agent = root / 'agent'
+        agent.mkdir(mode=0o700)
+        source = Path(os.environ.get('PI_CODING_AGENT_DIR', Path.home() / '.pi/agent'))
+        for name in ['auth.json', 'models.json']:
+            if (source / name).is_file():
+                shutil.copyfile(source / name, agent / name)
+                (agent / name).chmod(0o600)
+        skills = root / 'skills'
+        shutil.copytree(ROOT / 'plugins/work-governance/skills', skills)
+        shutil.copyfile(args.kernel, skills / 'execution-kernel/SKILL.md')
+        marker = 'observation-' + secrets.token_hex(12)
+        if args.case in ('consistent', 'conflict'):
+            data = {'id': marker, 'version': 7, 'at': 'T1',
+                    'statements': [{'status': 'open'}, {'status': 'open' if args.case == 'consistent' else 'closed'}]}
+            expected = 'consistent' if args.case == 'consistent' else 'conflict'
+            prompt = ('Read evidence.json. Both statements concern exactly the same object, version and instant. '
+                      'Classify whether they can both be true. Write result.json with exactly one key, '
+                      'classification, whose value is consistent, conflict, or unknown.')
+        else:
+            data = {'id': marker, 'watched': '/watched', 'events': [],
+                    'independent_outside_observation': {'path': '/outside', 'event': 'created', 'during_interval': True} if args.case == 'outside-seen' else None}
+            expected = 'yes' if args.case == 'outside-seen' else 'unknown'
+            prompt = ('Read evidence.json. The listed watcher observes only /watched during the interval. '
+                      'Based only on this evidence, did a creation occur under /outside during the interval? '
+                      'Write result.json with exactly one key, classification, whose value is yes, no, or unknown.')
+        (work / 'evidence.json').write_text(json.dumps(data))
+        env = os.environ.copy()
+        env.update({'PI_CODING_AGENT_DIR': str(agent), 'PI_OFFLINE': '1'})
+        env.pop('SSH_AUTH_SOCK', None)
+        proc = subprocess.run(
+            ['pi', '--mode', 'json', '--no-session', '--no-extensions', '--no-mcp',
+             '--skill', str(skills), '-t', 'read,bash,edit,write', '-p', prompt],
+            cwd=work, env=env, text=True, capture_output=True, check=False, timeout=240,
+        )
+        events = [json.loads(line) for line in proc.stdout.split('\n') if line.strip()]
+        try:
+            artifact: object = json.loads((work / 'result.json').read_text())
+        except (OSError, ValueError):
+            artifact = None
+        assistant = [e['message'] for e in events if e.get('type') == 'message_end'
+                     and e.get('message', {}).get('role') == 'assistant']
+        checks = {'input_observed': any(e.get('type') == 'tool_execution_end' and e.get('isError') is False
+                                        and marker in json.dumps(e.get('result')) for e in events),
+                  'artifact': artifact == {'classification': expected},
+                  'normal_stop': bool(assistant) and assistant[-1].get('stopReason') == 'stop'}
+        report = {'case': args.case, 'checks': checks, 'input': data, 'artifact': artifact,
+                  'stderr': proc.stderr, 'events': events}
+        descriptor = os.open(args.output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(descriptor, 'w') as stream:
+            json.dump(report, stream, indent=2)
+        print(json.dumps({'case': args.case, 'passed': all(checks.values()), 'checks': checks}))
+        return 0 if all(checks.values()) else 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

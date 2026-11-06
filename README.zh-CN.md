@@ -8,7 +8,7 @@ Work Governance 帮助 Agent 发现真实目标，只引入任务确实需要的
 
 由 [feng2r200](https://github.com/feng2r200) 创建并维护。
 
-当前语义插件版本为 `3.1.2`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
+当前语义插件版本为 `3.1.3`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
 
 ## 为什么需要它
 
@@ -135,7 +135,7 @@ codex plugin add work-governance@work-governance-local
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 3.1.2 --dry-run
+  --keep-version 3.1.3 --dry-run
 ```
 
 检查预览并确认保留版本后，须另行授权才能去掉 `--dry-run` 执行清理。
@@ -211,6 +211,8 @@ uv run --locked python scripts/run_pi_behavior_trial.py --scenario plan-assessme
 uv run --locked python scripts/run_pi_goal_trial.py
 uv run --locked python scripts/run_pi_material_trial.py
 uv run --locked python scripts/run_pi_plan_trial.py
+uv run --locked python scripts/run_pi_refutation_trial.py --scenario unchanged --output /tmp/wg-unchanged.json
+uv run --locked python scripts/run_pi_refutation_trial.py --scenario changed --output /tmp/wg-changed.json
 uv run --locked python scripts/run_pi_behavior_trial.py --scenario no-commit --observe-transient
 ```
 
@@ -218,7 +220,10 @@ Plan 试验需要本地安装对应的状态提供方 CLI，使用临时独立 S
 具体依赖见试验脚本。
 可选的瞬态观测依赖 kqueue，仅监视临时裸远端的 `refs/heads` 目录；通知可能合并，
 未观测到事件不能证明其他路径、子进程或网络没有副作用。最终目标试验的回执不能证明
-命令确实执行。行为、最终目标和实质变更试验均支持 `--without-kernel` 配对对照。
+命令确实执行。RPC 证伪试验保留工具结果及阶段顺序，但不能证明没有瞬态写入、
+网络访问或其他未观测副作用。新建输出文件含原始会话事件，可能包含敏感数据，须
+选择获授权的私有位置；可用 `--kernel-file` 比较另一份内核。行为、最终目标和实质
+变更试验均支持 `--without-kernel` 空正文对照。
 
 2026-11-05 测量时，下方路径的 Codex 0.166.0 验证器不接受 13 个场景模块中的
 Pi `disable-model-invocation` 字段。验证器输出本身不能证明运行时行为。

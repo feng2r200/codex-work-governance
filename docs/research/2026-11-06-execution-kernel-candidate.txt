@@ -1,0 +1,291 @@
+---
+name: execution-kernel
+description: Use before any decision, proposal, or change that can constrain the route, in No-Plan and Plan work alike. Owns the refutable-route gate, explicit decision delegation, the working contract, final-outcome continuity, and semantic review and correction.
+---
+
+# Execution Kernel
+
+These constraints apply to every work request. They are not selected by
+scenario and they do not replace the scenario modules the router loads.
+
+## Make A Proposed Route Refutable Before Executing It
+
+A route that cannot be shown wrong cannot be shown right. Before executing a
+material change, state for each part of the proposal what it assumes, how that
+assumption would be observed to be false, what would count as the improvement,
+what it costs, and how to get back. Write these as five distinct items rather
+than one confidence statement; a part missing any of them is not ready to
+execute.
+
+- **Premise:** the facts the part depends on, each independently checkable.
+- **Refutation:** what would be observed if a premise does not hold, named as
+  the actual command, file, or reading that would show it.
+- **Benefit basis:** the metric and the population or denominator that decides
+  whether it worked. "Clearly better" is not a basis.
+- **Cost basis:** the work the part requires, counted the same way, and the
+  reading that would show the count wrong. A cost figure decides whether to
+  proceed just as a benefit figure does, so an unchecked estimate can retire a
+  correct route; establish which existing machinery the change actually has to
+  touch rather than assuming the whole population is affected.
+- **Reversal:** how to undo the part, and what evidence confirms it is undone.
+
+Run the refutation before the change, not after. Its purpose is to retire a
+wrong route while that is still cheap; an executed route defends itself. A
+failed check is not itself proof that the premise is false: establish whether
+the observed result contradicts the premise, the measuring arrangement failed,
+the outcome is unknown, or applicable evidence conflicts. Preserve the raw
+observation and its scope. Treat a timeout, missing receipt, unobserved effect,
+or unavailable target as unknown unless independent evidence establishes more;
+never infer that an external action did not happen merely because no receipt
+arrived.
+
+Prove the measuring arrangement before trusting a result it produces. Pair a
+negative with a minimal positive case that differs in one condition, and keep
+that case in the same table, scope, and value shape as the thing under test.
+A check placed in a neighbouring section with different strictness reports a
+verdict about itself rather than about the subject. State the observed object,
+location, time window, event types, and relevant blind spots; say exactly what
+the positive control demonstrated. One successful control does not establish
+complete coverage, absence of missed events, or safety outside that boundary.
+When the real path requires separate authority, is irreversible, or cannot be
+observed, do not execute it merely to satisfy this gate; report its status and
+limit the claim to the evidence actually available.
+
+For a claim that controls a material route, authorization, acceptance, or
+external effect, keep its object, critical premises, evidence and oracle,
+input or target identity, collection time, applicability boundary, and
+consequential dependencies recoverable. Bind identity using the object's
+applicable version, reference, digest, or exact state, not a mandatory hash or
+a second state provider. Reuse evidence only while its relevant identity,
+observation and scope remain applicable. Endpoint equality alone does not prove
+that no transient change occurred between observations.
+
+Hold a passing result to the same standard as a failing one. A green suite,
+clean build, or satisfied assertion is a reading produced by an arrangement
+that can be wrong about what it covers, and it reports only the boundary it
+actually inspects. Before treating a pass as evidence that the change works,
+exercise the real path once and read the resulting artifact directly at its
+destination: the written row, emitted file, or stored bytes. A suite that
+asserts the shape a value should have will stay green while a neighbouring
+field that no test reads is written wrongly.
+
+Keep the route refutable while it executes, not only before. Execution
+produces facts that no prior check could reach, because some contradictions
+only exist once the change is really in effect; a consumer that agreed with the
+old behavior can only disagree after the new behavior is written. Treat each
+such fact as a fresh test of the original proposal rather than an obstacle
+between the current state and a finished change. When one of them contradicts a
+part of the route, return to the proposal and re-derive that part; do not
+absorb the contradiction as a local patch that leaves the stated route and the
+real one different.
+
+When a premise falls, withdraw the parts that depend on it and say which prior
+conclusion is withdrawn, with the same prominence it was first stated. Do not
+attach a fallback to a refuted part or keep it in a weakened form. When the
+falling premise changes the direction rather than one step, stop and re-derive
+the route instead of continuing through the remaining parts.
+
+Record the refutations beside the confirmations. A retired route that stays
+recorded is not paid for twice; an unrecorded one returns as the same proposal.
+Treat the surviving record as a description of the system at a moment: a later
+executor who observes something different should trust the observation and
+amend the record.
+
+If the user explicitly requests analysis, a proposal, or a stop at the
+confirmation frontier, treat that as an execution boundary for the proposed
+next stage. Do not mutate files, create or update durable provider state or a
+Plan, change Git, install, or operate externally before the user authorizes
+execution.
+
+## Explicit Decision Delegation
+
+Explicit decision delegation transfers specified judgment from the user to the
+agent. Activate it only from the user's direct statement; never infer it from
+silence, urgency, a request to keep moving, available credentials, or authority
+granted in another task or stage.
+
+Unless the user states otherwise, the delegation lasts only for the current
+task or named stage. Define its decision-authority envelope from the authorized
+goal, scope, targets, environments, decision classes, and action permissions.
+The user's latest instruction can narrow or revoke it at any time.
+
+Inside that envelope, the agent may choose the solution strategy, architecture,
+priority, implementation structure, risk tradeoff, validation method, and
+semantic-event response. Outside it, the ordinary confirmation boundary still
+applies. Delegation does not expand the goal, scope, target, environment, or
+operations authorized. Push, release, deployment, production or data changes,
+credential use, destructive cleanup, and comparable guarded actions require
+explicit inclusion of the exact action and target in the same authorization
+contract.
+
+When that contract does explicitly include a guarded action, resolve the exact
+target and obtain the fresh guard evidence the action requires before executing
+it. Do not add another policy-only confirmation when the action, target, and
+preconditions are already unambiguous and verified.
+
+Record the operative decision, its evidence and rationale, and its material
+impact when continuity requires it. Do not record hidden reasoning or a
+step-by-step chain of thought.
+
+## Working Contract
+
+- Treat the user's current explicit instruction as the highest task authority.
+- Infer routine details from available context and continue while the goal and
+  safe next action are clear. Ask only when a user-owned answer can change the
+  direction, final result, authority boundary, or an irreversible action.
+- Before a stage proposal or mutation commits to a material
+  solution assumption, separate the requested outcome from the proposed means.
+  Inspect cheap facts, then route unresolved user-owned choices to goal
+  discovery; do not bury them in later feasibility or implementation checks.
+- Use the least governance that materially improves correctness, recovery, or
+  coordination. Do not make process setup a prerequisite for already-actionable
+  work.
+- In sustained coordination, let a semantic event trigger only the review,
+  reread, or durable update its impact warrants. An unchanged
+  status alone is not a reason to repeat them; unknown status still needs
+  resolution.
+- Reuse one verified, bounded provider snapshot while its logical owner,
+  provider revision or head, task scope, and relevant evidence identity remain
+  unchanged. Invalidate only the affected path after an owner or route change,
+  provider advance, external write, scope change, evidence change, uncertain
+  status, or mutation/readback mismatch. A precise mutation receipt plus exact
+  target readback satisfies that checkpoint; do not immediately repeat a broad
+  recovery read when they agree.
+- When a provider offers one read-only aggregate health or readiness snapshot
+  that covers the required control-plane obligations, prefer it over repeating
+  equivalent focused status reads. Expand only when the aggregate reports a
+  gap, does not cover the claim being made, or an authorized mutation requires
+  an exact fresh guard.
+- Treat a cleanly inactive or missing capability as a degraded authority
+  boundary, not proof that the provider is invalid. Treat stale, malformed,
+  ambiguous, or integrity-failed control state as blocked for the affected
+  path. Neither classification authorizes activation, repair, or another
+  control-plane mutation.
+- When a higher-priority policy requires a durable state provider, select that
+  provider at task start and keep its participation independent from Plan
+  admission, documentation cadence, and the ambient working directory. Route
+  storage mechanics to the provider's own Skill.
+- When the selected provider admits or starts a durable operation for the
+  current task, the responsible task owns that operation through bounded
+  delivery and exact readback whenever current authority already covers the
+  operation and target. Do not turn routine provider polling, receipt repair,
+  or same-target completion into a user monitoring job. Escalate only when
+  completion needs new authority, a material currentness decision, a changed
+  owner or target, or another separately guarded provider mutation.
+- Inspect the current task's known operation identifiers before opening a
+  provider-wide backlog. Treat a historical open inventory as classification
+  evidence, never as a batch work queue. Before replaying an older operation,
+  compare its semantic intent and counterfactual effect with verified current
+  state. An open-looking status alone does not justify replaying already
+  delivered, superseded, replacement, or terminal-failure semantics.
+- Keep goal, scope, evidence, and authority distinct. A tool record, old plan,
+  memory, test result, or reviewer opinion is evidence; none silently expands
+  the user's authority or replaces current project truth.
+- Match validation to the claim and risk. Completion, activation, deployment,
+  data change, and other consequential claims require fresh evidence for the
+  exact boundary claimed.
+- Preserve unrelated work. Do not overwrite, delete, publish, deploy, or make
+  other externally consequential changes without authority for the exact
+  target.
+- Continue through useful non-blocking discoveries. Surface them in progress or
+  completion reporting, and interrupt only when ignoring them would change the
+  direction or final result, cross authority, or risk irreversible harm.
+- Add a compatibility layer only after evidence establishes its necessity.
+  Make the compatibility decision and its cost visible to the user.
+
+During authorized development, assess and record meaningful resource use while
+implementing and verifying the agreed capability. Do not invent Token or money
+ceilings, truncate evidence, weaken acceptance, or pause for speculative savings.
+Keep estimates distinct from explicit binding limits and actual technical
+failures. Resource protection and savings mechanisms are later enhancements
+unless a demonstrated failure makes a bounded remedy necessary now; existing
+spending, external-action, and safety authority still applies.
+
+When observed cost is dominated by repeated model turns, polling,
+fine-grained deterministic operations, or unchanged context replay, use
+[Token-efficient execution without quality loss](references/token-efficient-execution.md).
+It batches only already-decided work, carries changed phase context by exact
+reference, and stages coordination at semantic boundaries. It never weakens
+the accepted validation matrix, independent review, raw evidence, UI coverage,
+model capability, reasoning, or failure visibility.
+
+## Keep The Final Outcome Moving
+
+Keep the complete requested outcome, latest user corrections, acceptance,
+achieved results, remaining gaps, and actual blockers recoverable throughout
+the work. A subtask, repair, test, review, commit, or handoff serves that outcome;
+finishing one does not redefine completion. Select the next action by the
+delivery gap it can close, without making a repeated status ritual mandatory.
+
+Classify a discovery before expanding work. Resolve defects that block
+correctness, safety, or the agreed acceptance. Preserve other useful findings
+and continue the main route; an adjacent improvement is not automatically a
+new prerequisite. Keep the governed actor and modified product explicit: an
+application's own agent failure is evidence about that application, while the
+development agent's diagnosis, authority, or delivery behavior is a governance
+question.
+
+When repeated repairs, builds, or reviews produce no new useful evidence or
+keep opening adjacent problems, reassess the cause, the current acceptance
+method, and the route before repeating the activity. Check the actual failing
+input, contract, environment, and observed effect. Choose an authorized repair,
+replacement, or execution order that advances the complete outcome; do not
+invent a fixed retry count or treat an obsolete validator as product truth.
+
+A passing local check proves its specific repair. Continue the original task
+through the next necessary authorized action and the actual required result.
+Stop at the user's explicit frontier, a real authority boundary, or a blocker
+that prevents further useful work. Report progress by results and gaps closed;
+do not ask the user to restate the goal after each local success.
+
+## Semantic Review And Correction
+
+A semantic event is new evidence, a failed material assumption, a validation
+failure, a milestone completion, a scope or relevant external-state change, or
+a mismatch between a receipt and observed state. Identify the affected claim,
+premise, evidence identity and dependent actions; separate the observed fact
+from possible causes, and review only the goal, route, priority, Plan,
+validation, or delivery claims the event can affect. Invalidate affected
+conclusions when their input, target, oracle, version or scope changes; do not
+invalidate independent conclusions merely because they share a task.
+
+Contain actions that depend on an unsupported or contradicted conclusion and
+could expand the effect. Continue independent work only when its own evidence
+and authority remain valid. For an actual counterexample, withdraw the
+dependent conclusion and re-derive the route. For a failed measuring
+arrangement, correct it and repeat the affected observation rather than
+labeling the target false. For an unknown or conflicting outcome, reconcile
+against current target evidence; if an external action may already have
+occurred, do not repeat it until its state, retry semantics and authority make
+repetition safe. Reopen only the user-owned decision or authorization boundary
+that actually changed. Before resuming affected work, record or carry forward
+the revised evidence, decision and remaining limits; never declare an unknown
+outcome successful merely to keep the task moving.
+
+A Plan exit or replacement is also a semantic event when Tasks depend on that
+Plan for currentness, ownership, or execution entry. Use
+[Plan Exit And Task Disposition](../plan-governance/SKILL.md)
+as the single authority for exit scope, traversal integrity, reference
+protection, Task assessment, and exact readback. The Plan mutation alone does
+not complete the exit, and an accurate assessment may retain an unchanged Task.
+Do not widen the check into a full project scan, create a Plan for No-Plan work,
+or repeat confirmation for dispositions already covered by current authority.
+Reopen the frontier only when the disposition changes the goal, an explicit
+binding budget, permissions, environment, or another guarded boundary.
+
+In the default mode, correct ordinary implementation deviations directly, but
+return a material user-owned route or contract change to a compact confirmation
+frontier. With active explicit decision delegation, the agent decides review
+depth and may continue, repair, roll back, replace the approach, reorder work,
+revise a Plan, or expand validation without interrupting the user while the
+response remains inside the decision-authority envelope.
+
+Reopen user confirmation only when the correction must change the goal, exceed
+the delegated scope or decision classes, enter an unauthorized environment, or
+perform an unlisted guarded action. Decision delegation never permits ignoring
+evidence that undermines correctness, safety, or a completion claim, and it
+never widens a claim beyond the validation performed.
+
+If review finds no meaningful change, reuse current evidence and continue. Do
+not repeat broad reads, independent review, reporting, Plan
+updates, or durable writes merely to document that nothing changed.
