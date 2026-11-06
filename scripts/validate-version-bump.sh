@@ -103,7 +103,7 @@ done
 release_change="false"
 while IFS= read -r changed_file; do
     case "$changed_file" in
-        pyproject.toml|uv.lock|plugins/work-governance/plugin.json|plugins/work-governance/.codex-plugin/plugin.json|plugins/work-governance/skills/*|scripts/*|.github/workflows/*)
+        pyproject.toml|uv.lock|package.json|plugins/work-governance/plugin.json|plugins/work-governance/.codex-plugin/plugin.json|plugins/work-governance/skills/*|scripts/*|.github/workflows/*)
             release_change="true"
             break
             ;;

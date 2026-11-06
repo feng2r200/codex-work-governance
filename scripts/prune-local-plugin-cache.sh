@@ -27,6 +27,20 @@ absolute_path() {
     esac
 }
 
+version_less() {
+    local left="$1" right="$2" i
+    local -a left_parts right_parts
+    IFS=. read -r -a left_parts <<< "$left"
+    IFS=. read -r -a right_parts <<< "$right"
+    for i in 0 1 2; do
+        if (( ${#left_parts[$i]} < ${#right_parts[$i]} )); then return 0; fi
+        if (( ${#left_parts[$i]} > ${#right_parts[$i]} )); then return 1; fi
+        if [[ "${left_parts[$i]}" < "${right_parts[$i]}" ]]; then return 0; fi
+        if [[ "${left_parts[$i]}" > "${right_parts[$i]}" ]]; then return 1; fi
+    done
+    return 1
+}
+
 manifest_value() {
     local manifest="$1"
     local key="$2"
@@ -73,6 +87,20 @@ done
 keep_dir="$cache_root/$keep_version"
 [[ -d "$keep_dir" && ! -L "$keep_dir" ]] \
     || die "keep version directory is missing: $keep_dir"
+[[ -f "$keep_dir/plugin.json" && "$(manifest_value "$keep_dir/plugin.json" name 2>/dev/null || true)" == "work-governance" && "$(manifest_value "$keep_dir/plugin.json" version 2>/dev/null || true)" == "$keep_version" ]] \
+    || die "keep version manifest does not match: $keep_dir"
+
+# Complete this preflight before deleting anything, including in dry-run mode.
+for candidate in "$cache_root"/*; do
+    [[ -d "$candidate" && ! -L "$candidate" && "$candidate" != "$keep_dir" ]] || continue
+    candidate_version="$(basename "$candidate")"
+    [[ "$candidate_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || continue
+    manifest="$candidate/plugin.json"
+    [[ -f "$manifest" && "$(manifest_value "$manifest" name 2>/dev/null || true)" == "work-governance" && "$(manifest_value "$manifest" version 2>/dev/null || true)" == "$candidate_version" ]] || continue
+    if version_less "$keep_version" "$candidate_version"; then
+        die "verified newer version exists: $candidate_version (keep: $keep_version)"
+    fi
+done
 
 removed=0
 skipped=0
@@ -89,7 +117,7 @@ for candidate in "$cache_root"/*; do
     }
     manifest="$candidate/plugin.json"
     candidate_version="$(basename "$candidate")"
-    if [[ ! -f "$manifest" || "$(manifest_value "$manifest" name 2>/dev/null || true)" != "work-governance" \
+    if [[ ! "$candidate_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || ! version_less "$candidate_version" "$keep_version" || [[ ! -f "$manifest" || "$(manifest_value "$manifest" name 2>/dev/null || true)" != "work-governance" \
         || "$(manifest_value "$manifest" version 2>/dev/null || true)" != "$candidate_version" ]]; then
         printf 'work_governance_cache_prune_skipped=%s\n' "$candidate"
         skipped=$((skipped + 1))

@@ -174,10 +174,13 @@ def test_release_metadata_is_machine_consistent() -> None:
     version = compatibility["version"]
     assert isinstance(version, str)
     assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version)
-    assert package["version"] == project["project"]["version"]
+    assert package["version"] == project["project"]["version"] == version
     assert project["project"]["dependencies"] == []
     assert "/.work-governance/" in read(ROOT / ".gitignore").splitlines()
     assert f"## {version} - " in read(ROOT / "CHANGELOG.md")
+    for filename in ("README.md", "README.zh-CN.md"):
+        contents = read(ROOT / filename)
+        assert f"--keep-version {version} --dry-run" in contents
 
 
 def test_package_manifest_agrees_with_the_plugin_manifests() -> None:

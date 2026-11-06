@@ -8,7 +8,7 @@ Work Governance 帮助 Agent 发现真实目标，只引入任务确实需要的
 
 由 [feng2r200](https://github.com/feng2r200) 创建并维护。
 
-当前语义插件版本为 `3.0.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
+当前语义插件版本为 `3.1.1`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
 
 ## 为什么需要它
 
@@ -101,6 +101,19 @@ work-lifecycle 路由器
 
 ## 安装
 
+### Pi
+
+在仓库 checkout 内执行以下命令，为当前用户安装本地 Package：
+
+```sh
+pi install "$(pwd -P)"
+```
+
+修改后新建 Pi 会话或重新加载资源。路由器和执行内核可被自动选择；
+场景模块也可显式调用，例如 `/skill:git-change-governance`。
+
+### Codex
+
 先将 GitHub 仓库添加为 Codex Plugin marketplace，再安装 Plugin：
 
 ```sh
@@ -117,13 +130,15 @@ codex plugin add work-governance@work-governance-local
 
 安装或更新后，请新建一个 Codex 任务。已有任务可能继续保留其启动时加载的 Skill 内容。
 
-本地采用完成后，使用 `codex plugin list` 核对启用版本，并用下面的命令删除旧的直接缓存目录：
+本地采用完成后，使用 `codex plugin list` 核对启用版本，并用下面的命令预览旧的直接缓存目录清理：
 
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 3.0.0
+  --keep-version 3.1.1 --dry-run
 ```
+
+检查预览并确认保留版本后，须另行授权才能去掉 `--dry-run` 执行清理。
 
 ## 行为示例
 
@@ -183,7 +198,25 @@ uv run mypy --strict scripts/evaluate_goal_continuity.py \
 git diff --check
 ```
 
-如果本地可以使用 Codex 自带的 Skill 验证器，还应运行：
+可选的 Pi 活体观测需要已认证的 Pi 配置，并赋予模型读取、shell 和编辑工具。
+试验使用临时工作区和本地 Git 远端，**不是安全沙箱**；仅在允许此类执行的
+环境运行，并注意可能产生模型服务费用：
+
+```sh
+uv run --locked python scripts/run_pi_behavior_trial.py --scenario no-commit
+uv run --locked python scripts/run_pi_behavior_trial.py --scenario commit
+uv run --locked python scripts/run_pi_behavior_trial.py --scenario push
+uv run --locked python scripts/run_pi_behavior_trial.py --scenario cleanup-review
+uv run --locked python scripts/run_pi_behavior_trial.py --scenario plan-assessment
+uv run --locked python scripts/run_pi_goal_trial.py
+```
+
+这些试验检查特定输出工件和最终引用，不覆盖所有可能的副作用。最终目标试验
+的回执不能证明命令确实执行。两个试验的 `--without-kernel` 均可用于内核正文配对对照。
+
+2026-11-05 测量时，下方路径的 Codex 0.166.0 验证器不接受 13 个场景模块中的
+Pi `disable-model-invocation` 字段。验证器输出本身不能证明运行时行为。
+如果本地有验证器，可运行以下命令查看当前结果：
 
 ```sh
 SKILL_VALIDATOR="${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py"

@@ -13,7 +13,7 @@ and durable state enter only when they add value.
 
 Created and maintained by [feng2r200](https://github.com/feng2r200).
 
-The current semantic plugin version is `3.0.0`. Release-impacting changes to
+The current semantic plugin version is `3.1.1`. Release-impacting changes to
 Skills, plugin metadata, packaging, installation, or release workflow must bump
 the version according to compatibility impact. Build timestamps and Git commits
 are provenance only; they do not replace a semantic version bump. The CI gate
@@ -134,6 +134,20 @@ Existing tools and project-specific Skills
 
 ## Install
 
+### Pi
+
+From the repository checkout, install this local package for the current user:
+
+```sh
+pi install "$(pwd -P)"
+```
+
+Start a new Pi session or reload resources after changes. The router and
+execution kernel are advertised for automatic selection; scenario modules can
+also be invoked explicitly, for example `/skill:git-change-governance`.
+
+### Codex
+
 Add the GitHub repository as a Codex plugin marketplace, then install the
 plugin:
 
@@ -153,13 +167,16 @@ Open a new Codex task after installing or updating. Existing tasks can retain
 the Skill content that was loaded when they started.
 
 After local adoption, verify the enabled version with `codex plugin list` and
-remove older direct cache entries with:
+preview removal of older direct cache entries with:
 
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 3.0.0
+  --keep-version 3.1.1 --dry-run
 ```
+
+Review the preview and verify the retained version before separately authorizing
+and running the command without `--dry-run`.
 
 ## Example Behavior
 
@@ -316,7 +333,28 @@ uv run mypy --strict scripts/evaluate_goal_continuity.py \
 git diff --check
 ```
 
-When the bundled Codex Skill validator is available locally, also run:
+Optional live Pi observations require an authenticated Pi configuration and
+invoke a model with read, shell and editing tools. They use temporary workspaces
+and a local Git remote, **not a security sandbox**; run only where that
+execution is authorized. The commands can incur provider charges:
+
+```sh
+uv run --locked python scripts/run_pi_behavior_trial.py --scenario no-commit
+uv run --locked python scripts/run_pi_behavior_trial.py --scenario commit
+uv run --locked python scripts/run_pi_behavior_trial.py --scenario push
+uv run --locked python scripts/run_pi_behavior_trial.py --scenario cleanup-review
+uv run --locked python scripts/run_pi_behavior_trial.py --scenario plan-assessment
+uv run --locked python scripts/run_pi_goal_trial.py
+```
+
+These inspect specific output artifacts and final references, not all possible
+side effects. The goal trial's receipt does not prove a command ran. For the
+paired kernel-body control use `--without-kernel` with either trial.
+
+On 2026-11-05, the Codex 0.166.0 validator at the path below rejected Pi's
+`disable-model-invocation` field in the 13 scenario modules. Validator output
+is not by itself proof of runtime behavior. When the validator is available
+locally, run it to see the current host's result:
 
 ```sh
 SKILL_VALIDATOR="${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py"

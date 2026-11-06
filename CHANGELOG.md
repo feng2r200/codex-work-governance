@@ -7,6 +7,21 @@ All notable changes to Work Governance are documented here. The project follows
 
 No unreleased changes.
 
+## 3.1.1 - 2026-11-06
+
+### Fixed
+
+- Refuse cache cleanup before deletion when a verified newer version exists;
+  verify the retained manifest and remove only verified older versions.
+- Include the Pi package manifest in release-impacting changes and connect
+  project, lock, plugin, package, and documented cleanup versions in tests.
+
+### Added
+
+- A bounded Pi behavior trial for editing, Git authorization, and worktree
+  review, with artifact oracles and explicit limits on its coverage.
+- Document the observed Codex validator boundary for Pi Skill metadata.
+
 ## 3.1.0 - 2026-11-05
 
 ### Added
