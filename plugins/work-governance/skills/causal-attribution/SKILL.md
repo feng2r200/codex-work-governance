@@ -1,7 +1,6 @@
 ---
 name: causal-attribution
 description: Use when an observed symptom in an existing system needs a trustworthy cause before changing anything, including cost or performance blowups, a capability that silently never activates, a channel that appears to carry nothing, or a suspicion that some component is to blame. Applies whenever acting on the wrong cause would be expensive or hard to reverse.
-disable-model-invocation: true
 ---
 
 # Causal Attribution

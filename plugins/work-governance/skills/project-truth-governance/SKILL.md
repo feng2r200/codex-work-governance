@@ -1,7 +1,6 @@
 ---
 name: project-truth-governance
 description: Use when deciding which source currently governs a project fact, whether a finding should become long-term authority, where to place it, or how to resolve conflicts among live evidence, work records, history, and memory.
-disable-model-invocation: true
 ---
 
 # Project Truth Governance

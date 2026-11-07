@@ -1,7 +1,6 @@
 ---
 name: goal-discovery
 description: Use when a request starts from a proposed solution, vague idea, or incomplete requirement and unresolved product intent, data strategy, delivery form, material solution or feasibility strategy, acceptance, or user-owned tradeoff could materially change the right path.
-disable-model-invocation: true
 ---
 
 # Goal Discovery

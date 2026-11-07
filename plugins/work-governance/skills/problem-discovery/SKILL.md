@@ -1,7 +1,6 @@
 ---
 name: problem-discovery
 description: Use when designing or reviewing a test, validation, or evidence strategy to expose important defects early across observation environments, state transitions, integrations, side effects, and the validator itself. Do not use merely to run an already-defined routine test suite.
-disable-model-invocation: true
 ---
 
 # Problem Discovery

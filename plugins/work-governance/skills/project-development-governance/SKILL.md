@@ -1,7 +1,6 @@
 ---
 name: project-development-governance
 description: Use when an explicitly enrolled project or ongoing software or product development spans multiple tasks, sessions, or phases and needs a durable project contract, bounded startup recovery, or end-of-task state reconciliation.
-disable-model-invocation: true
 ---
 
 # Project Development Governance

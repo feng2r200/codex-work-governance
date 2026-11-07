@@ -1,7 +1,6 @@
 ---
 name: work-reporting
 description: Use for progress updates during sustained work, phase or agent handoffs, and completion reports that must clearly explain what changed, what was operated, what remains, what was verified, and what the user should do next.
-disable-model-invocation: true
 ---
 
 # Work Reporting

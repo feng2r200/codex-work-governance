@@ -7,6 +7,21 @@ All notable changes to Work Governance are documented here. The project follows
 
 No unreleased changes.
 
+## 3.2.1 - 2026-11-07
+
+### Fixed
+
+- Advertise all task-triggered scenario Skills for automatic selection instead
+  of hiding them behind explicit-only invocation. Keep progressive disclosure,
+  scenario triggers, and authority boundaries unchanged.
+- Distinguish CodeGraph freshness invalidation after a successful sync from an
+  omitted sync, and describe safe recovery without racing concurrent writers.
+
+### Added
+
+- A task-Skill discovery regression contract and dated host-loader and session
+  evidence, including the corrected attribution of the original query failure.
+
 ## 3.2.0 - 2026-11-06
 
 ### Added

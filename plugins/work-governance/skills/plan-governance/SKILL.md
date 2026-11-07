@@ -1,7 +1,6 @@
 ---
 name: plan-governance
 description: Use when deciding whether a task needs a Plan, creating or admitting a Plan, promoting No-Plan work into one, coordinating dependent stages, or deciding whether new evidence requires a material Plan revision.
-disable-model-invocation: true
 ---
 
 # Plan Governance

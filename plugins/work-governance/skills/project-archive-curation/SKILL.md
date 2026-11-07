@@ -1,7 +1,6 @@
 ---
 name: project-archive-curation
 description: Use when reviewing completed project work, investigations, or conversations for archival, deciding what knowledge must be retained first, consolidating findings into durable form, and separating durable work records, shared project context, project authority, and raw history.
-disable-model-invocation: true
 ---
 
 # Project Archive Curation

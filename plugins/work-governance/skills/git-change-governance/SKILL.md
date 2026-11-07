@@ -1,7 +1,6 @@
 ---
 name: git-change-governance
 description: Use when choosing or changing Git branches and worktrees, protecting dirty state, staging or committing local work, deciding push boundaries, or cleaning up Git workspaces.
-disable-model-invocation: true
 ---
 
 # Git Change Governance

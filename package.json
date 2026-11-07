@@ -1,6 +1,6 @@
 {
   "name": "work-governance",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "description": "Composable governance for adaptive decisions, causal attribution, problem discovery, frontend delivery, planning, Git, resource observation, optional code intelligence, validation, long-running project continuity, project truth, archive curation, and reporting.",
   "license": "Apache-2.0",
   "author": "feng2r200",

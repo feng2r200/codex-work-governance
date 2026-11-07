@@ -13,7 +13,7 @@ and durable state enter only when they add value.
 
 Created and maintained by [feng2r200](https://github.com/feng2r200).
 
-The current semantic plugin version is `3.2.0`. Release-impacting changes to
+The current semantic plugin version is `3.2.1`. Release-impacting changes to
 Skills, plugin metadata, packaging, installation, or release workflow must bump
 the version according to compatibility impact. Build timestamps and Git commits
 are provenance only; they do not replace a semantic version bump. The CI gate
@@ -142,9 +142,12 @@ From the repository checkout, install this local package for the current user:
 pi install "$(pwd -P)"
 ```
 
-Start a new Pi session or reload resources after changes. The router and
-execution kernel are advertised for automatic selection; scenario modules can
-also be invoked explicitly, for example `/skill:git-change-governance`.
+Start a new Pi session or reload resources after changes. All shipped Skills
+are advertised for task-based automatic selection; the router remains a useful
+entry point, not the only discovery path. Only names, descriptions and paths
+are advertised: full instructions are read when the task matches. Scenario
+conditions and authority boundaries still apply. Explicit invocation also
+remains available, for example `/skill:git-change-governance`.
 
 The root package installs Skills only. An optional [local CodeGraph adapter](integrations/pi-codegraph/README.md)
 can be explicitly installed to a stable user-owned directory and configured with
@@ -176,7 +179,7 @@ preview removal of older direct cache entries with:
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 3.2.0 --dry-run
+  --keep-version 3.2.1 --dry-run
 ```
 
 Review the preview and verify the retained version before separately authorizing
@@ -369,10 +372,12 @@ contain sensitive data; choose an authorized private location. Compare another
 kernel with `--kernel-file`. For paired empty-body controls use
 `--without-kernel` with the behavior, goal, or material trial.
 
-On 2026-11-05, the Codex 0.166.0 validator at the path below rejected Pi's
-`disable-model-invocation` field in the 13 scenario modules. Validator output
-is not by itself proof of runtime behavior. When the validator is available
-locally, run it to see the current host's result:
+The 2026-11-07 [Skill discovery investigation](docs/research/2026-11-07-task-skill-discovery.md)
+confirmed that Pi hid the 13 scenario modules marked
+`disable-model-invocation: true`. That explicit-only setting has been removed
+from these task-triggered modules. Discovery does not guarantee model compliance;
+validator output alone also cannot prove runtime behavior. When the validator
+is available locally, run it to see the current host's result:
 
 ```sh
 SKILL_VALIDATOR="${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py"

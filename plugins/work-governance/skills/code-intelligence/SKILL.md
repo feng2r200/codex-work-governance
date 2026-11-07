@@ -1,7 +1,6 @@
 ---
 name: code-intelligence
 description: Use when software work needs structural source-code understanding, such as symbol discovery, callers or callees, call paths, change impact, affected tests, or cross-layer tracing, and CodeGraph readiness may need to be established or refreshed for the active checkout. Do not use for literal text search, prose, logs, configuration-only inspection, or non-code work. A source-read-only task does not suppress local derived-index refresh when current graph state is needed.
-disable-model-invocation: true
 ---
 
 # Code Intelligence
@@ -87,6 +86,17 @@ configuration, upgrade it, or alter shell configuration implicitly.
 - Refresh only what the evidence requires: use incremental synchronization
   first, and use a full index refresh when the status still reports stale state
   or explicitly recommends reindexing. Do not rebuild a healthy current index.
+- Readiness is a point-in-time observation, not a lease over the source tree.
+  A source write by this task, another session, or a generator can invalidate a
+  successful sync and status readback before the next query. A freshness refusal
+  alone does not prove the caller omitted synchronization or the CLI is broken.
+- If a query is refused for ordinary pending changes after a current readback,
+  inspect the new exact-checkout status, repeat the authorized incremental sync
+  and status readback, then retry the original query only when current. If new
+  writes keep invalidating readiness, use native inspection and report the
+  concurrent-change limitation; do not loop refreshes or force a full rebuild
+  merely to race active writers. Unknown freshness, locks, and integrity failures
+  still require their own diagnosis rather than this ordinary-staleness route.
 - Stop using the graph for a route it does not cover; continue with native
   inspection instead of retrying equivalent graph queries.
 - Never run destructive `uninit`, force initialization, `unlock`, or

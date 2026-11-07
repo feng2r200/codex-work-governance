@@ -77,6 +77,16 @@ def test_skill_package_metadata_is_complete_and_consistent() -> None:
         assert isinstance(default_prompt, str) and name in default_prompt
 
 
+def test_task_routed_skills_allow_automatic_model_selection() -> None:
+    """Task-triggered modules must not be hidden behind explicit-only invocation."""
+    hidden = [
+        path.parent.name
+        for path in sorted(SKILLS.glob("*/SKILL.md"))
+        if skill_frontmatter(path).get("disable-model-invocation", False) is not False
+    ]
+    assert not hidden, f"Task-routed Skills are hidden from automatic selection: {hidden}"
+
+
 def test_all_local_markdown_links_resolve() -> None:
     """Local links in published Markdown must resolve to repository files."""
     markdown_files = [ROOT / "README.md", ROOT / "README.zh-CN.md"]

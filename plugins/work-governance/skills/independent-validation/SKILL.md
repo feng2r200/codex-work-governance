@@ -1,7 +1,6 @@
 ---
 name: independent-validation
 description: Use when a plan, artifact, causal diagnosis, evidence set, activation, or completion claim has enough risk or self-certification uncertainty that an independent challenge would materially increase confidence.
-disable-model-invocation: true
 ---
 
 # Independent Validation

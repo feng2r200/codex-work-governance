@@ -8,7 +8,7 @@ Work Governance 帮助 Agent 发现真实目标，只引入任务确实需要的
 
 由 [feng2r200](https://github.com/feng2r200) 创建并维护。
 
-当前语义插件版本为 `3.2.0`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
+当前语义插件版本为 `3.2.1`。凡是影响 Skill、插件元数据、打包、安装或发布工作流的优化，都必须根据兼容性影响递增版本号。构建时间和 Git commit 只能提供来源证据，不能替代语义版本变化；CI 会强制执行这一契约。
 
 ## 为什么需要它
 
@@ -109,8 +109,10 @@ work-lifecycle 路由器
 pi install "$(pwd -P)"
 ```
 
-修改后新建 Pi 会话或重新加载资源。路由器和执行内核可被自动选择；
-场景模块也可显式调用，例如 `/skill:git-change-governance`。
+修改后新建 Pi 会话或重新加载资源。所有随包分发的 Skill 都可按任务自动选择；
+路由器仍是有用入口，但不是唯一发现路径。清单只提供名称、描述与路径，正文在任务
+匹配时才读取，不会全部常驻加载。场景触发条件与授权边界保持不变；也可显式调用，
+例如 `/skill:git-change-governance`。
 
 根 Package 只安装 Skills。可选的[本地 CodeGraph 适配器](integrations/pi-codegraph/README.md)
 须显式安装到用户拥有的稳定目录，并配置现有 CLI 的绝对入口；治理核心不自动加载、
@@ -139,7 +141,7 @@ codex plugin add work-governance@work-governance-local
 ```sh
 scripts/prune-local-plugin-cache.sh \
   --cache-root "$HOME/.codex/plugins/cache/work-governance-local/work-governance" \
-  --keep-version 3.2.0 --dry-run
+  --keep-version 3.2.1 --dry-run
 ```
 
 检查预览并确认保留版本后，须另行授权才能去掉 `--dry-run` 执行清理。
@@ -229,9 +231,10 @@ Plan 试验需要本地安装对应的状态提供方 CLI，使用临时独立 S
 选择获授权的私有位置；可用 `--kernel-file` 比较另一份内核。行为、最终目标和实质
 变更试验均支持 `--without-kernel` 空正文对照。
 
-2026-11-05 测量时，下方路径的 Codex 0.166.0 验证器不接受 13 个场景模块中的
-Pi `disable-model-invocation` 字段。验证器输出本身不能证明运行时行为。
-如果本地有验证器，可运行以下命令查看当前结果：
+2026-11-07 的 [Skill 发现调查](docs/research/2026-11-07-task-skill-discovery.md)
+确认 Pi 会将设置了 `disable-model-invocation: true` 的 13 个场景模块隐藏出自动选择清单。
+现已移除这些按任务触发模块的显式调用限制。可发现性不保证模型遵守规则，验证器输出
+本身也不能证明运行时行为。如果本地有验证器，可运行以下命令查看当前结果：
 
 ```sh
 SKILL_VALIDATOR="${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py"
